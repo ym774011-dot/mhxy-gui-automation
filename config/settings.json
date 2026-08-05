@@ -1,82 +1,87 @@
 {
-  "window": {
-    "title": "鲜衣怒马 - 怀旧江南版 - (鲜衣怒马 - 然学[701529]) - 2026年08月03日 21:11:51",
-    "pid": 20308,
-    "input_mode": "background"
-  },
-  "recognition": {
-    "template_threshold": 0.8,
-    "yolo_confidence": 0.5,
-    "yolo_model_path": "E:/DS/yolo_auto_train/weights/active.pt",
-    "screenshot_interval": 0.5,
-    "jhrw_roi": [840, 156, 150, 77]
-  },
-  "logging": {
-    "level": "INFO",
-    "file_path": "logs/automation.log"
-  },
-  "task_library": {
-    "modules": [
-      {
-        "name": "JNYW",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\JNYW.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "CAC",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\CAC.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "DHW",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\DHW.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "CSC",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\CSC.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "XLNR",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\XLNR.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "BXG",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\BXG.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "ZZG",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\ZZG.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "JYC",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\JYC.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "ALG",
-        "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\ALG.py",
-        "enabled": true,
-        "category": "map"
-      },
-      {
-        "name": "JHRW",
-        "path": "tasks/library/JHRW.py",
-        "enabled": true,
-        "category": "custom"
-      }
-    ]
-  }
+ "window": {
+  "title": "鲜衣怒马 - 怀旧江南版 - (鲜衣怒马 - 然学[701529]) - 2026年08月03日 21:11:51",
+  "pid": 20308,
+  "input_mode": "background"
+ },
+ "recognition": {
+  "template_threshold": 0.8,
+  "yolo_confidence": 0.5,
+  "yolo_model_path": "models/active.pt",
+  "screenshot_interval": 0.5,
+  "jhrw_roi": [
+   840,
+   156,
+   150,
+   77
+  ]
+ },
+ "logging": {
+  "level": "INFO",
+  "file_path": "logs/automation.log"
+ },
+ "task_library": {
+  "modules": [
+   {
+    "name": "JNYW",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\JNYW.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "CAC",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\CAC.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "DHW",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\DHW.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "CSC",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\CSC.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "XLNR",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\XLNR.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "BXG",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\BXG.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "ZZG",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\ZZG.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "JYC",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\JYC.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "ALG",
+    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\ALG.py",
+    "enabled": true,
+    "category": "map"
+   },
+   {
+    "name": "JHRW",
+    "path": "tasks/library/JHRW.py",
+    "enabled": true,
+    "category": "custom"
+   }
+  ]
+ }
 }

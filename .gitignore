@@ -23,10 +23,10 @@ debug_white_blobs/
 # 运行状态文件（每次运行都会变，不入库）
 data/current_quest.json
 
-# 大模型文件
-*.pt
+# 大模型文件（active.pt 6MB 需要入库，特例放行）
 *.pth
 *.onnx
+!models/active.pt
 
 # 系统
 Thumbs.db
