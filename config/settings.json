@@ -24,55 +24,55 @@
   "modules": [
    {
     "name": "JNYW",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\JNYW.py",
+    "path": "library/map_packs/JNYW.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "CAC",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\CAC.py",
+    "path": "library/map_packs/CAC.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "DHW",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\DHW.py",
+    "path": "library/map_packs/DHW.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "CSC",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\CSC.py",
+    "path": "library/map_packs/CSC.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "XLNR",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\XLNR.py",
+    "path": "library/map_packs/XLNR.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "BXG",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\BXG.py",
+    "path": "library/map_packs/BXG.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "ZZG",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\ZZG.py",
+    "path": "library/map_packs/ZZG.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "JYC",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\JYC.py",
+    "path": "library/map_packs/JYC.py",
     "enabled": true,
     "category": "map"
    },
    {
     "name": "ALG",
-    "path": "E:\\DS\\梦幻西游脚本函数包\\地图数据\\ALG.py",
+    "path": "library/map_packs/ALG.py",
     "enabled": true,
     "category": "map"
    },
