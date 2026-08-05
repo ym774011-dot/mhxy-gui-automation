@@ -1,0 +1,116 @@
+{
+  "id": "e374365a-972b-4a3d-88e1-a1ac51235082",
+  "name": "示例任务序列",
+  "tasks": [
+    {
+      "id": "9534c5f0-65cb-498d-8843-0f4f348de8f7",
+      "name": "打开任务面板并获取任务",
+      "description": "发送Alt+Q打开任务面板，调用JHRW获取任务信息，并点击地图目标位置",
+      "events": [
+        {
+          "id": "71e417b0-fde3-4394-acaa-19f8c25b2c2d",
+          "name": "打开任务面板",
+          "event_type": "key",
+          "params": {
+            "keys": "alt+q",
+            "text": "",
+            "duration": 0.0
+          },
+          "pre_delay": 0.5,
+          "post_delay": 1.0,
+          "on_error": "retry",
+          "max_retries": 3,
+          "enabled": true
+        },
+        {
+          "id": "739aebdf-1ef0-4ac8-ac55-bf5c43a2933c",
+          "name": "等待面板动画",
+          "event_type": "wait",
+          "params": {
+            "duration": 2.0,
+            "wait_for_image": false,
+            "image_path": "",
+            "timeout": 0.0
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.0,
+          "on_error": "skip",
+          "max_retries": 1,
+          "enabled": true
+        },
+        {
+          "id": "d0e02941-8c0b-4239-bbed-2e0f6f2b244e",
+          "name": "调用JHRW获取任务信息",
+          "event_type": "function",
+          "params": {
+            "module": "JHRW",
+            "function": "JHRW",
+            "args": [],
+            "kwargs": {
+              "verbose": false
+            }
+          },
+          "pre_delay": 0.2,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 3,
+          "enabled": true
+        },
+        {
+          "id": "6e427362-b00a-4db7-abe1-46442cff651d",
+          "name": "短暂等待",
+          "event_type": "wait",
+          "params": {
+            "duration": 1.0,
+            "wait_for_image": false,
+            "image_path": "",
+            "timeout": 0.0
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.0,
+          "on_error": "skip",
+          "max_retries": 1,
+          "enabled": true
+        },
+        {
+          "id": "cd717ed1-43d1-4472-b389-65625b108a50",
+          "name": "点击地图目标位置",
+          "event_type": "click",
+          "params": {
+            "x": 400,
+            "y": 300,
+            "button": "left",
+            "background": false
+          },
+          "pre_delay": 0.3,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 3,
+          "enabled": true
+        },
+        {
+          "id": "56f82a8a-92a5-4f21-8d8a-b07b8877393b",
+          "name": "等待角色移动",
+          "event_type": "wait",
+          "params": {
+            "duration": 3.0,
+            "wait_for_image": false,
+            "image_path": "",
+            "timeout": 0.0
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.0,
+          "on_error": "skip",
+          "max_retries": 1,
+          "enabled": true
+        }
+      ],
+      "loop_count": 1,
+      "loop_delay": 2.0,
+      "created_at": "2026-07-30 23:24:25",
+      "updated_at": "2026-07-30 23:24:25"
+    }
+  ],
+  "current_task_index": 0,
+  "current_event_index": 0
+}

@@ -1,0 +1,14 @@
+PyQt5>=5.15.0
+opencv-python>=4.5.0
+pyautogui>=0.9.54
+ultralytics>=8.0.0
+mss>=9.0.0
+numpy>=1.20.0
+Pillow>=9.0.0
+pygetwindow>=0.0.9
+pywin32>=305
+
+# Testing dependencies
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0

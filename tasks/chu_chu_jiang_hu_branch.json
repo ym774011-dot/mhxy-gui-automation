@@ -1,0 +1,287 @@
+{
+  "id": "c0a1b2c3-d4e5-4f60-a1b2-c3d4e5f60708",
+  "name": "初出江湖（按地图分流示例）",
+  "tasks": [
+    {
+      "id": "t1000000-0000-4000-8000-000000000001",
+      "name": "初出江湖：接任务 → 查地图 → 分流",
+      "description": "YOLO 接取初出江湖 → JHRW 查地图名/坐标 → 按 target_location 分流到各地图专属操作序列。loop_count=0 表示无限循环，每次迭代 JHRW 返回当前所在地图，switch 自动路由。",
+      "events": [
+        {
+          "id": "e1000000-0000-4000-8000-000000000001",
+          "name": "YOLO 接取任务",
+          "event_type": "yolo",
+          "params": {
+            "target_class": "任务接取",
+            "confidence": 0.5,
+            "action": "click",
+            "model_path": ""
+          },
+          "pre_delay": 0.3,
+          "post_delay": 1.0,
+          "on_error": "retry",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": ""
+        },
+        {
+          "id": "e1000000-0000-4000-8000-000000000002",
+          "name": "打开任务面板",
+          "event_type": "key",
+          "params": { "keys": "alt+q", "text": "", "duration": 0.0 },
+          "pre_delay": 0.2,
+          "post_delay": 1.0,
+          "on_error": "retry",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": ""
+        },
+        {
+          "id": "e1000000-0000-4000-8000-000000000003",
+          "name": "等待面板动画",
+          "event_type": "wait",
+          "params": { "duration": 2.0, "wait_for_image": false, "image_path": "", "timeout": 0.0 },
+          "pre_delay": 0.0,
+          "post_delay": 0.0,
+          "on_error": "skip",
+          "max_retries": 1,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": ""
+        },
+        {
+          "id": "e1000000-0000-4000-8000-000000000004",
+          "name": "JHRW 查询地图名与坐标",
+          "event_type": "function",
+          "params": {
+            "module": "JHRW",
+            "function": "JHRW",
+            "args": [],
+            "kwargs": { "verbose": false }
+          },
+          "pre_delay": 0.2,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "JHRW"
+        },
+        {
+          "id": "e1000000-0000-4000-8000-000000000005",
+          "name": "等待查询结果",
+          "event_type": "wait",
+          "params": { "duration": 0.5, "wait_for_image": false, "image_path": "", "timeout": 0.0 },
+          "pre_delay": 0.0,
+          "post_delay": 0.0,
+          "on_error": "skip",
+          "max_retries": 1,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": ""
+        },
+        {
+          "id": "e1000000-0000-4000-8000-000000000006",
+          "name": "按地图分流",
+          "event_type": "condition",
+          "params": {
+            "mode": "switch",
+            "match_field": "target_location",
+            "match_custom_field": "",
+            "source_var": "JHRW",
+            "cases": [
+              {
+                "match_value": "建邺城",
+                "actions": [
+                  {
+                    "id": "a1100000-0000-4000-8000-000000000001",
+                    "name": "建邺城：前往目标点",
+                    "event_type": "click",
+                    "params": { "x": "${JHRW.target_coord.0}", "y": "${JHRW.target_coord.1}", "button": "left", "background": false },
+                    "pre_delay": 0.3,
+                    "post_delay": 0.5,
+                    "on_error": "retry",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  },
+                  {
+                    "id": "a1100000-0000-4000-8000-000000000002",
+                    "name": "建邺城：等待移动",
+                    "event_type": "wait",
+                    "params": { "duration": 3.0, "wait_for_image": false, "image_path": "", "timeout": 0.0 },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.0,
+                    "on_error": "skip",
+                    "max_retries": 1,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  },
+                  {
+                    "id": "a1100000-0000-4000-8000-000000000003",
+                    "name": "建邺城：YOLO 点击任务NPC",
+                    "event_type": "yolo",
+                    "params": { "target_class": "建邺城NPC", "confidence": 0.5, "action": "click", "model_path": "" },
+                    "pre_delay": 0.3,
+                    "post_delay": 1.0,
+                    "on_error": "retry",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  }
+                ]
+              },
+              {
+                "match_value": "江南野外",
+                "actions": [
+                  {
+                    "id": "a1200000-0000-4000-8000-000000000001",
+                    "name": "江南野外：前往目标点",
+                    "event_type": "click",
+                    "params": { "x": "${JHRW.target_coord.0}", "y": "${JHRW.target_coord.1}", "button": "left", "background": false },
+                    "pre_delay": 0.3,
+                    "post_delay": 0.5,
+                    "on_error": "retry",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  },
+                  {
+                    "id": "a1200000-0000-4000-8000-000000000002",
+                    "name": "江南野外：等待移动",
+                    "event_type": "wait",
+                    "params": { "duration": 3.0, "wait_for_image": false, "image_path": "", "timeout": 0.0 },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.0,
+                    "on_error": "skip",
+                    "max_retries": 1,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  },
+                  {
+                    "id": "a1200000-0000-4000-8000-000000000003",
+                    "name": "江南野外：图像识别怪物并点击",
+                    "event_type": "image",
+                    "params": {
+                      "source_mode": "direct",
+                      "template_path": "E:/DS/梦幻西游脚本函数包/模板/江南野外怪物.bmp",
+                      "threshold": 0.8,
+                      "action": "click",
+                      "button": "left",
+                      "click_delay": 1000,
+                      "region": [0, 0, 0, 0],
+                      "dyn_field": "target_location",
+                      "dyn_custom_field": "",
+                      "match_field": "target_location",
+                      "match_custom_field": "",
+                      "additional_click_enabled": false,
+                      "additional_mode": "direct",
+                      "additional_x": "",
+                      "additional_y": "",
+                      "coord_file": "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt",
+                      "additional_button": "left",
+                      "additional_delay": 200,
+                      "verify": { "enabled": false, "type": "template_appear", "template_path": "", "threshold": 0.8, "region": [0, 0, 0, 0], "color": "#FFFFFF", "color_tolerance": 30, "color_min_pixels": 10, "verify_module": "", "verify_function": "", "verify_field": "target_location", "verify_operator": "==", "verify_value": "", "timeout": 5.0, "poll_interval": 0.3, "on_fail": "retry", "retry_times": 2, "retry_interval": 0.5 }
+                    },
+                    "pre_delay": 0.3,
+                    "post_delay": 1.0,
+                    "on_error": "retry",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  }
+                ]
+              },
+              {
+                "match_value": "东海湾",
+                "actions": [
+                  {
+                    "id": "a1300000-0000-4000-8000-000000000001",
+                    "name": "东海湾：前往目标点",
+                    "event_type": "click",
+                    "params": { "x": "${JHRW.target_coord.0}", "y": "${JHRW.target_coord.1}", "button": "left", "background": false },
+                    "pre_delay": 0.3,
+                    "post_delay": 0.5,
+                    "on_error": "retry",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  },
+                  {
+                    "id": "a1300000-0000-4000-8000-000000000002",
+                    "name": "东海湾：等待移动",
+                    "event_type": "wait",
+                    "params": { "duration": 3.0, "wait_for_image": false, "image_path": "", "timeout": 0.0 },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.0,
+                    "on_error": "skip",
+                    "max_retries": 1,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  },
+                  {
+                    "id": "a1300000-0000-4000-8000-000000000003",
+                    "name": "东海湾：YOLO 点击江湖大盗",
+                    "event_type": "yolo",
+                    "params": { "target_class": "东海湾NPC", "confidence": 0.5, "action": "click", "model_path": "" },
+                    "pre_delay": 0.3,
+                    "post_delay": 1.0,
+                    "on_error": "retry",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": ""
+                  }
+                ]
+              }
+            ],
+            "default_action": {
+              "action": "subflow",
+              "actions": [
+                {
+                  "id": "a1900000-0000-4000-8000-000000000001",
+                  "name": "未命中任何地图：等待并重试",
+                  "event_type": "wait",
+                  "params": { "duration": 2.0, "wait_for_image": false, "image_path": "", "timeout": 0.0 },
+                  "pre_delay": 0.0,
+                  "post_delay": 0.0,
+                  "on_error": "skip",
+                  "max_retries": 1,
+                  "retry_interval": 1.0,
+                  "enabled": true,
+                  "var_name": ""
+                }
+              ]
+            },
+            "true_branch": [],
+            "false_branch": [],
+            "verify": { "enabled": false, "type": "template_appear", "template_path": "", "threshold": 0.8, "region": [0, 0, 0, 0], "color": "#FFFFFF", "color_tolerance": 30, "color_min_pixels": 10, "verify_module": "", "verify_function": "", "verify_field": "target_location", "verify_operator": "==", "verify_value": "", "timeout": 5.0, "poll_interval": 0.3, "on_fail": "retry", "retry_times": 2, "retry_interval": 0.5 }
+          },
+          "pre_delay": 0.2,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": ""
+        }
+      ],
+      "loop_count": 0,
+      "loop_delay": 2.0,
+      "created_at": "2026-07-31 18:50:00",
+      "updated_at": "2026-07-31 18:50:00"
+    }
+  ],
+  "current_task_index": 0,
+  "current_event_index": 0
+}

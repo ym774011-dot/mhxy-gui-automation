@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 测试与覆盖率
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 运行时产物
+logs/
+debug_batch_glyphs/
+debug_capture/
+debug_clusters/
+debug_glyph_unknowns/
+debug_label_me/
+debug_unknown_exact/
+debug_white_blobs/
+
+# 运行状态文件（每次运行都会变，不入库）
+data/current_quest.json
+data/task_sequence_autosave.json
+
+# 大模型文件
+*.pt
+*.pth
+*.onnx
+
+# 系统
+Thumbs.db
+.DS_Store
