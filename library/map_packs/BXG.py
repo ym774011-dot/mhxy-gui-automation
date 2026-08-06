@@ -107,6 +107,12 @@ KEYEVENTF_KEYUP = 0x0002
 # ============================================================
 MAP_ORIGIN_PIXEL = (278, 173)      # 地图(0,0)在客户区的像素坐标
 MAP_SCALE = (2.778, 2.771)         # 每游戏单位对应像素数 (x, y)
+# 大地图有效点击范围上限（用户实测，与 data/map_ui_blocks.json max_game_coord 一致；None=暂无数据不限制）
+MAP_MAX_GAME_COORD = None
+
+
+
+
 DEFAULT_PID = 28024                # 默认游戏进程PID
 
 # ============================================================
@@ -243,32 +249,52 @@ def pixel_to_game(px, py):
 # 点击实现
 # ============================================================
 def _click_background(hwnd, cx, cy):
-    """后台点击: PostMessage 完整流程（左键->等待->左键->等待->右键），与前台一致
+    # 后台点击（含抖动重试，用户方案 2026-08-06）: PostMessage 完整流程
+    # 序列：左键(原坐标) -> 2s -> 左键(抖动+10~50) -> 2s -> 左键(点回原坐标) -> 右键(交互)
+    # 抖动 = 游戏坐标 + random(10~50)；超出大地图范围 max_game_coord 反向 -10~50
+    import random
+    # 原坐标像素 -> 游戏坐标
+    gx0, gy0 = pixel_to_game(float(cx), float(cy))
+    # 抖动（游戏坐标级 +10~50）
+    _jx = gx0 + random.uniform(10.0, 50.0)
+    _jy = gy0 + random.uniform(10.0, 50.0)
+    # 超大地图范围 -> 反向 -10~50
+    _mc = MAP_MAX_GAME_COORD
+    if _mc is not None and (_jx > _mc[0] or _jy > _mc[1]):
+        _jx = gx0 - random.uniform(10.0, 50.0)
+        _jy = gy0 - random.uniform(10.0, 50.0)
+    _jpx, _jpy = game_to_pixel(_jx, _jy)
 
-    第一次左键触发寻路，等待 2s 后第二次左键确认，再等待 2s 后右键交互
-    （触发 NPC 对话等）。全部 PostMessage，窗口无需在前台。
-    """
-    lparam = (int(cy) << 16) | (int(cx) & 0xFFFF)
-    # 先移动鼠标到目标位置，让游戏感知鼠标坐标
-    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam)
+    def _lp(x, y):
+        return (int(y) << 16) | (int(x) & 0xFFFF)
+
+    # 1) 第一次左键（原坐标，寻路）
+    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(cx, cy))
     time.sleep(0.08)
-    # 第一次左键（寻路）
-    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(cx, cy))
     time.sleep(0.10)
-    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(cx, cy))
     # 等待角色寻路
     time.sleep(2.0)
-    # 第二次左键
-    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+    # 2) 第二次左键（抖动坐标）
+    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(_jpx, _jpy))
+    time.sleep(0.08)
+    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(_jpx, _jpy))
     time.sleep(0.10)
-    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(_jpx, _jpy))
     # 等待到达
     time.sleep(2.0)
-    # 右键交互
-    user32.PostMessageW(hwnd, WM_RBUTTONDOWN, MK_RBUTTON, lparam)
+    # 3) 左键点回原坐标（任务正确坐标）
+    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(cx, cy))
+    time.sleep(0.08)
+    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(cx, cy))
     time.sleep(0.10)
-    user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, lparam)
-
+    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(cx, cy))
+    time.sleep(0.5)
+    # 4) 右键交互（NPC 对话）
+    user32.PostMessageW(hwnd, WM_RBUTTONDOWN, MK_RBUTTON, _lp(cx, cy))
+    time.sleep(0.10)
+    user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, _lp(cx, cy))
 def _click_foreground(hwnd, cx, cy):
     """前台点击: 移动鼠标到位置后按指定流程点击（会抢焦点）
 
