@@ -119,6 +119,11 @@ CHECKS = [
      (r"random\.uniform\(-2\.0|到达重试.*重新点击", True)),
     ("到达重试: 函数包内抖动 +10~50", "library/map_packs/JYC.py", "regex",
      (r"random\.uniform\(10\.0, 50\.0\)|MAP_MAX_GAME_COORD", False)),
+    # 2026-08-06 到达失败才抖动：引擎置位 _JITTER_MODE（False=第一次不随机）
+    ("到达重试: 引擎按到达结果置位 _JITTER_MODE", "core/task_engine.py", "regex",
+     (r"_set_map_jitter_mode\(True\)|_set_map_jitter_mode\(False\)", False)),
+    ("到达重试: 函数包 _JITTER_MODE 标志存在", "library/map_packs/JYC.py", "regex",
+     (r"_JITTER_MODE = False|if _JITTER_MODE:", False)),
     # 2026-08-05 子流程列表显示 enabled 状态：之前 disabled 项与 enabled 视觉一样
     # 无法判断"哪个没启用"，导致用户以为修改不了
     ("子流程: 显示 [已禁用] 标签", "gui/subflow_editor.py", "regex",

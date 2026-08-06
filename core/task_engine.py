@@ -2420,13 +2420,17 @@ class TaskEngine(QObject):
 
             if ok:
                 self._emit_log("info", f"自动等待到达：{msg}")
+                # 2026-08-06 到达成功 → 复位地图函数包抖动标志（下次任务从不抖动开始）
+                self._set_map_jitter_mode(False)
                 return True, result
             else:
                 self._emit_log("warning", f"自动等待到达失败：{msg}")
 
-                # 2026-08-06 引擎层不再做抖动重试：抖动逻辑已移入地图函数包
-                # （JYC/JNYW/DHW 等 _click_background，左键(原)->2s->左键(抖动+10~50)
-                # ->2s->左键(点回原)->右键），到达失败直接返回由调用方重试。
+                # 2026-08-06 到达失败 → 置位地图函数包抖动标志：
+                # 下一次调用该地图函数时 _click_background 走抖动序列
+                # （左键(原)->2s->左键(抖动+10~50)->2s->左键(点回原)->右键）。
+                # 抖动逻辑只在函数包内（用户方案：第一次不随机，失败一次后才随机）。
+                self._set_map_jitter_mode(True)
                 return False, result
 
         except ImportError as e:
@@ -2437,6 +2441,37 @@ class TaskEngine(QObject):
             logger.error(f"自动等待到达异常: {e}")
             self._emit_log("error", f"自动等待到达异常: {e}")
             return True, result
+
+    def _set_map_jitter_mode(self, enabled: bool) -> None:
+        """
+        设置当前地图函数包的抖动标志 _JITTER_MODE。
+
+        抖动逻辑在 9 个地图函数包（JYC/JNYW/DHW/...）的 _click_background 内：
+        - _JITTER_MODE=False（默认）：第一次点击用原坐标，不随机；
+        - _JITTER_MODE=True：点击序列走抖动（左键(原)->2s->左键(抖动+10~50)
+          ->2s->左键(点回原)->右键），用于到达失败后的重试。
+
+        引擎在等待到达失败时置 True（下次调用该地图函数即抖动），
+        到达成功时复位 False（下一个任务又从不抖动开始）。
+
+        :param enabled: True=置位（下次抖动），False=复位（不抖动）
+        """
+        try:
+            from core.task_library_manager import task_library
+            # 遍历所有已加载的地图模块，置位/复位其模块级 _JITTER_MODE
+            with task_library._lock:
+                for _info in task_library.modules.values():
+                    _mod = _info.get("module")
+                    if _mod is None:
+                        continue
+                    if hasattr(_mod, "_JITTER_MODE"):
+                        setattr(_mod, "_JITTER_MODE", enabled)
+            logger.info(
+                f"[抖动标志] 地图函数包 _JITTER_MODE -> {enabled}"
+                f"（{'到达失败，下次点击抖动' if enabled else '到达成功，复位不抖动'}）"
+            )
+        except Exception as e:
+            logger.debug(f"设置地图函数包抖动标志失败（不影响主流程）: {e}")
 
     def _auto_store_location(self, result: Any) -> None:
         """

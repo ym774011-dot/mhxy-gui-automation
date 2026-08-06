@@ -247,26 +247,30 @@ def pixel_to_game(px, py):
 
 # ============================================================
 # 点击实现
-# ============================================================
+# ============================================================# 抖动模式标志：False=第一次点击(原坐标不随机)；引擎到达失败后置 True(下次抖动)
+_JITTER_MODE = False
+
+
 def _click_background(hwnd, cx, cy):
-    # 后台点击（含抖动重试，用户方案 2026-08-06）: PostMessage 完整流程
-    # 序列：左键(原坐标) -> 2s -> 左键(抖动+10~50) -> 2s -> 左键(点回原坐标) -> 右键(交互)
-    # 抖动 = 游戏坐标 + random(10~50)；超出大地图范围 max_game_coord 反向 -10~50
+    # 后台点击（用户方案 2026-08-06）: PostMessage 完整流程
+    # 第一次点击不随机；引擎判定到达失败后置 _JITTER_MODE=True，
+    # 下次调用走抖动序列：左键(原)->2s->左键(抖动+10~50)->2s->左键(点回原)->右键
     import random
-    # 原坐标像素 -> 游戏坐标
-    gx0, gy0 = pixel_to_game(float(cx), float(cy))
-    # 抖动（游戏坐标级 +10~50）
-    _jx = gx0 + random.uniform(10.0, 50.0)
-    _jy = gy0 + random.uniform(10.0, 50.0)
-    # 超大地图范围 -> 反向 -10~50
-    _mc = MAP_MAX_GAME_COORD
-    if _mc is not None and (_jx > _mc[0] or _jy > _mc[1]):
-        _jx = gx0 - random.uniform(10.0, 50.0)
-        _jy = gy0 - random.uniform(10.0, 50.0)
-    _jpx, _jpy = game_to_pixel(_jx, _jy)
 
     def _lp(x, y):
         return (int(y) << 16) | (int(x) & 0xFFFF)
+
+    # 计算抖动坐标（仅 _JITTER_MODE 时使用）
+    _jpx = _jpy = None
+    if _JITTER_MODE:
+        gx0, gy0 = pixel_to_game(float(cx), float(cy))
+        _jx = gx0 + random.uniform(10.0, 50.0)
+        _jy = gy0 + random.uniform(10.0, 50.0)
+        _mc = MAP_MAX_GAME_COORD
+        if _mc is not None and (_jx > _mc[0] or _jy > _mc[1]):
+            _jx = gx0 - random.uniform(10.0, 50.0)
+            _jy = gy0 - random.uniform(10.0, 50.0)
+        _jpx, _jpy = game_to_pixel(_jx, _jy)
 
     # 1) 第一次左键（原坐标，寻路）
     user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(cx, cy))
@@ -276,12 +280,19 @@ def _click_background(hwnd, cx, cy):
     user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(cx, cy))
     # 等待角色寻路
     time.sleep(2.0)
-    # 2) 第二次左键（抖动坐标）
-    user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(_jpx, _jpy))
-    time.sleep(0.08)
-    user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(_jpx, _jpy))
-    time.sleep(0.10)
-    user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(_jpx, _jpy))
+    # 2) 第二次左键：_JITTER_MODE 用抖动坐标，否则原坐标
+    if _jpx is not None:
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(_jpx, _jpy))
+        time.sleep(0.08)
+        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(_jpx, _jpy))
+        time.sleep(0.10)
+        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(_jpx, _jpy))
+    else:
+        user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(cx, cy))
+        time.sleep(0.08)
+        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(cx, cy))
+        time.sleep(0.10)
+        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(cx, cy))
     # 等待到达
     time.sleep(2.0)
     # 3) 左键点回原坐标（任务正确坐标）
