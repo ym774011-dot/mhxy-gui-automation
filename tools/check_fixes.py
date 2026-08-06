@@ -114,9 +114,10 @@ CHECKS = [
     # 2026-08-05 ALT 组合键根治：PostMessage 不更新键盘状态表 → 降级 keybd_event
     ("后台化: ALT 组合键降级 keybd_event", "core/input_controller.py", "regex",
      (r"降级 keybd_event|_press_key_foreground\(keys\)", False)),
-    # 2026-08-05 到达失败后随机 ±2px 抖动重试点击（解决大地图边缘判定偶发失效）
-    ("到达重试: 失败后随机抖动 ±2px", "core/task_engine.py", "regex",
-     (r"到达重试.*随机偏移|random\.uniform\(-2\.0", False)),
+    # 2026-08-06 到达失败后抖动重试（用户方案）：游戏坐标 +10~50 随机，
+    # 超大地图有效范围(max_game_coord)反向 -10~50，单击后延迟2s再点原坐标
+    ("到达重试: 失败后抖动 +10~50 游戏坐标(超大地图范围反向)", "core/task_engine.py", "regex",
+     (r"到达重试.*目标\(|random\.uniform\(10\.0, 50\.0\)|延迟 2s 后点击原目标", False)),
     # 2026-08-05 子流程列表显示 enabled 状态：之前 disabled 项与 enabled 视觉一样
     # 无法判断"哪个没启用"，导致用户以为修改不了
     ("子流程: 显示 [已禁用] 标签", "gui/subflow_editor.py", "regex",

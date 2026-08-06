@@ -2424,37 +2424,61 @@ class TaskEngine(QObject):
             else:
                 self._emit_log("warning", f"自动等待到达失败：{msg}")
 
-                # 2026-08-05 到达失败后随机 ±2 像素抖动重试一次
-                # （用户方案：大地图/UI 边缘判定是像素级的，同一坐标重试
-                # 必然再踩同一个坑；随机偏移后总有一次落在有效点击区）。
-                # 2026-08-05 修复：不再依赖 map_name 换算校准（JYC 等函数
-                # result 无 target_location → map_name="" → get_map_calibration
-                # 返回 None → 抖动重试静默跳过，从未触发）。改为优先用
-                # result 里 JYC 已算好的 target_pixel（客户区像素），
-                # 拿不到才回退地图校准。
+                # 2026-08-06 到达失败后抖动重试（用户方案）：
+                #   1) 在【游戏坐标】上随机偏移 +10~50（X、Y 独立随机）；
+                #   2) 抖动后坐标不能超过大地图有效点击范围（max_game_coord，
+                #      用户实测，如建邺城 [284,140]）——超了则改为反向 -10~50；
+                #   3) 抖动坐标单击一次 → 延迟 2s → 再点击原来任务正确的坐标。
+                # 背景：同一坐标重试必然再踩同一个坑（大地图/UI 边缘是像素级
+                # 判定），偏移后总有一次落在有效点击区。
                 try:
                     from core.input_controller import input_controller
-                    _px = _py = None
-                    if isinstance(result, dict):
-                        _tp = result.get("target_pixel")
-                        if _tp and isinstance(_tp, (list, tuple)) and len(_tp) >= 2:
-                            _px, _py = float(_tp[0]), float(_tp[1])
-                    if _px is None:
-                        from core.map_ui_block import get_map_calibration
-                        _calib = get_map_calibration(map_name)
-                        if _calib:
-                            _ox, _oy, _sx, _sy = _calib
-                            _px = _ox + target_x * _sx
-                            _py = _oy + target_y * _sy
-                    if _px is not None:
-                        # 随机 ±2 像素
-                        _jx = _px + random.uniform(-2.0, 2.0)
-                        _jy = _py + random.uniform(-2.0, 2.0)
+                    from core.map_ui_block import get_map_calibration, _load_ui_blocks
+
+                    # 大地图有效点击范围（max_game_coord），拿不到不限制
+                    _max_x = _max_y = None
+                    try:
+                        _entry = _load_ui_blocks().get(map_name) or {}
+                        _limit = _entry.get("max_game_coord")
+                        if _limit and len(_limit) == 2:
+                            _max_x, _max_y = float(_limit[0]), float(_limit[1])
+                    except Exception:
+                        pass
+
+                    # 1) 正向抖动 +10~50（游戏坐标）
+                    _jx = target_x + random.uniform(10.0, 50.0)
+                    _jy = target_y + random.uniform(10.0, 50.0)
+                    # 2) 超大地图范围 → 反向 -10~50
+                    if _max_x is not None and (_jx > _max_x or _jy > _max_y):
                         logger.info(
-                            f"[到达重试] 目标像素({_px:.0f},{_py:.0f}) 到达失败，"
-                            f"随机偏移 ±2px 重新点击 ({_jx:.0f},{_jy:.0f})"
+                            f"[到达重试] 抖动坐标 ({_jx:.0f},{_jy:.0f}) 超出大地图"
+                            f"有效范围 ({_max_x:.0f},{_max_y:.0f}) → 反向抖动"
                         )
-                        input_controller.click(int(_jx), int(_jy), button="left")
+                        _jx = target_x - random.uniform(10.0, 50.0)
+                        _jy = target_y - random.uniform(10.0, 50.0)
+
+                    # 游戏坐标 → 客户区像素（用地图校准）
+                    _calib = get_map_calibration(map_name)
+                    if _calib is not None:
+                        _ox, _oy, _sx, _sy = _calib
+                        # 抖动坐标像素
+                        _jpx = _ox + _jx * _sx
+                        _jpy = _oy + _jy * _sy
+                        # 原始正确坐标像素
+                        _tpx = _ox + target_x * _sx
+                        _tpy = _oy + target_y * _sy
+                        logger.info(
+                            f"[到达重试] 目标({target_x:.0f},{target_y:.0f}) 到达失败，"
+                            f"抖动点击 ({_jx:.0f},{_jy:.0f}) → 像素({_jpx:.0f},{_jpy:.0f})"
+                        )
+                        input_controller.click(int(_jpx), int(_jpy), button="left")
+                        # 3) 单击后延迟 2s，再点击原来任务正确的坐标
+                        time.sleep(2.0)
+                        logger.info(
+                            f"[到达重试] 延迟 2s 后点击原目标坐标 "
+                            f"({target_x:.0f},{target_y:.0f}) → 像素({_tpx:.0f},{_tpy:.0f})"
+                        )
+                        input_controller.click(int(_tpx), int(_tpy), button="left")
                         # 二次等待到达（复用 verifier，短超时）
                         _ok2, _msg2, _cur2 = verifier.wait_for_arrival(
                             target_x=target_x,
@@ -2471,6 +2495,10 @@ class TaskEngine(QObject):
                             self._emit_log("info", f"自动等待到达（抖动重试后）：{_msg2}")
                             return True, result
                         self._emit_log("warning", f"自动等待到达（抖动重试后仍失败）：{_msg2}")
+                    else:
+                        logger.debug(
+                            f"到达抖动重试跳过：{map_name!r} 无地图校准数据"
+                        )
                 except Exception as e:
                     logger.debug(f"到达抖动重试异常（不影响主流程）: {e}")
 
