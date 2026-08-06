@@ -28,7 +28,7 @@
           },
           "pre_delay": 0.0,
           "post_delay": 0.5,
-          "on_error": "retry",
+          "on_error": "skip",
           "max_retries": 3,
           "retry_interval": 1.0,
           "enabled": true,

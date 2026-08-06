@@ -354,14 +354,16 @@ class JHRWController:
     # ------------------------------------------------------------------
 
     def _move_mouse_away(self) -> None:
-        """把鼠标挪到游戏窗口客户区左上角 (5,5)，避免光标遮挡识别目标。
+        """把鼠标挪到游戏窗口客户区右下角 (996,612)，避免光标遮挡识别目标。
 
+        - 2026-08-06 调整：隐藏位置从左上角 (5,5) 改为右下角 (996,612)
+          （用户实测：右下角更不易误触发识别/遮挡）。
         - 2026-08-05 修复：**后台模式不再真实移动物理鼠标**（全后台化后
           物理鼠标应保持不动）——改为 PostMessage WM_MOUSEMOVE 模拟
-          悬停到 (5,5)，游戏仍感知鼠标位置但物理光标不动。
+          悬停到 (996,612)，游戏仍感知鼠标位置但物理光标不动。
         - 前台模式保持 pyautogui 真实移动（原始需求：防遮挡）。
-        - 用 window_manager.client_to_screen 把**游戏画面内**的 (5,5)
-          换算成屏幕坐标再移动 —— 注意不是屏幕绝对 (5,5)。
+        - 用 window_manager.client_to_screen 把**游戏画面内**的 (996,612)
+          换算成屏幕坐标再移动 —— 注意不是屏幕绝对 (996,612)。
         - 失败静默（不阻断等待到达主流程）。
         """
         try:
@@ -375,19 +377,19 @@ class JHRWController:
                 # 后台模式：PostMessage WM_MOUSEMOVE 模拟悬停（物理鼠标不动）
                 try:
                     input_controller._post_message(
-                        0x0200, 0, input_controller._make_mouse_lparam(5, 5)
+                        0x0200, 0, input_controller._make_mouse_lparam(996, 612)
                     )
-                    logger.debug("等待到达：后台模拟鼠标悬停到游戏画面 (5,5)（物理鼠标不动）")
+                    logger.debug("等待到达：后台模拟鼠标悬停到游戏画面 (996,612)（物理鼠标不动）")
                 except Exception as e:
                     logger.debug(f"后台模拟鼠标悬停失败（不影响等待到达）: {e}")
                 return
             try:
                 import pyautogui
                 pyautogui.FAILSAFE = False
-                # 游戏画面 (5,5) = 客户区 (5,5) → 屏幕坐标
-                sx, sy = window_manager.client_to_screen(5, 5)
+                # 游戏画面 (996,612) = 客户区 (996,612) → 屏幕坐标
+                sx, sy = window_manager.client_to_screen(996, 612)
                 pyautogui.moveTo(sx, sy, duration=0.05)
-                logger.debug(f"等待到达：已把鼠标移到游戏画面 (5,5) → 屏幕({sx},{sy}) 避免遮挡")
+                logger.debug(f"等待到达：已把鼠标移到游戏画面 (996,612) → 屏幕({sx},{sy}) 避免遮挡")
             except ImportError:
                 logger.debug("pyautogui 未安装，跳过移鼠标")
         except Exception as e:
