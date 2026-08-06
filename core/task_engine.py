@@ -2424,57 +2424,9 @@ class TaskEngine(QObject):
             else:
                 self._emit_log("warning", f"自动等待到达失败：{msg}")
 
-                # 2026-08-05 到达失败后随机 ±2 像素抖动重试一次
-                # （用户方案：大地图/UI 边缘判定是像素级的，同一坐标重试
-                # 必然再踩同一个坑；随机偏移后总有一次落在有效点击区）。
-                # 2026-08-05 修复：不再依赖 map_name 换算校准（JYC 等函数
-                # result 无 target_location → map_name="" → get_map_calibration
-                # 返回 None → 抖动重试静默跳过，从未触发）。改为优先用
-                # result 里 JYC 已算好的 target_pixel（客户区像素），
-                # 拿不到才回退地图校准。
-                try:
-                    from core.input_controller import input_controller
-                    _px = _py = None
-                    if isinstance(result, dict):
-                        _tp = result.get("target_pixel")
-                        if _tp and isinstance(_tp, (list, tuple)) and len(_tp) >= 2:
-                            _px, _py = float(_tp[0]), float(_tp[1])
-                    if _px is None:
-                        from core.map_ui_block import get_map_calibration
-                        _calib = get_map_calibration(map_name)
-                        if _calib:
-                            _ox, _oy, _sx, _sy = _calib
-                            _px = _ox + target_x * _sx
-                            _py = _oy + target_y * _sy
-                    if _px is not None:
-                        # 随机 ±2 像素
-                        _jx = _px + random.uniform(-2.0, 2.0)
-                        _jy = _py + random.uniform(-2.0, 2.0)
-                        logger.info(
-                            f"[到达重试] 目标像素({_px:.0f},{_py:.0f}) 到达失败，"
-                            f"随机偏移 ±2px 重新点击 ({_jx:.0f},{_jy:.0f})"
-                        )
-                        input_controller.click(int(_jx), int(_jy), button="left")
-                        # 二次等待到达（复用 verifier，短超时）
-                        _ok2, _msg2, _cur2 = verifier.wait_for_arrival(
-                            target_x=target_x,
-                            target_y=target_y,
-                            pid=pid,
-                            should_stop_cb=_should_stop,
-                            sample_interval=wait_sample_interval,
-                            tolerance=wait_tolerance,
-                            timeout=min(wait_timeout, 30.0) if wait_timeout > 0 else 30.0,
-                            stop_confirm_s=wait_stop_confirm_s,
-                            hide_mouse=wait_hide_mouse,
-                        )
-                        if _ok2:
-                            self._emit_log("info", f"自动等待到达（抖动重试后）：{_msg2}")
-                            return True, result
-                        self._emit_log("warning", f"自动等待到达（抖动重试后仍失败）：{_msg2}")
-                except Exception as e:
-                    logger.debug(f"到达抖动重试异常（不影响主流程）: {e}")
-
-                # 返回 False 表示未到达，由调用方决定是否重试函数调用
+                # 2026-08-06 引擎层不再做抖动重试：抖动逻辑已移入地图函数包
+                # （JYC/JNYW/DHW 等 _click_background，左键(原)->2s->左键(抖动+10~50)
+                # ->2s->左键(点回原)->右键），到达失败直接返回由调用方重试。
                 return False, result
 
         except ImportError as e:
