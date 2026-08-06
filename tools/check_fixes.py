@@ -114,11 +114,11 @@ CHECKS = [
     # 2026-08-05 ALT 组合键根治：PostMessage 不更新键盘状态表 → 降级 keybd_event
     ("后台化: ALT 组合键降级 keybd_event", "core/input_controller.py", "regex",
      (r"降级 keybd_event|_press_key_foreground\(keys\)", False)),
-    # 2026-08-06 抖动逻辑移入地图函数包：引擎层不再抖动（negative 检查），函数包内 +10~50
+    # 2026-08-06 抖动逻辑移入地图函数包：引擎层不再抖动（negative 检查），函数包内 +1~6
     ("到达重试: 引擎层无抖动(已移入函数包)", "core/task_engine.py", "regex",
      (r"random\.uniform\(-2\.0|到达重试.*重新点击", True)),
-    ("到达重试: 函数包内抖动 +10~50", "library/map_packs/JYC.py", "regex",
-     (r"random\.uniform\(10\.0, 50\.0\)|MAP_MAX_GAME_COORD", False)),
+    ("到达重试: 函数包内抖动 +1~6", "library/map_packs/JYC.py", "regex",
+     (r"random\.uniform\(1\.0, 6\.0\)|MAP_MAX_GAME_COORD", False)),
     # 2026-08-06 到达失败才抖动：引擎置位 _JITTER_MODE（False=第一次不随机）
     ("到达重试: 引擎按到达结果置位 _JITTER_MODE", "core/task_engine.py", "regex",
      (r"_set_map_jitter_mode\(True\)|_set_map_jitter_mode\(False\)", False)),

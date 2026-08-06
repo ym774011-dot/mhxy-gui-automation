@@ -254,7 +254,7 @@ _JITTER_MODE = False
 def _click_background(hwnd, cx, cy):
     # 后台点击（用户方案 2026-08-06）: PostMessage 完整流程
     # 第一次点击不随机；引擎判定到达失败后置 _JITTER_MODE=True，
-    # 下次调用走抖动序列：左键(原)->2s->左键(抖动+10~50)->2s->左键(点回原)->右键
+    # 下次调用走抖动序列：左键(原)->2s->左键(抖动+1~6)->2s->左键(点回原)->右键
     import random
 
     def _lp(x, y):
@@ -264,12 +264,12 @@ def _click_background(hwnd, cx, cy):
     _jpx = _jpy = None
     if _JITTER_MODE:
         gx0, gy0 = pixel_to_game(float(cx), float(cy))
-        _jx = gx0 + random.uniform(10.0, 50.0)
-        _jy = gy0 + random.uniform(10.0, 50.0)
+        _jx = gx0 + random.uniform(1.0, 6.0)
+        _jy = gy0 + random.uniform(1.0, 6.0)
         _mc = MAP_MAX_GAME_COORD
         if _mc is not None and (_jx > _mc[0] or _jy > _mc[1]):
-            _jx = gx0 - random.uniform(10.0, 50.0)
-            _jy = gy0 - random.uniform(10.0, 50.0)
+            _jx = gx0 - random.uniform(1.0, 6.0)
+            _jy = gy0 - random.uniform(1.0, 6.0)
         _jpx, _jpy = game_to_pixel(_jx, _jy)
 
     # 1) 第一次左键（原坐标，寻路）
