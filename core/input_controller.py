@@ -645,6 +645,9 @@ class InputController:
         瞬移物理光标到目标屏幕坐标（不激活窗口、不抢焦点），解决
         GetCursorPos 命中检测失效。物理光标会短暂跳到目标点，但点击由
         PostMessage 完成、窗口保持后台。
+        2026-08-16 借出即还：调用方（_post_click/_post_double_click）在
+        点击前用 _borrow_cursor 记录原位，点击完成后 _restore_cursor 归还，
+        光标不滞留在游戏窗口。
 
         :param x: 客户区 X 坐标
         :param y: 客户区 Y 坐标
@@ -654,6 +657,49 @@ class InputController:
             win32api.SetCursorPos((int(sx), int(sy)))
         except Exception as e:
             logger.debug(f"光标同步失败（不影响点击）: {e}")
+
+    def _borrow_cursor(self, x, y):
+        """
+        光标借出：记录当前位置并瞬移到目标点，返回原位坐标供归还。
+
+        2026-08-16 用户反馈"抢鼠标"——SetCursorPos 把光标拉进游戏窗口后
+        滞留，用户正在操作别处时被打断。改为"借出即还"：点击前记录原位，
+        点击完成后归还。若用户中途移动了鼠标（光标不在目标点附近），
+        归还时尊重用户新位置，不覆盖。
+
+        :param x: 客户区 X 坐标
+        :param y: 客户区 Y 坐标
+        :return: (orig_x, orig_y, target_sx, target_sy) 或 None
+        """
+        try:
+            orig = win32api.GetCursorPos()
+            sx, sy = self._wm.client_to_screen(x, y)
+            win32api.SetCursorPos((int(sx), int(sy)))
+            time.sleep(0.02)  # 等光标移动生效
+            return (int(orig[0]), int(orig[1]), int(sx), int(sy))
+        except Exception as e:
+            logger.debug(f"光标借出失败（不影响点击）: {e}")
+            return None
+
+    def _restore_cursor(self, borrowed) -> None:
+        """
+        光标归还：点击完成后把光标放回原位。
+
+        若用户已移动鼠标到别处（当前位置远离目标点），则不覆盖用户操作。
+        """
+        if not borrowed:
+            return
+        try:
+            orig_x, orig_y, tgt_x, tgt_y = borrowed
+            cur = win32api.GetCursorPos()
+            # 只有光标还停留在目标点附近（用户没动）才归还，避免抢用户正在用的鼠标
+            if abs(cur[0] - tgt_x) <= 3 and abs(cur[1] - tgt_y) <= 3:
+                win32api.SetCursorPos((orig_x, orig_y))
+                logger.debug(f"光标已归还原位 ({orig_x},{orig_y})")
+            else:
+                logger.debug("用户已移动鼠标，跳过归还（尊重用户位置）")
+        except Exception as e:
+            logger.debug(f"光标归还失败（不影响点击）: {e}")
 
     def _post_click(self, x, y, button="left", press_delay=0.05):
         """
@@ -683,12 +729,15 @@ class InputController:
                 return
         except Exception:
             pass
-        # 2026-08-16 光标同步（方案 A）：物理光标瞬移到目标点，解决
-        # GetCursorPos 命中检测失效。默认开启，input.cursor_sync_click=false 关闭。
+        # 2026-08-16 光标借出（方案 A）：记录原位并瞬移到目标点，解决
+        # GetCursorPos 命中检测失效；点击完成后归还原位。
+        # ⚠️ 2026-08-16 用户硬性要求：光标绝不允许出现在游戏里（一点点都不行）。
+        # 默认改为 **纯 PostMessage（cursor_sync_click=false，光标完全不动）**。
+        # 仅当纯 PostMessage 在新客户端实测失效时才开启（此时光标会闪入游戏）。
+        borrowed = None
         try:
-            if config.get("input.cursor_sync_click", True):
-                self._sync_cursor(x, y)
-                time.sleep(0.02)  # 等光标移动生效
+            if config.get("input.cursor_sync_click", False):
+                borrowed = self._borrow_cursor(x, y)
         except Exception:
             pass
         # 2026-08-05 可靠性强化（解决"偶发点击失效"）：
@@ -710,17 +759,21 @@ class InputController:
             # 按下保持 press_delay 再抬起（模拟真实按住时长，可 GUI 配置）
             time.sleep(max(0.0, float(press_delay or 0.0)))
             self._post_message(up_msg, 0, lparam)
+        # 光标归还原位（借出即还，不抢用户鼠标）
+        if borrowed:
+            self._restore_cursor(borrowed)
         logger.debug(f"后台点击 ({x},{y}) 按钮={button}")
 
     def _post_double_click(self, x, y):
         """后台双击：发送 DOWN -> UP -> DBLCLK -> UP 序列。"""
         lparam = self._make_mouse_lparam(x, y)
         lparam = self._make_mouse_lparam(x, y)
-        # 2026-08-16 光标同步（方案 A，同单击）
+        # 2026-08-16 光标借出（方案 A，同单击）；双击结束后归还。
+        # 默认纯 PostMessage（cursor_sync_click=false，光标完全不动）
+        borrowed = None
         try:
-            if config.get("input.cursor_sync_click", True):
-                self._sync_cursor(x, y)
-                time.sleep(0.02)
+            if config.get("input.cursor_sync_click", False):
+                borrowed = self._borrow_cursor(x, y)
         except Exception:
             pass
         # 先移动鼠标到目标位置（与单击一致，部分 UI 需 hover 状态）
@@ -734,6 +787,8 @@ class InputController:
         self._post_message(self.WM_LBUTTONDBLCLK, self._MOUSE_DOWN_WPARAM["left"], lparam)
         time.sleep(0.02)
         self._post_message(self.WM_LBUTTONUP, 0, lparam)
+        if borrowed:
+            self._restore_cursor(borrowed)
         logger.debug(f"后台双击 ({x},{y})")
 
     def _post_scroll(self, amount, x=None, y=None):

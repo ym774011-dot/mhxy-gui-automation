@@ -149,26 +149,33 @@ def pixel_to_game(px, py):
 # 点击实现
 # ============================================================# 抖动模式标志：False=第一次点击(原坐标不随机)；引擎到达失败后置 True(下次抖动)
 _JITTER_MODE = False
+# 光标同步开关（2026-08-16）：默认 False = 纯 PostMessage（光标完全不动）。
+# True = SetCursorPos 瞬移（方案 A，点击可靠但光标闪入游戏——用户已否决）。
+_CURSOR_SYNC = False
 
 
 def _click_background(hwnd, cx, cy):
     # 后台点击（用户方案 2026-08-06）: PostMessage 完整流程
     # 第一次点击不随机；引擎判定到达失败后置 _JITTER_MODE=True，
     # 下次调用走抖动序列：左键(原)->2s->左键(抖动+1~6)->2s->左键(点回原)->右键
-    # 2026-08-16 光标同步（方案 A）：每次点击前 SetCursorPos 瞬移物理光标
-    # 到目标点，解决 Galaxy2D 自绘引擎 GetCursorPos 命中检测失效（不抢焦点）。
+    # 2026-08-16 光标同步：默认 **纯 PostMessage（光标完全不动）**。
+    #   仅当 _CURSOR_SYNC=True（模块级）时才 SetCursorPos 瞬移光标到目标点，
+    #   解决 Galaxy2D 自绘引擎 GetCursorPos 命中检测失效——但光标会闪入游戏，
+    #   用户已否决此方案（要求光标绝不出现在游戏里），故默认关闭。
     import random
 
     def _lp(x, y):
         return (int(y) << 16) | (int(x) & 0xFFFF)
 
     def _sync_cursor(px, py):
-        # 2026-08-16 光标同步（方案 A）：SetCursorPos 瞬移物理光标到目标屏幕
-        # 坐标（不激活窗口、不抢前台），解决 Galaxy2D 自绘引擎 GetCursorPos
-        # 命中检测失效。
-        # 2026-08-16 废弃 GetCursorPos IAT hook（真后台）方案：实测导致游戏
-        # 全部闪退——galaxy2d.dll 的 GetCursorPos 是运行时 GetProcAddress 动态
-        # 解析，无 IAT 可 hook，内存扫描误改 DATA 节指针破坏游戏内存。
+        # 2026-08-16 光标同步：默认纯 PostMessage（光标不动）。
+        # _CURSOR_SYNC=True 时 SetCursorPos 瞬移（方案 A，点击可靠但光标闪入
+        # 游戏——用户已否决，默认 False）。
+        # 废弃 GetCursorPos IAT hook（真后台）方案：实测导致游戏全部闪退——
+        # galaxy2d.dll 的 GetCursorPos 是运行时 GetProcAddress 动态解析，
+        # 无 IAT 可 hook，内存扫描误改 DATA 节指针破坏游戏内存。
+        if not globals().get('_CURSOR_SYNC', False):
+            return
         try:
             sx, sy = _client_to_screen(hwnd, px, py)
             user32.SetCursorPos(sx, sy)
