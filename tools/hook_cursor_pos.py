@@ -82,15 +82,20 @@ def find_module_base(pid, name_b):
     hmods = (wt.HMODULE * count)()
     psapi.EnumProcessModulesEx(h, hmods, needed.value, ctypes.byref(needed), 3)
     psapi.GetModuleBaseNameA.argtypes = [wt.HANDLE, wt.HMODULE, ctypes.c_char_p, wt.DWORD]
+    psapi.GetModuleFileNameExA.argtypes = [wt.HANDLE, wt.HMODULE, ctypes.c_char_p, wt.DWORD]
     base = None
+    path = ''
     for i in range(count):
         buf = ctypes.create_string_buffer(64)
         psapi.GetModuleBaseNameA(h, hmods[i], buf, 64)
         if buf.value.lower() == name_b:
             base = int(hmods[i]) & 0xFFFFFFFF
+            pbuf = ctypes.create_string_buffer(512)
+            psapi.GetModuleFileNameExA(h, hmods[i], pbuf, 512)
+            path = pbuf.value.decode('utf-8', 'ignore')
             break
     kernel32.CloseHandle(h)
-    return base
+    return base, path
 
 
 def find_iat_slot(dll_path, func_name):
@@ -109,7 +114,7 @@ def find_iat_slot(dll_path, func_name):
 
 
 def get_module_export(pid, module_name, func_name):
-    mod_base = find_module_base(pid, module_name.lower().encode())
+    mod_base, _ = find_module_base(pid, module_name.lower().encode())
     if not mod_base:
         raise RuntimeError('未找到 {0}'.format(module_name))
     syswow = os.path.join(os.environ.get('WINDIR', r'C:/Windows'), 'SysWOW64', module_name)
@@ -184,15 +189,24 @@ def main():
         elif a.lower().endswith('.dll') or a.lower().endswith('.exe'):
             module = a
 
-    mod_base = find_module_base(pid, module.lower().encode())
+    try:
+        mod_base, mod_path = find_module_base(pid, module.lower().encode())
+    except RuntimeError as e:
+        print('[err] 进程 {0} 不存在或无法访问: {1}'.format(pid, e))
+        print('[hint] 请先启动游戏，再以管理员身份运行本脚本')
+        return
     if not mod_base:
         print('[err] 进程内未找到 {0}'.format(module))
+        print('[hint] 请确认游戏已启动，且模块名正确（newjc.dll）')
         return
-    print('[ok] {0} base=0x{1:08X}'.format(module, mod_base))
+    print('[ok] {0} base=0x{1:08X} path={2}'.format(module, mod_base, mod_path))
 
-    iat_rva, dll = find_iat_slot(DLL_FILE if module == 'newjc.dll' else module, 'GetCursorPos')
+    # 用进程内模块的真实磁盘路径扫 IAT（不硬编码 G:/00，换路径也能用）
+    scan_dll = mod_path if mod_path else (DLL_FILE if module == 'newjc.dll' else module)
+    iat_rva, dll = find_iat_slot(scan_dll, 'GetCursorPos')
     if iat_rva is None:
-        print('[err] {0} 未导入 GetCursorPos'.format(module))
+        print('[err] {0} 未导入 GetCursorPos (path={1})'.format(module, scan_dll))
+        print('[hint] 尝试指定其它模块: python hook_cursor_pos.py {0} ExuiKrnln.dll'.format(pid))
         return
     slot_abs = (mod_base + iat_rva) & 0xFFFFFFFF
     print('[info] GetCursorPos IAT 槽 = 0x{0:08X} (来自 {1})'.format(slot_abs, dll))
