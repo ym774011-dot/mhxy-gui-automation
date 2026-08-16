@@ -1,4 +1,16 @@
 # -*- coding: utf-8 -*-
+# ⚠️⚠️⚠️ 已废弃（2026-08-16 实测）：此工具会导致游戏全部闪退，请勿使用 ⚠️⚠️⚠️
+# 原因：galaxy2d.dll 的 GetCursorPos 是运行时 GetProcAddress 动态解析
+#   （磁盘导入表/延迟导入表均无该函数），内存扫描到的 0x10184294 落在
+#   DATA 节（RVA 0x184294，节特性 0xE0000040）——是普通数据指针而非 IAT 槽，
+#   重定向后游戏其它逻辑读取该指针 → 内存破坏 → 6 个角色进程全部闪退。
+# 已用 tools/hook_cursor_cleanup.py 恢复。真后台鼠标方案对 Galaxy2D 4.2 不可行：
+#   - 纯 PostMessage：游戏 GetCursorPos 命中检测不通过
+#   - IAT hook：无 IAT 可 hook（动态解析）
+#   - inline hook user32 本体：系统级修改，风险更高，每进程都要做
+# 结论：保留 SetCursorPos + PostMessage（方案 A，光标会动但点击可靠、不抢前台）。
+#
+# 历史实现（保留供参考，勿运行）：
 # GetCursorPos IAT hook：伪造鼠标位置（真后台鼠标，物理光标不动）
 # 原理：游戏 newjc.dll 导入 user32!GetCursorPos 做命中检测。把 IAT 槽改指向
 #   注入的伪造函数：flag!=0 → 返回伪造坐标(fx,fy)；flag==0 → jmp 原函数透传。
@@ -24,8 +36,8 @@ MEM_RESERVE = 0x2000
 PAGE_EXECUTE_READWRITE = 0x40
 PAGE_READWRITE = 0x04
 
-DLL_FILE = r'G:/00/newjc.dll'
-MODULE_NAME = 'newjc.dll'
+DLL_FILE = r'G:/00/galaxy2d.dll'
+MODULE_NAME = 'galaxy2d.dll'   # 2026-08-16: 新客户端(8/16更新)改用 galaxy2d/g2d，newjc 已废弃
 SHM_NAME = 'MHXY_CURSOR_HOOK'
 SHM_SIZE = 64            # 存目标进程数据区地址 (u32) + magic
 
@@ -40,14 +52,31 @@ DATA_SIZE = 16
 CODE_CAP = 128
 
 
+def _shm_create():
+    """创建/打开共享内存（64 位兼容：INVALID_HANDLE_VALUE = 全 1）"""
+    kernel32.CreateFileMappingW.restype = ctypes.c_void_p
+    kernel32.CreateFileMappingW.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+        ctypes.c_uint32, ctypes.c_uint32, ctypes.c_wchar_p]
+    kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+    kernel32.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+    kernel32.MapViewOfFile.restype = ctypes.c_void_p
+    kernel32.MapViewOfFile.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_size_t]
+    h = kernel32.OpenFileMappingW(0x0002, False, SHM_NAME)  # FILE_MAP_WRITE
+    if not h:
+        h = kernel32.CreateFileMappingW(
+            ctypes.c_void_p(0xFFFFFFFFFFFFFFFF), None, 0x04, 0, SHM_SIZE, SHM_NAME)
+    return h
+
+
 def shm_write(addr):
     """把目标进程数据区地址写入命名共享内存（客户端读取）"""
     try:
-        h = kernel32.CreateFileMappingW(
-            ctypes.c_void_p(-1), None, 0x04, 0, SHM_SIZE, SHM_NAME)
+        h = _shm_create()
         if not h:
             return False
-        p = kernel32.MapViewOfFile(h, 0x0006, 0, 0, SHM_SIZE)
+        p = kernel32.MapViewOfFile(h, 0x0006, 0, 0, SHM_SIZE)  # FILE_MAP_ALL_ACCESS
         if not p:
             return False
         ctypes.memmove(p, struct.pack('<I', addr), 4)
@@ -60,7 +89,7 @@ def shm_write(addr):
 
 def shm_clear():
     try:
-        h = kernel32.OpenFileMappingW(0x0002, False, SHM_NAME)
+        h = _shm_create()
         if not h:
             return
         p = kernel32.MapViewOfFile(h, 0x0006, 0, 0, SHM_SIZE)
@@ -175,46 +204,97 @@ def build_fake(data_addr):
     return c
 
 
+def find_game_pids():
+    """枚举所有游戏进程 PID（十年一梦.exe）"""
+    result = []
+    PROCESS_QUERY_INFORMATION = 0x0400
+    PROCESS_VM_READ = 0x0010
+    for pid in range(0, 65536):
+        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
+        if not h:
+            continue
+        buf = ctypes.create_string_buffer(256)
+        ok = psapi.GetModuleBaseNameA(h, None, buf, 256)
+        if ok and b'\xca\xae\xc4\xea\xd2\xbb\xc3\xce' in buf.value:  # 十年一梦.exe (GBK)
+            result.append(pid)
+        kernel32.CloseHandle(h)
+    return result
+
+
 def main():
     args = sys.argv[1:]
     if not args:
-        print('用法: python hook_cursor_pos.py PID [MODULE] [--unhook]')
+        print('用法:')
+        print('  python hook_cursor_pos.py <PID> [MODULE] [--unhook]   # 指定 PID')
+        print('  python hook_cursor_pos.py --auto [--unhook]           # 自动注入所有游戏进程')
         return
-    pid = int(args[0])
     module = MODULE_NAME
     mode = 'inject'
-    for a in args[1:]:
+    auto = False
+    pid_list = []
+    for a in args:
         if a == '--unhook':
             mode = 'unhook'
+        elif a == '--auto':
+            auto = True
         elif a.lower().endswith('.dll') or a.lower().endswith('.exe'):
             module = a
+        elif a.isdigit():
+            pid_list.append(int(a))
 
+    if auto or not pid_list:
+        pids = find_game_pids()
+        if not pids:
+            print('[err] 未找到游戏进程（十年一梦.exe）——请先启动游戏')
+            return
+        pid_list = pids
+        print('[auto] 找到游戏进程: {0}'.format(pids))
+
+    for pid in pid_list:
+        _inject_or_unhook(pid, module, mode, quiet=auto)
+
+
+def _inject_or_unhook(pid, module, mode, quiet=False):
     try:
         mod_base, mod_path = find_module_base(pid, module.lower().encode())
     except RuntimeError as e:
-        print('[err] 进程 {0} 不存在或无法访问: {1}'.format(pid, e))
-        print('[hint] 请先启动游戏，再以管理员身份运行本脚本')
+        if not quiet:
+            print('[err] 进程 {0} 不存在或无法访问: {1}'.format(pid, e))
+            print('[hint] 请先启动游戏，再以管理员身份运行本脚本')
         return
     if not mod_base:
-        print('[err] 进程内未找到 {0}'.format(module))
-        print('[hint] 请确认游戏已启动，且模块名正确（newjc.dll）')
+        if not quiet:
+            print('[err] 进程内未找到 {0}'.format(module))
+            print('[hint] 请确认游戏已启动，且模块名正确（galaxy2d.dll / g2d.dll）')
         return
-    print('[ok] {0} base=0x{1:08X} path={2}'.format(module, mod_base, mod_path))
+    if not quiet:
+        print('[ok] {0} base=0x{1:08X} path={2}'.format(module, mod_base, mod_path))
 
-    # 用进程内模块的真实磁盘路径扫 IAT（不硬编码 G:/00，换路径也能用）
-    scan_dll = mod_path if mod_path else (DLL_FILE if module == 'newjc.dll' else module)
-    iat_rva, dll = find_iat_slot(scan_dll, 'GetCursorPos')
-    if iat_rva is None:
-        print('[err] {0} 未导入 GetCursorPos (path={1})'.format(module, scan_dll))
-        print('[hint] 尝试指定其它模块: python hook_cursor_pos.py {0} ExuiKrnln.dll'.format(pid))
-        return
-    slot_abs = (mod_base + iat_rva) & 0xFFFFFFFF
-    print('[info] GetCursorPos IAT 槽 = 0x{0:08X} (来自 {1})'.format(slot_abs, dll))
-
+    # 运行时内存扫描定位 GetCursorPos IAT 槽（新客户端 galaxy2d/g2d 是
+    # 延迟导入/动态解析，磁盘导入表扫不到，必须在运行时内存里找）。
+    # 策略：user32!GetCursorPos 真实地址 → 扫描模块前 2MB 找指向它的指针。
     h = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
     if not h:
         print('[err] OpenProcess: {0}'.format(ctypes.get_last_error()))
         return
+    _, gc_addr = get_module_export(pid, 'user32.dll', 'GetCursorPos')
+    print('[info] user32!GetCursorPos @ 0x{0:08X}'.format(gc_addr))
+    # 扫描目标模块前 2MB 的 IAT 槽
+    buf = ctypes.create_string_buffer(0x200000)
+    rd = ctypes.c_size_t(0)
+    kernel32.ReadProcessMemory(h, ctypes.c_void_p(mod_base), buf, 0x200000, ctypes.byref(rd))
+    mem = buf.raw
+    slot_abs = None
+    for off in range(0, len(mem) - 4, 4):
+        if struct.unpack('<I', mem[off:off + 4])[0] == gc_addr:
+            slot_abs = (mod_base + off) & 0xFFFFFFFF
+            break
+    if slot_abs is None:
+        print('[err] {0} 内存中未找到指向 GetCursorPos 的 IAT 槽'.format(module))
+        print('[hint] 尝试其它模块: python hook_cursor_pos.py {0} g2d.dll'.format(pid))
+        kernel32.CloseHandle(h)
+        return
+    print('[info] GetCursorPos IAT 槽 = 0x{0:08X}（内存扫描）'.format(slot_abs))
     rd = ctypes.c_size_t(0)
     orig_val = ctypes.create_string_buffer(4)
     kernel32.ReadProcessMemory(h, ctypes.c_void_p(slot_abs), orig_val, 4, ctypes.byref(rd))

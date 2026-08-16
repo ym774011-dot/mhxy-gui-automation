@@ -638,69 +638,22 @@ class InputController:
         """
         光标同步（2026-08-16）：PostMessage 点击前让游戏读到目标光标位置。
 
-        两级策略（优先真后台）：
-        1. **GetCursorPos hook 伪造**（首选，真后台）：若已注入
-           tools/hook_cursor_pos.py（IAT hook newjc.dll 的 GetCursorPos），
-           直接写伪造坐标到目标进程数据区 → 游戏命中检测读到目标点，
-           物理光标完全不动。由 hook_cursor_client.set_cursor 完成。
-        2. **SetCursorPos 瞬移**（兜底，方案 A）：未注入 hook 时瞬移
-           物理光标到目标屏幕坐标（不激活窗口、不抢焦点），解决
-           GetCursorPos 命中检测失效。
-        3. 均失败则静默（不影响点击主流程）。
+        ⚠️ 2026-08-16 方案变更：GetCursorPos IAT hook 方案已废弃（实测导致
+        游戏全部闪退——galaxy2d.dll 的 GetCursorPos 是运行时 GetProcAddress
+        动态解析，内存扫描把 DATA 节普通指针误当 IAT 槽，重定向破坏游戏内存）。
+        现在只保留 **SetCursorPos 瞬移（方案 A）**：
+        瞬移物理光标到目标屏幕坐标（不激活窗口、不抢焦点），解决
+        GetCursorPos 命中检测失效。物理光标会短暂跳到目标点，但点击由
+        PostMessage 完成、窗口保持后台。
 
         :param x: 客户区 X 坐标
         :param y: 客户区 Y 坐标
         """
         try:
             sx, sy = self._wm.client_to_screen(x, y)
-            # 1) 优先 hook 伪造（真后台，物理光标不动）
-            pid = getattr(self._wm, "pid", 0) or 0
-            if pid:
-                try:
-                    from tools.hook_cursor_client import set_cursor, is_hooked
-                    if is_hooked(pid) and set_cursor(pid, int(sx), int(sy)):
-                        logger.debug(
-                            f"光标同步(hook伪造): ({x},{y}) → 屏幕({int(sx)},{int(sy)}) 物理光标不动"
-                        )
-                        return
-                except ImportError:
-                    pass
-                except Exception as e:
-                    logger.debug(f"光标同步(hook)失败，回退 SetCursorPos: {e}")
-            # 2) 兜底：SetCursorPos 瞬移
             win32api.SetCursorPos((int(sx), int(sy)))
         except Exception as e:
             logger.debug(f"光标同步失败（不影响点击）: {e}")
-
-    def _clear_cursor_after(self) -> None:
-        """点击后清空 hook 伪造坐标（flag=0 → 游戏恢复读真实光标）。"""
-        try:
-            pid = getattr(self._wm, "pid", 0) or 0
-            if pid:
-                from tools.hook_cursor_client import clear
-                clear(pid)
-        except Exception:
-            pass
-
-    def _sync_current_pid(self) -> None:
-        """
-        同步当前绑定游戏 PID 到所有地图函数包模块级 _CURRENT_PID。
-
-        多开场景：绑定的游戏角色 PID 经常变，函数包需要拿到当前 PID
-        才能正确 hook 写坐标到对应的游戏进程。点击前统一同步。
-        """
-        try:
-            from core.task_library_manager import task_library
-            pid = int(getattr(self._wm, "pid", 0) or 0)
-            if not pid:
-                return
-            with task_library._lock:
-                for info in task_library.modules.values():
-                    mod = info.get("module")
-                    if mod is not None and hasattr(mod, "DEFAULT_PID"):
-                        setattr(mod, "_CURRENT_PID", pid)
-        except Exception as e:
-            logger.debug(f"同步 PID 到地图模块失败（不影响点击）: {e}")
 
     def _post_click(self, x, y, button="left", press_delay=0.05):
         """
@@ -719,9 +672,6 @@ class InputController:
             return
         down_msg, up_msg = down_up
         lparam = self._make_mouse_lparam(x, y)
-        # 2026-08-16 多开 PID 跟随：点击前把当前绑定游戏 PID 同步到所有
-        # 地图函数包模块级 _CURRENT_PID，让函数包 hook 客户端写到正确的游戏进程。
-        self._sync_current_pid()
         # 2026-08-05 坐标有效性检查：点击坐标超出客户区 → 点在窗口外，
         # 游戏收不到（PostMessage 照发但无效果），提前警告避免误以为"失效"。
         try:
@@ -760,20 +710,12 @@ class InputController:
             # 按下保持 press_delay 再抬起（模拟真实按住时长，可 GUI 配置）
             time.sleep(max(0.0, float(press_delay or 0.0)))
             self._post_message(up_msg, 0, lparam)
-        # 2026-08-16 hook 伪造坐标在点击后清空（flag=0 → 游戏恢复读真实光标）
-        try:
-            if config.get("input.cursor_sync_click", True):
-                self._clear_cursor_after()
-        except Exception:
-            pass
         logger.debug(f"后台点击 ({x},{y}) 按钮={button}")
 
     def _post_double_click(self, x, y):
         """后台双击：发送 DOWN -> UP -> DBLCLK -> UP 序列。"""
         lparam = self._make_mouse_lparam(x, y)
         lparam = self._make_mouse_lparam(x, y)
-        # 2026-08-16 PID 同步（同单击）
-        self._sync_current_pid()
         # 2026-08-16 光标同步（方案 A，同单击）
         try:
             if config.get("input.cursor_sync_click", True):

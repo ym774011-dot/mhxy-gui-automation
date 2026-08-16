@@ -21,6 +21,11 @@ def _shm_read_addr():
     """读共享内存里的数据区地址（0=未注入）"""
     global _known_addr
     try:
+        kernel32.OpenFileMappingW.restype = ctypes.c_void_p
+        kernel32.OpenFileMappingW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+        kernel32.MapViewOfFile.restype = ctypes.c_void_p
+        kernel32.MapViewOfFile.argtypes = [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_size_t]
         h = kernel32.OpenFileMappingW(0x0002, False, SHM_NAME)
         if not h:
             _known_addr = 0

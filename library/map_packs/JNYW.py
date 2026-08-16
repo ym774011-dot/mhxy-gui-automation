@@ -163,27 +163,14 @@ def _click_background(hwnd, cx, cy):
         return (int(y) << 16) | (int(x) & 0xFFFF)
 
     def _sync_cursor(px, py):
-        # 2026-08-16 光标同步：优先 GetCursorPos hook 伪造（真后台，物理光标
-        # 不动，需先注入 tools/hook_cursor_pos.py），未注入则 SetCursorPos 瞬移
-        # （方案 A 兜底，不抢前台）。
-        # 2026-08-16 PID 动态化：游戏 PID 从模块级 _CURRENT_PID 读取（input_controller
-        # 每次点击前同步，绑定不同游戏时 PID 自动跟随），DEFAULT_PID 兜底。
+        # 2026-08-16 光标同步（方案 A）：SetCursorPos 瞬移物理光标到目标屏幕
+        # 坐标（不激活窗口、不抢前台），解决 Galaxy2D 自绘引擎 GetCursorPos
+        # 命中检测失效。
+        # 2026-08-16 废弃 GetCursorPos IAT hook（真后台）方案：实测导致游戏
+        # 全部闪退——galaxy2d.dll 的 GetCursorPos 是运行时 GetProcAddress 动态
+        # 解析，无 IAT 可 hook，内存扫描误改 DATA 节指针破坏游戏内存。
         try:
             sx, sy = _client_to_screen(hwnd, px, py)
-            # 1) hook 伪造优先
-            try:
-                import sys, os
-                _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                if _proj not in sys.path:
-                    sys.path.insert(0, _proj)
-                from tools.hook_cursor_client import set_cursor, is_hooked
-                _pid = globals().get('_CURRENT_PID', 0) or DEFAULT_PID
-                if _pid and is_hooked(_pid) and set_cursor(_pid, sx, sy):
-                    time.sleep(0.02)
-                    return
-            except Exception:
-                pass
-            # 2) SetCursorPos 兜底
             user32.SetCursorPos(sx, sy)
             time.sleep(0.02)
         except Exception:

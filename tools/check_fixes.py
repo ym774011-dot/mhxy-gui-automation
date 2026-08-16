@@ -68,13 +68,13 @@ CHECKS = [
      (r"def _sync_cursor", False)),
     ("光标同步: 函数包点击前同步光标", "library/map_packs/JYC.py", "regex",
      (r"_sync_cursor\(cx, cy\)", False)),
-    # 2026-08-16 真后台鼠标：GetCursorPos IAT hook（伪造坐标，物理光标不动）
-    ("光标同步: hook 注入工具存在", "tools/hook_cursor_pos.py", "regex",
-     (r"GetCursorPos IAT|build_fake", False)),
-    ("光标同步: hook 客户端存在", "tools/hook_cursor_client.py", "regex",
-     (r"def set_cursor|def is_hooked", False)),
-    ("光标同步: input_controller hook 优先", "core/input_controller.py", "regex",
-     (r"hook_cursor_client|is_hooked", False)),
+    # 2026-08-16 ⚠️ GetCursorPos IAT hook 方案已废弃（实测导致游戏闪退：
+    # galaxy2d.dll 的 GetCursorPos 是运行时 GetProcAddress 动态解析，无 IAT 可
+    # hook，内存扫描误改 DATA 节指针破坏游戏内存）。只保留纯 SetCursorPos 方案 A。
+    ("光标同步: input_controller 无 hook 残留", "core/input_controller.py", "regex",
+     (r"hook_cursor_client|is_hooked|_sync_current_pid", True)),
+    ("光标同步: 函数包无 hook 残留", "library/map_packs/JYC.py", "regex",
+     (r"hook_cursor_client|is_hooked", True)),
 
     # 2026-08-05 click_delay 必须在主点击和附加点击之间（不是附加后）。
     # regex 故意包含注释以让 check_fixes 的非注释过滤不影响判定
