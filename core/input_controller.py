@@ -682,6 +682,26 @@ class InputController:
         except Exception:
             pass
 
+    def _sync_current_pid(self) -> None:
+        """
+        同步当前绑定游戏 PID 到所有地图函数包模块级 _CURRENT_PID。
+
+        多开场景：绑定的游戏角色 PID 经常变，函数包需要拿到当前 PID
+        才能正确 hook 写坐标到对应的游戏进程。点击前统一同步。
+        """
+        try:
+            from core.task_library_manager import task_library
+            pid = int(getattr(self._wm, "pid", 0) or 0)
+            if not pid:
+                return
+            with task_library._lock:
+                for info in task_library.modules.values():
+                    mod = info.get("module")
+                    if mod is not None and hasattr(mod, "DEFAULT_PID"):
+                        setattr(mod, "_CURRENT_PID", pid)
+        except Exception as e:
+            logger.debug(f"同步 PID 到地图模块失败（不影响点击）: {e}")
+
     def _post_click(self, x, y, button="left", press_delay=0.05):
         """
         后台点击：发送 DOWN + UP 消息。
@@ -699,6 +719,9 @@ class InputController:
             return
         down_msg, up_msg = down_up
         lparam = self._make_mouse_lparam(x, y)
+        # 2026-08-16 多开 PID 跟随：点击前把当前绑定游戏 PID 同步到所有
+        # 地图函数包模块级 _CURRENT_PID，让函数包 hook 客户端写到正确的游戏进程。
+        self._sync_current_pid()
         # 2026-08-05 坐标有效性检查：点击坐标超出客户区 → 点在窗口外，
         # 游戏收不到（PostMessage 照发但无效果），提前警告避免误以为"失效"。
         try:
@@ -749,6 +772,8 @@ class InputController:
         """后台双击：发送 DOWN -> UP -> DBLCLK -> UP 序列。"""
         lparam = self._make_mouse_lparam(x, y)
         lparam = self._make_mouse_lparam(x, y)
+        # 2026-08-16 PID 同步（同单击）
+        self._sync_current_pid()
         # 2026-08-16 光标同步（方案 A，同单击）
         try:
             if config.get("input.cursor_sync_click", True):
