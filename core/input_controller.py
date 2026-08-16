@@ -636,22 +636,51 @@ class InputController:
 
     def _sync_cursor(self, x, y) -> None:
         """
-        光标同步（方案 A，2026-08-16）：PostMessage 点击前把物理光标
-        瞬移到目标屏幕坐标，解决 Galaxy2D 类自绘引擎的 GetCursorPos 命中检测。
+        光标同步（2026-08-16）：PostMessage 点击前让游戏读到目标光标位置。
 
-        原理：自绘 DX 引擎（如 Galaxy2D 4.2）的点击命中不只读窗口消息，
-        还依赖 GetCursorPos() 读真实光标位置。PostMessage 伪造消息但物理
-        光标不在目标点 → 命中检测失败 → 偶发点击失效。SetCursorPos 瞬移
-        光标（不激活窗口、不抢焦点）后，命中检测通过，点击由消息完成。
+        两级策略（优先真后台）：
+        1. **GetCursorPos hook 伪造**（首选，真后台）：若已注入
+           tools/hook_cursor_pos.py（IAT hook newjc.dll 的 GetCursorPos），
+           直接写伪造坐标到目标进程数据区 → 游戏命中检测读到目标点，
+           物理光标完全不动。由 hook_cursor_client.set_cursor 完成。
+        2. **SetCursorPos 瞬移**（兜底，方案 A）：未注入 hook 时瞬移
+           物理光标到目标屏幕坐标（不激活窗口、不抢焦点），解决
+           GetCursorPos 命中检测失效。
+        3. 均失败则静默（不影响点击主流程）。
 
         :param x: 客户区 X 坐标
         :param y: 客户区 Y 坐标
         """
         try:
             sx, sy = self._wm.client_to_screen(x, y)
+            # 1) 优先 hook 伪造（真后台，物理光标不动）
+            pid = getattr(self._wm, "pid", 0) or 0
+            if pid:
+                try:
+                    from tools.hook_cursor_client import set_cursor, is_hooked
+                    if is_hooked(pid) and set_cursor(pid, int(sx), int(sy)):
+                        logger.debug(
+                            f"光标同步(hook伪造): ({x},{y}) → 屏幕({int(sx)},{int(sy)}) 物理光标不动"
+                        )
+                        return
+                except ImportError:
+                    pass
+                except Exception as e:
+                    logger.debug(f"光标同步(hook)失败，回退 SetCursorPos: {e}")
+            # 2) 兜底：SetCursorPos 瞬移
             win32api.SetCursorPos((int(sx), int(sy)))
         except Exception as e:
             logger.debug(f"光标同步失败（不影响点击）: {e}")
+
+    def _clear_cursor_after(self) -> None:
+        """点击后清空 hook 伪造坐标（flag=0 → 游戏恢复读真实光标）。"""
+        try:
+            pid = getattr(self._wm, "pid", 0) or 0
+            if pid:
+                from tools.hook_cursor_client import clear
+                clear(pid)
+        except Exception:
+            pass
 
     def _post_click(self, x, y, button="left", press_delay=0.05):
         """
@@ -708,6 +737,12 @@ class InputController:
             # 按下保持 press_delay 再抬起（模拟真实按住时长，可 GUI 配置）
             time.sleep(max(0.0, float(press_delay or 0.0)))
             self._post_message(up_msg, 0, lparam)
+        # 2026-08-16 hook 伪造坐标在点击后清空（flag=0 → 游戏恢复读真实光标）
+        try:
+            if config.get("input.cursor_sync_click", True):
+                self._clear_cursor_after()
+        except Exception:
+            pass
         logger.debug(f"后台点击 ({x},{y}) 按钮={button}")
 
     def _post_double_click(self, x, y):

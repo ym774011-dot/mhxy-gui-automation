@@ -163,12 +163,31 @@ def _click_background(hwnd, cx, cy):
         return (int(y) << 16) | (int(x) & 0xFFFF)
 
     def _sync_cursor(px, py):
+        # 2026-08-16 光标同步：优先 GetCursorPos hook 伪造（真后台，物理光标
+        # 不动，需先注入 tools/hook_cursor_pos.py），未注入则 SetCursorPos 瞬移
+        # （方案 A 兜底，不抢前台）。目标都是让游戏 GetCursorPos 读到目标点。
         try:
             sx, sy = _client_to_screen(hwnd, px, py)
+            # 1) hook 伪造优先
+            try:
+                import sys, os
+                _proj = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                if _proj not in sys.path:
+                    sys.path.insert(0, _proj)
+                from tools.hook_cursor_client import set_cursor, is_hooked
+                _pid = pid if 'pid' in dir() else DEFAULT_PID
+                if is_hooked(_pid) and set_cursor(_pid, sx, sy):
+                    time.sleep(0.02)
+                    return
+            except Exception:
+                pass
+            # 2) SetCursorPos 兜底
             user32.SetCursorPos(sx, sy)
             time.sleep(0.02)
         except Exception:
             pass
+
+
 
     # 后台点击（用户方案 2026-08-06）: PostMessage 完整流程
     # 第一次点击不随机；引擎判定到达失败后置 _JITTER_MODE=True，
