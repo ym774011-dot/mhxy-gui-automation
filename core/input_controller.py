@@ -218,7 +218,7 @@ class InputController:
             has_alt = "alt" in [p.strip().lower() for p in keys.split("+") if p.strip()]
             if has_alt:
                 logger.info(f"ALT 组合键 {keys!r}：PostMessage 无法模拟键盘状态，"
-                            f"降级 keybd_event 真实注入（游戏窗口将置前台）")
+                            f"降级 SendInput 真实注入（游戏窗口将置前台）")
                 self._press_key_foreground(keys)
                 return
             self._post_key(keys)
@@ -287,90 +287,257 @@ class InputController:
         except Exception as e:
             logger.exception(f"前台点击失败: {e}")
 
-    def _press_key_foreground(self, keys):
-        """前台按键：用 keybd_event 发送组合键（带延迟，确保游戏能识别）。
+    def _force_foreground(self, hwnd: int) -> bool:
+        """绕过 Windows 前台锁强制切换前台（AttachThreadInput + ALT hack）。
 
-        keybd_event 是真实输入，更新系统键盘状态表，因此 GetAsyncKeyState /
-        GetKeyState 都能读到按下状态 —— 这是 ALT 组合键（梦幻 ALT+E 背包等）
-        在后台模式下仍能生效的唯一可靠方式。注入目标为当前前台窗口，
-        调用前会把游戏窗口置前台（会短暂抢占焦点）。
+        前台锁规则：只有前台进程才有权 SetForegroundWindow。ALT hack 通过
+        模拟 ALT 按下让系统认为本进程有输入活动，从而解除锁限制。
+        """
+        if not hwnd:
+            return False
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            fg_tid = 0
+            target_tid = 0
+            try:
+                fg_hwnd = win32gui.GetForegroundWindow()
+                fg_tid = win32process.GetWindowThreadProcessId(fg_hwnd)[0]
+                target_tid = win32process.GetWindowThreadProcessId(hwnd)[0]
+            except Exception:
+                pass
+            attached = False
+            if fg_tid and target_tid and fg_tid != target_tid:
+                try:
+                    win32process.AttachThreadInput(fg_tid, target_tid, True)
+                    attached = True
+                except Exception:
+                    pass
+            # ALT hack：模拟 ALT 按下解除前台锁
+            user32.keybd_event(0x12, 0, 0, 0)          # VK_MENU down
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.03)
+            user32.keybd_event(0x12, 0, 0x0002, 0)     # VK_MENU up
+            if attached:
+                try:
+                    win32process.AttachThreadInput(fg_tid, target_tid, False)
+                except Exception:
+                    pass
+            return win32gui.GetForegroundWindow() == hwnd
+        except Exception as e:
+            logger.warning(f"_force_foreground 失败 hwnd={hwnd}: {e}")
+            return False
+
+    def _ensure_foreground(self, retries: int = 3) -> bool:
+        """确保游戏窗口真正在前台（带校验，失败重试）。
+
+        SetForegroundWindow 受 Windows 前台锁限制可能"假成功"（返回 0 但未切换），
+        这里通过 GetForegroundWindow 实际校验，避免 keybd_event/SendInput
+        注入到别的窗口导致按键无效。
+
+        前台锁绕过（2026-08-09 新增）：常规重试失败后，用"模拟 ALT 键按下"
+        hack——发送一个 ALT 按下事件让 Windows 认为本进程有输入活动，
+        从而解除前台锁限制，随后 SetForegroundWindow 成功率大幅提升。
+
+        :param retries: 常规重试次数
+        :return: bool，是否确认游戏窗口为当前前台
+        """
+        for i in range(retries):
+            self._wm.set_foreground()
+            time.sleep(0.12)  # 等焦点切换稳定
+            try:
+                if win32gui.GetForegroundWindow() == self._wm.hwnd:
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+        # 最终尝试：ALT 键 hack 绕过前台锁（复用 _force_foreground）
+        try:
+            if self._force_foreground(self._wm.hwnd):
+                time.sleep(0.15)
+                if win32gui.GetForegroundWindow() == self._wm.hwnd:
+                    logger.info("前台切换成功（ALT hack 绕过前台锁）")
+                    return True
+        except Exception as e:
+            logger.warning(f"ALT hack 切换前台失败: {e}")
+
+        logger.warning(f"_ensure_foreground 失败: 重试 {retries} 次 + ALT hack 后游戏窗口仍未成为前台")
+        return False
+
+    def _press_key_foreground(self, keys):
+        """前台按键：用 SendInput 注入组合键（VK 模式 + 焦点校验）。
+
+        实测结论（2026-08-09）：梦幻类游戏对 SCANCODE 模式不响应（注入成功
+        但 GetAsyncKeyState 已按下但游戏不识别为 ALT 组合键），VK 模式有效。
+        因此默认使用 VK 模式，wScan=0。
+
+        流程：置前台+校验 → 按下修饰键→普通键（各间隔100ms）→ 逆序释放
         """
         # 解析组合键
         parts = [p.strip().lower() for p in keys.split("+") if p.strip()]
         if not parts:
             logger.warning(f"press_key 解析为空: keys={keys!r}")
             return
-        # 确保窗口在前台
-        self._wm.set_foreground()
+        # 记录注入前的前台窗口（必须在 _ensure_foreground 置游戏前台之前！
+        # 否则此时前台已是游戏，归还条件失效）
+        prev_fg = 0
         try:
-            # 使用 win32api keybd_event 发送按键（比 pyautogui.hotkey 更可靠）
+            prev_fg = win32gui.GetForegroundWindow()
+        except Exception:
+            pass
+        # 焦点校验：确保游戏窗口真正在前台
+        # 2026-08-09 修复：校验失败不放弃注入（GUI 环境受 Windows 前台锁限制，
+        # set_foreground 可能"假成功"，但放弃注入 = 100% 失败；继续注入则可能生效，
+        # 且 SendInput 注入本身可能把焦点带向游戏）。降级为警告 + 继续。
+        if not self._ensure_foreground():
+            logger.warning(f"游戏窗口未确认在前台（keys={keys!r}），仍尝试注入")
+        try:
             import ctypes
+            from ctypes import wintypes
             user32 = ctypes.windll.user32
 
-            # 按键名到虚拟键码的映射
-            KEY_MAP = {
+            # 虚拟键码映射
+            VK_MAP = {
                 'alt': 0x12,       # VK_MENU
                 'ctrl': 0x11,      # VK_CONTROL
                 'control': 0x11,
                 'shift': 0x10,     # VK_SHIFT
                 'win': 0x5B,       # VK_LWIN
-                'tab': 0x09,       # VK_TAB
-                'enter': 0x0D,     # VK_RETURN
+                'tab': 0x09,
+                'enter': 0x0D,
                 'return': 0x0D,
-                'esc': 0x1B,       # VK_ESCAPE
+                'esc': 0x1B,
                 'escape': 0x1B,
-                'space': 0x20,     # VK_SPACE
-                'backspace': 0x08, # VK_BACK
-                'delete': 0x2E,    # VK_DELETE
+                'space': 0x20,
+                'backspace': 0x08,
+                'delete': 0x2E,
                 'del': 0x2E,
-                'up': 0x26,        # VK_UP
-                'down': 0x28,      # VK_DOWN
-                'left': 0x25,      # VK_LEFT
-                'right': 0x27,     # VK_RIGHT
-                'home': 0x24,      # VK_HOME
-                'end': 0x23,       # VK_END
-                'pageup': 0x21,    # VK_PRIOR
-                'pagedown': 0x22,  # VK_NEXT
+                'up': 0x26,
+                'down': 0x28,
+                'left': 0x25,
+                'right': 0x27,
+                'home': 0x24,
+                'end': 0x23,
+                'pageup': 0x21,
+                'pagedown': 0x22,
                 'f1': 0x70, 'f2': 0x71, 'f3': 0x72, 'f4': 0x73,
                 'f5': 0x74, 'f6': 0x75, 'f7': 0x76, 'f8': 0x77,
                 'f9': 0x78, 'f10': 0x79, 'f11': 0x7A, 'f12': 0x7B,
             }
-
             KEYEVENTF_KEYUP = 0x0002
-            KEYEVENTF_EXTENDEDKEY = 0x0001
+            INPUT_KEYBOARD = 1
 
+            # ---- INPUT 结构定义（64 位，union 必须含 MOUSE/HARDWAREINPUT） ----
+            ULONG_PTR = ctypes.POINTER(ctypes.c_ulong)
+
+            class MOUSEINPUT(ctypes.Structure):
+                _fields_ = [
+                    ('dx', wintypes.LONG),
+                    ('dy', wintypes.LONG),
+                    ('mouseData', wintypes.DWORD),
+                    ('dwFlags', wintypes.DWORD),
+                    ('time', wintypes.DWORD),
+                    ('dwExtraInfo', ULONG_PTR),
+                ]
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ('wVk', wintypes.WORD),
+                    ('wScan', wintypes.WORD),
+                    ('dwFlags', wintypes.DWORD),
+                    ('time', wintypes.DWORD),
+                    ('dwExtraInfo', ULONG_PTR),
+                ]
+
+            class HARDWAREINPUT(ctypes.Structure):
+                _fields_ = [
+                    ('uMsg', wintypes.DWORD),
+                    ('wParamL', wintypes.WORD),
+                    ('wParamH', wintypes.WORD),
+                ]
+
+            class INPUT(ctypes.Structure):
+                class _U(ctypes.Union):
+                    _fields_ = [
+                        ('mi', MOUSEINPUT),
+                        ('ki', KEYBDINPUT),
+                        ('hi', HARDWAREINPUT),
+                    ]
+                _anonymous_ = ('_u',)
+                _fields_ = [('type', wintypes.DWORD), ('_u', _U)]
+
+            user32.SendInput.restype = wintypes.UINT
+            user32.SendInput.argtypes = [
+                wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+
+            # ---- 解析按键 → 虚拟键码 ----
             vk_codes = []
             for p in parts:
-                if p in KEY_MAP:
-                    vk_codes.append(KEY_MAP[p])
+                if p in VK_MAP:
+                    vk_codes.append(VK_MAP[p])
                 elif len(p) == 1:
-                    # 单个字符，使用 VkKeyScanW 获取虚拟键码
-                    vk = user32.VkKeyScanW(ord(p))
-                    vk_codes.append(vk & 0xFF)
+                    vk = user32.VkKeyScanW(ord(p)) & 0xFF
+                    vk_codes.append(vk)
                 else:
                     logger.warning(f"无法识别按键: {p!r}（来源 keys={keys!r}）")
                     return
 
-            # 按下所有键（修饰键在前）
+            KEY_DELAY = 0.1  # 按键间隔（实测 100ms 比 50ms 稳定）
+
+            def _send(vk, up=False):
+                """SendInput 发送单键事件（VK 模式）。"""
+                inp = INPUT()
+                inp.type = INPUT_KEYBOARD
+                inp.ki.wVk = vk
+                inp.ki.wScan = 0
+                inp.ki.dwFlags = KEYEVENTF_KEYUP if up else 0
+                inp.ki.time = 0
+                inp.ki.dwExtraInfo = None
+                sent = user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+                if sent != 1:
+                    err = ctypes.get_last_error()
+                    logger.warning(f"SendInput 失败 vk=0x{vk:x} err={err}")
+
+            # 按下（修饰键在前）
             for vk in vk_codes:
-                user32.keybd_event(vk, 0, 0, 0)
-                time.sleep(0.05)  # 按键间延迟50ms
-
-            # 短暂等待
-            time.sleep(0.05)
-
-            # 释放所有键（普通键在前，修饰键在后，逆序释放）
+                _send(vk)
+                time.sleep(KEY_DELAY)
+            # 释放（逆序）
             for vk in reversed(vk_codes):
-                user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
-                time.sleep(0.05)
+                _send(vk, up=True)
+                time.sleep(KEY_DELAY)
 
             logger.info(f"前台按键: {keys!r} -> vk={[hex(v) for v in vk_codes]}")
+
+            # 注入完成后归还焦点到原窗口（默认开启，可通过 input.restore_focus_after_key 关闭）
+            # 2026-08-09 新增：ALT 组合键必须置游戏前台注入，但注入完立即把焦点
+            # 还给用户原来的窗口，避免长期占用用户前台。
+            # 归还同样受前台锁限制（此时游戏是前台），用 _force_foreground 绕过。
+            # 2026-08-16 优化：归还延迟 0.15s→0.08s（更快无感），归还失败重试 1 次。
+            try:
+                restore = config.get("input.restore_focus_after_key", True)
+                if restore and prev_fg and prev_fg != self._wm.hwnd:
+                    time.sleep(0.08)  # 等游戏消化输入（实测 80ms 足够）
+                    if win32gui.IsWindow(prev_fg):
+                        restored = self._force_foreground(prev_fg)
+                        if not restored:
+                            # 归还失败重试一次（前台锁抖动场景）
+                            time.sleep(0.05)
+                            restored = self._force_foreground(prev_fg)
+                        if restored:
+                            logger.debug(f"已归还焦点到原窗口 hwnd={prev_fg}")
+                        else:
+                            logger.warning(f"归还焦点失败（重试后）prev_fg={prev_fg}")
+            except Exception:
+                pass
         except Exception as e:
             logger.exception(f"前台按键失败: {e}")
-            # 回退到 pyautogui
+            # 回退到 pyautogui（已知对梦幻有效）
             try:
-                pyautogui.hotkey(*parts)
-                logger.info(f"前台按键(pyautogui回退): {keys!r}")
+                if pyautogui is not None:
+                    pyautogui.hotkey(*parts)
+                    logger.info(f"前台按键(pyautogui回退): {keys!r}")
             except Exception as e2:
                 logger.exception(f"pyautogui回退也失败: {e2}")
 
@@ -467,6 +634,25 @@ class InputController:
             logger.exception(f"PostMessage(msg=0x{msg:X}) 失败: {e}")
             return False
 
+    def _sync_cursor(self, x, y) -> None:
+        """
+        光标同步（方案 A，2026-08-16）：PostMessage 点击前把物理光标
+        瞬移到目标屏幕坐标，解决 Galaxy2D 类自绘引擎的 GetCursorPos 命中检测。
+
+        原理：自绘 DX 引擎（如 Galaxy2D 4.2）的点击命中不只读窗口消息，
+        还依赖 GetCursorPos() 读真实光标位置。PostMessage 伪造消息但物理
+        光标不在目标点 → 命中检测失败 → 偶发点击失效。SetCursorPos 瞬移
+        光标（不激活窗口、不抢焦点）后，命中检测通过，点击由消息完成。
+
+        :param x: 客户区 X 坐标
+        :param y: 客户区 Y 坐标
+        """
+        try:
+            sx, sy = self._wm.client_to_screen(x, y)
+            win32api.SetCursorPos((int(sx), int(sy)))
+        except Exception as e:
+            logger.debug(f"光标同步失败（不影响点击）: {e}")
+
     def _post_click(self, x, y, button="left", press_delay=0.05):
         """
         后台点击：发送 DOWN + UP 消息。
@@ -495,6 +681,14 @@ class InputController:
                 return
         except Exception:
             pass
+        # 2026-08-16 光标同步（方案 A）：物理光标瞬移到目标点，解决
+        # GetCursorPos 命中检测失效。默认开启，input.cursor_sync_click=false 关闭。
+        try:
+            if config.get("input.cursor_sync_click", True):
+                self._sync_cursor(x, y)
+                time.sleep(0.02)  # 等光标移动生效
+        except Exception:
+            pass
         # 2026-08-05 可靠性强化（解决"偶发点击失效"）：
         # 1) MOUSEMOVE 发 2 次（间隔 10ms）——确保游戏建立 hover 状态
         #    （部分 UI 需 hover 才响应 DOWN，如传送菜单项）；
@@ -520,6 +714,13 @@ class InputController:
         """后台双击：发送 DOWN -> UP -> DBLCLK -> UP 序列。"""
         lparam = self._make_mouse_lparam(x, y)
         lparam = self._make_mouse_lparam(x, y)
+        # 2026-08-16 光标同步（方案 A，同单击）
+        try:
+            if config.get("input.cursor_sync_click", True):
+                self._sync_cursor(x, y)
+                time.sleep(0.02)
+        except Exception:
+            pass
         # 先移动鼠标到目标位置（与单击一致，部分 UI 需 hover 状态）
         self._post_message(self.WM_MOUSEMOVE, 0, lparam)
         time.sleep(0.01)

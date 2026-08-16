@@ -59,8 +59,15 @@ CHECKS = [
 
     # 5. 输入与任务引擎
     ("输入: KEYEVENTF_KEYUP 定义", "core/input_controller.py", "regex", (r"KEYEVENTF_KEYUP", False)),
-    ("引擎: task_engine region 校验", "core/task_engine.py", "regex",
+    # 2026-08-10 引擎拆分后 region 校验迁入 mixins/yolo_mixin.py
+    ("引擎: task_engine region 校验", "core/task_engine_mixins/yolo_mixin.py", "regex",
      (r"_rw <= 0 or _rh <= 0", False)),
+
+    # 2026-08-16 方案 A：PostMessage 点击前光标同步（SetCursorPos 解决命中检测）
+    ("光标同步: input_controller 有 _sync_cursor", "core/input_controller.py", "regex",
+     (r"def _sync_cursor", False)),
+    ("光标同步: 函数包点击前同步光标", "library/map_packs/JYC.py", "regex",
+     (r"_sync_cursor\(cx, cy\)", False)),
 
     # 2026-08-05 click_delay 必须在主点击和附加点击之间（不是附加后）。
     # regex 故意包含注释以让 check_fixes 的非注释过滤不影响判定

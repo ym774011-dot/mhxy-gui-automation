@@ -47,6 +47,7 @@ from PyQt5.QtWidgets import (
 from models.event import Event, EventType
 from models.task import Task
 from models.task_sequence import TaskSequence
+from config.config import config  # 地图坐标文件单一事实来源
 from utils.logger import logger
 
 
@@ -97,7 +98,7 @@ _EVENT_TYPE_INFO = {
                 "additional_mode": "direct",
                 "additional_x": "",
                 "additional_y": "",
-                "coord_file": "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt",
+                "coord_file": config.map_coord_file,
                 "match_field": "target_location",
                 "match_custom_field": "",
                 "additional_button": "left",
@@ -478,6 +479,20 @@ class TaskEditor(QWidget):
         :return: 当前绑定的 TaskSequence 实例（未绑定时返回 None）
         """
         return self._task_sequence
+
+    def get_current_task_index(self) -> int:
+        """获取任务下拉框当前选中的任务下标（-1 = 无选中）。
+
+        供主窗口"仅执行当前任务"使用。
+        """
+        return self._task_combo.currentIndex()
+
+    def get_current_task_index(self) -> int:
+        """获取任务下拉框当前选中的任务下标（-1 = 无选中）。
+
+        供主窗口"仅执行当前任务"使用。
+        """
+        return self._task_combo.currentIndex()
 
     # ==================================================================
     # 任务相关槽函数

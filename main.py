@@ -53,7 +53,7 @@ def main():
     """程序入口：创建 QApplication 并显示主窗口。"""
     # 日志自动清理（启动时一次性执行，按 settings.json 的 auto_clean_days）
     try:
-        from config.config_manager import config
+        from config.config import config
         from utils.logger import cleanup_old_logs
         log_path = config.get("logging.file_path", "logs/automation.log")
         days = int(config.get("logging.auto_clean_days", 7) or 0)

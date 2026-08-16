@@ -4,7 +4,7 @@
   "tasks": [
     {
       "id": "288e509f-0b4b-46c3-b24b-06abe3aca16f",
-      "name": "任务 1",
+      "name": "江湖任务",
       "description": "江湖任务",
       "events": [
         {
@@ -12,23 +12,27 @@
           "name": "YOLO 检测 1",
           "event_type": "yolo",
           "params": {
-            "template_path": "assets/game_data/图片数据/杜少海.bmp",
-            "template_paths": [
-              "assets/game_data/图片数据/杜少海.bmp"
+            "template_path": [
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp"
             ],
-            "threshold": 0.6,
+            "template_paths": [
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp"
+            ],
+            "threshold": 0.8,
             "action": "click",
             "button": "left",
             "region": [
-              277,
-              276,
-              88,
-              130
+              288,
+              286,
+              81,
+              105
             ]
           },
           "pre_delay": 0.0,
           "post_delay": 0.5,
-          "on_error": "skip",
+          "on_error": "retry",
           "max_retries": 3,
           "retry_interval": 1.0,
           "enabled": true,
@@ -42,10 +46,11 @@
             "x": 288,
             "y": 390,
             "button": "left",
-            "background": false
+            "background": false,
+            "press_delay": 0.05
           },
           "pre_delay": 0.03,
-          "post_delay": 1.5,
+          "post_delay": 0.5,
           "on_error": "skip",
           "max_retries": 3,
           "retry_interval": 1.0,
@@ -57,14 +62,14 @@
           "name": "关闭对话框",
           "event_type": "click",
           "params": {
-            "x": 300,
-            "y": 300,
+            "x": 750,
+            "y": 330,
             "button": "right",
             "background": false,
             "press_delay": 0.05
           },
           "pre_delay": 0.05,
-          "post_delay": 1.5,
+          "post_delay": 0.5,
           "on_error": "skip",
           "max_retries": 3,
           "retry_interval": 1.0,
@@ -89,6 +94,23 @@
           "retry_interval": 1.0,
           "enabled": true,
           "var_name": "鼠标点击6"
+        },
+        {
+          "id": "df2750fd-1597-4d3c-b24c-b008029953ae",
+          "name": "打开背包",
+          "event_type": "key",
+          "params": {
+            "keys": "ALT+E",
+            "text": "",
+            "duration": 0.0
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": false,
+          "var_name": "键盘输入17"
         },
         {
           "id": "c3747898-0173-462d-bc91-0b277bd36cd6",
@@ -192,7 +214,8 @@
                       "x": 623,
                       "y": 370,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.1
                     },
                     "pre_delay": 0.0,
                     "post_delay": 1.0,
@@ -210,7 +233,8 @@
                       "x": 690,
                       "y": 606,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.1
                     },
                     "pre_delay": 0.0,
                     "post_delay": 1.0,
@@ -221,6 +245,23 @@
                     "var_name": "鼠标点击4"
                   },
                   {
+                    "id": "c8b1fe98-88e1-40ef-a858-8a66ffd8f33f",
+                    "name": "关闭背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.0
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入16"
+                  },
+                  {
                     "id": "1b7ff28c-5c6a-4f67-b8a9-b81a216fb162",
                     "name": "关闭任务栏",
                     "event_type": "click",
@@ -228,7 +269,8 @@
                       "x": 990,
                       "y": 140,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.05,
                     "post_delay": 0.5,
@@ -260,7 +302,7 @@
                       "wait_arrival_retries": 5
                     },
                     "pre_delay": 0.0,
-                    "post_delay": 2.5,
+                    "post_delay": 1.5,
                     "on_error": "skip",
                     "max_retries": 3,
                     "retry_interval": 1.0,
@@ -317,7 +359,7 @@
                       ]
                     },
                     "pre_delay": 0.0,
-                    "post_delay": 1.0,
+                    "post_delay": 0.5,
                     "on_error": "retry",
                     "max_retries": 3,
                     "retry_interval": 1.0,
@@ -332,7 +374,8 @@
                       "x": 400,
                       "y": 420,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.0,
                     "post_delay": 1.5,
@@ -385,7 +428,7 @@
                     },
                     "pre_delay": 2.0,
                     "post_delay": 1.0,
-                    "on_error": "skip",
+                    "on_error": "retry",
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
@@ -424,21 +467,38 @@
                       "batch_click_mode": "all",
                       "additional_click_enabled": false,
                       "additional_mode": "direct",
-                      "additional_x": "",
-                      "additional_y": "",
+                      "additional_x": "5",
+                      "additional_y": "5",
                       "coord_file": "assets/game_data/地图数据/地图坐标.txt",
                       "match_field": "target_location",
                       "match_custom_field": "",
-                      "additional_button": "left",
+                      "additional_button": "move",
                       "additional_delay": 200
                     },
                     "pre_delay": 0.0,
-                    "post_delay": 1.5,
+                    "post_delay": 0.5,
                     "on_error": "skip",
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "图像识别8"
+                  },
+                  {
+                    "id": "e053f394-4e9f-4655-ba20-92880ad1e183",
+                    "name": "打开背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.1
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入17"
                   },
                   {
                     "id": "83a0a7e2-b396-400d-807f-7b3cdbb6466f",
@@ -448,7 +508,8 @@
                       "x": 690,
                       "y": 605,
                       "button": "left",
-                      "background": false
+                      "background": true,
+                      "press_delay": 0.1
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -564,7 +625,8 @@
                       "x": 690,
                       "y": 605,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -573,6 +635,23 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击12"
+                  },
+                  {
+                    "id": "df2750fd-1597-4d3c-b24c-b008029953ae",
+                    "name": "关闭背包1",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.0
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入17"
                   },
                   {
                     "id": "6036ffde-4c72-4723-9972-bf1657dcba62",
@@ -672,7 +751,8 @@
                       "x": 690,
                       "y": 600,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.5,
                     "post_delay": 0.5,
@@ -683,19 +763,36 @@
                     "var_name": "鼠标点击8"
                   },
                   {
+                    "id": "966dbeb8-5ed1-4986-a13c-b476429b5b81",
+                    "name": "关闭背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.0
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入19"
+                  },
+                  {
                     "id": "d009a1ab-7405-493a-a979-78cc9a85e12c",
                     "name": "等待到门口",
                     "event_type": "wait",
                     "params": {
                       "duration": 1.0,
                       "wait_for_image": true,
-                      "image_path": "assets/game_data/图片数据/长安门口.bmp",
+                      "image_path": "E:/DS/梦幻西游脚本函数包/图片数据/长安门口.bmp",
                       "timeout": 10.0,
                       "region": [
-                        753,
-                        118,
-                        69,
-                        94
+                        765,
+                        125,
+                        48,
+                        46
                       ]
                     },
                     "pre_delay": 0.0,
@@ -794,7 +891,7 @@
                       "wait_arrival_retries": 3
                     },
                     "pre_delay": 0.5,
-                    "post_delay": 2.5,
+                    "post_delay": 1.5,
                     "on_error": "skip",
                     "max_retries": 3,
                     "retry_interval": 1.0,
@@ -851,7 +948,7 @@
                       ]
                     },
                     "pre_delay": 0.0,
-                    "post_delay": 0.8,
+                    "post_delay": 0.5,
                     "on_error": "retry",
                     "max_retries": 3,
                     "retry_interval": 1.0,
@@ -866,9 +963,10 @@
                       "x": 400,
                       "y": 420,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
-                    "pre_delay": 1.0,
+                    "pre_delay": 0.5,
                     "post_delay": 2.5,
                     "on_error": "skip",
                     "max_retries": 3,
@@ -911,7 +1009,7 @@
                       "additional_mode": "direct",
                       "additional_x": "",
                       "additional_y": "",
-                      "coord_file": "",
+                      "coord_file": "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt",
                       "match_field": "target_location",
                       "match_custom_field": "",
                       "additional_button": "left",
@@ -919,7 +1017,7 @@
                     },
                     "pre_delay": 2.0,
                     "post_delay": 2.0,
-                    "on_error": "skip",
+                    "on_error": "retry",
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
@@ -958,12 +1056,12 @@
                       "batch_click_mode": "all",
                       "additional_click_enabled": false,
                       "additional_mode": "direct",
-                      "additional_x": "",
-                      "additional_y": "",
+                      "additional_x": "5",
+                      "additional_y": "5",
                       "coord_file": "assets/game_data/地图数据/地图坐标.txt",
                       "match_field": "target_location",
                       "match_custom_field": "",
-                      "additional_button": "left",
+                      "additional_button": "move",
                       "additional_delay": 200
                     },
                     "pre_delay": 0.0,
@@ -975,6 +1073,23 @@
                     "var_name": "图像识别8"
                   },
                   {
+                    "id": "e053f394-4e9f-4655-ba20-92880ad1e183",
+                    "name": "打开背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.1
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入17"
+                  },
+                  {
                     "id": "83a0a7e2-b396-400d-807f-7b3cdbb6466f",
                     "name": "打开背包",
                     "event_type": "click",
@@ -982,7 +1097,8 @@
                       "x": 690,
                       "y": 605,
                       "button": "left",
-                      "background": false
+                      "background": true,
+                      "press_delay": 0.1
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1098,7 +1214,8 @@
                       "x": 690,
                       "y": 605,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1107,6 +1224,23 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击14"
+                  },
+                  {
+                    "id": "66271722-fbbd-4aa3-921a-0b54df76c3e2",
+                    "name": "关闭背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.0
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入18"
                   },
                   {
                     "id": "6036ffde-4c72-4723-9972-bf1657dcba62",
@@ -1200,13 +1334,14 @@
                   },
                   {
                     "id": "18e27796-be45-46cf-9806-93513aaaf3e5",
-                    "name": "关闭",
+                    "name": "关闭背包",
                     "event_type": "click",
                     "params": {
                       "x": 690,
                       "y": 605,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1215,6 +1350,23 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击12"
+                  },
+                  {
+                    "id": "a72aad3e-d0c6-4a16-8b83-9840a494e3a1",
+                    "name": "关闭背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.0
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入18"
                   },
                   {
                     "id": "fab72a0e-a4b4-452a-a3aa-0e7234946f1a",
@@ -1251,10 +1403,11 @@
                       "x": 250,
                       "y": 360,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.0,
-                    "post_delay": 1.5,
+                    "post_delay": 1.0,
                     "on_error": "skip",
                     "max_retries": 3,
                     "retry_interval": 1.0,
@@ -1299,7 +1452,7 @@
                       "wait_arrival_retries": 3
                     },
                     "pre_delay": 0.0,
-                    "post_delay": 2.5,
+                    "post_delay": 1.5,
                     "on_error": "skip",
                     "max_retries": 3,
                     "retry_interval": 1.0,
@@ -1371,7 +1524,8 @@
                       "x": 400,
                       "y": 420,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 1.0,
                     "post_delay": 2.5,
@@ -1416,7 +1570,7 @@
                       "additional_mode": "direct",
                       "additional_x": "",
                       "additional_y": "",
-                      "coord_file": "",
+                      "coord_file": "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt",
                       "match_field": "target_location",
                       "match_custom_field": "",
                       "additional_button": "left",
@@ -1424,7 +1578,7 @@
                     },
                     "pre_delay": 2.0,
                     "post_delay": 2.0,
-                    "on_error": "skip",
+                    "on_error": "retry",
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
@@ -1463,12 +1617,12 @@
                       "batch_click_mode": "all",
                       "additional_click_enabled": false,
                       "additional_mode": "direct",
-                      "additional_x": "",
-                      "additional_y": "",
+                      "additional_x": "5",
+                      "additional_y": "5",
                       "coord_file": "assets/game_data/地图数据/地图坐标.txt",
                       "match_field": "target_location",
                       "match_custom_field": "",
-                      "additional_button": "left",
+                      "additional_button": "move",
                       "additional_delay": 200
                     },
                     "pre_delay": 0.0,
@@ -1481,13 +1635,14 @@
                   },
                   {
                     "id": "45296d8a-72ec-4fd7-89b8-a716bf4c99cb",
-                    "name": "打开",
+                    "name": "打开背包",
                     "event_type": "click",
                     "params": {
                       "x": 690,
                       "y": 605,
                       "button": "left",
-                      "background": false
+                      "background": true,
+                      "press_delay": 0.1
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1496,6 +1651,23 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击13"
+                  },
+                  {
+                    "id": "e053f394-4e9f-4655-ba20-92880ad1e183",
+                    "name": "打开背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.1
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入17"
                   },
                   {
                     "id": "88adab6c-532e-4d00-b793-345e6e594f34",
@@ -1603,7 +1775,8 @@
                       "x": 690,
                       "y": 605,
                       "button": "left",
-                      "background": false
+                      "background": false,
+                      "press_delay": 0.05
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1612,6 +1785,23 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击14"
+                  },
+                  {
+                    "id": "6a5e0c40-e660-4353-abc1-b025e342c0c4",
+                    "name": "关闭背包",
+                    "event_type": "key",
+                    "params": {
+                      "keys": "ALT+E",
+                      "text": "",
+                      "duration": 0.0
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": false,
+                    "var_name": "键盘输入19"
                   },
                   {
                     "id": "6036ffde-4c72-4723-9972-bf1657dcba62",
@@ -1652,7 +1842,282 @@
       "loop_count": 0,
       "loop_delay": 0.5,
       "created_at": "2026-07-31 00:36:45",
-      "updated_at": "2026-08-05 23:16:27"
+      "updated_at": "2026-08-13 23:56:40"
+    },
+    {
+      "id": "cb2ce52d-82eb-43b8-b9cc-6bfa5fcd5948",
+      "name": "门派闯关",
+      "description": "门派闯关",
+      "events": [
+        {
+          "id": "de1ea45f-d88a-4853-a662-c269d5798f0d",
+          "name": "图像识别 7",
+          "event_type": "image",
+          "params": {
+            "source_mode": "direct",
+            "template_path": "E:/DS/梦幻西游脚本函数包/图片数据/mpcgnpv.bmp",
+            "threshold": 0.8,
+            "action": "click",
+            "button": "left",
+            "click_delay": 300,
+            "region": [
+              256,
+              283,
+              76,
+              107
+            ],
+            "prefix": "",
+            "dir_path": "",
+            "suffix": ".bmp",
+            "dyn_field": "target_location",
+            "dyn_custom_field": "",
+            "allowed_maps": null,
+            "recognize_retries": 2,
+            "recognize_retry_interval": 0.5,
+            "batch_dir": "",
+            "batch_ext": ".bmp",
+            "batch_use_var": false,
+            "batch_var_field": "target_location",
+            "batch_sort": "name",
+            "batch_click_mode": "all",
+            "additional_click_enabled": false,
+            "additional_mode": "direct",
+            "additional_x": "",
+            "additional_y": "",
+            "coord_file": "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt",
+            "match_field": "target_location",
+            "match_custom_field": "",
+            "additional_button": "left",
+            "additional_delay": 200
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "图像识别7"
+        },
+        {
+          "id": "7cb0eecb-a171-404e-9cba-1cf0afa49f11",
+          "name": "鼠标点击 2",
+          "event_type": "click",
+          "params": {
+            "x": 339,
+            "y": 362,
+            "button": "left",
+            "background": false,
+            "press_delay": 0.1
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "鼠标点击2"
+        },
+        {
+          "id": "6ae33a27-dd81-4371-8a36-647064bade13",
+          "name": "函数调用 3",
+          "event_type": "function",
+          "params": {
+            "module": "MPCG",
+            "function": "MPCG_recognize",
+            "args": [],
+            "kwargs": {},
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "函数调用3"
+        },
+        {
+          "id": "4eab411e-2a5a-48fd-b891-bcb22856f156",
+          "name": "鼠标点击 4",
+          "event_type": "click",
+          "params": {
+            "x": 430,
+            "y": 220,
+            "button": "right",
+            "background": false,
+            "press_delay": 0.1
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "鼠标点击4"
+        },
+        {
+          "id": "0f668bf6-ad0c-4e8b-aeec-9c6b737fdd76",
+          "name": "鼠标点击 6",
+          "event_type": "click",
+          "params": {
+            "x": 250,
+            "y": 416,
+            "button": "left",
+            "background": false,
+            "press_delay": 0.1
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "鼠标点击6"
+        },
+        {
+          "id": "8dd5bfcd-d4bf-429e-b9dd-dbd355253c34",
+          "name": "图像识别 5",
+          "event_type": "image",
+          "params": {
+            "source_mode": "dynamic",
+            "template_path": "",
+            "threshold": 0.8,
+            "action": "click",
+            "button": "left",
+            "click_delay": 300,
+            "region": [
+              201,
+              366,
+              343,
+              113
+            ],
+            "prefix": "会员传送",
+            "dir_path": "E:/DS/梦幻西游脚本函数包/图片数据",
+            "suffix": ".bmp",
+            "dyn_field": "target_location",
+            "dyn_custom_field": "",
+            "allowed_maps": null,
+            "recognize_retries": 2,
+            "recognize_retry_interval": 0.5,
+            "batch_dir": "",
+            "batch_ext": ".bmp",
+            "batch_use_var": false,
+            "batch_var_field": "target_location",
+            "batch_sort": "name",
+            "batch_click_mode": "all",
+            "additional_click_enabled": false,
+            "additional_mode": "direct",
+            "additional_x": "",
+            "additional_y": "",
+            "coord_file": "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt",
+            "match_field": "target_location",
+            "match_custom_field": "",
+            "additional_button": "left",
+            "additional_delay": 200
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "图像识别5"
+        },
+        {
+          "id": "8da942d2-b906-4946-b8c4-23a2419d84db",
+          "name": "条件分支 7",
+          "event_type": "condition",
+          "params": {
+            "mode": "switch",
+            "match_field": "target_location",
+            "match_custom_field": "",
+            "source_var": "",
+            "cases": [
+              {
+                "match_value": "方寸山",
+                "actions": []
+              },
+              {
+                "match_value": "盘丝洞",
+                "actions": []
+              },
+              {
+                "match_value": "天宫",
+                "actions": []
+              },
+              {
+                "match_value": "女儿村",
+                "actions": []
+              },
+              {
+                "match_value": "阴曹地府",
+                "actions": []
+              },
+              {
+                "match_value": "普陀山",
+                "actions": []
+              },
+              {
+                "match_value": "神木林",
+                "actions": []
+              },
+              {
+                "match_value": "无底洞",
+                "actions": []
+              },
+              {
+                "match_value": "凌波城",
+                "actions": []
+              },
+              {
+                "match_value": "化生寺",
+                "actions": []
+              },
+              {
+                "match_value": "魔王寨",
+                "actions": []
+              },
+              {
+                "match_value": "五庄观",
+                "actions": []
+              },
+              {
+                "match_value": "大唐官府",
+                "actions": []
+              },
+              {
+                "match_value": "狮驼岭",
+                "actions": []
+              },
+              {
+                "match_value": "龙宫",
+                "actions": []
+              }
+            ],
+            "default_action": {
+              "action": "none"
+            },
+            "true_branch": [],
+            "false_branch": []
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "条件分支7"
+        }
+      ],
+      "loop_count": 0,
+      "loop_delay": 1.0,
+      "created_at": "2026-08-10 19:59:38",
+      "updated_at": "2026-08-10 21:47:26"
     }
   ],
   "current_task_index": 0,

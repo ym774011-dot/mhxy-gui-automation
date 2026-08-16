@@ -35,6 +35,7 @@ MHXY GUI 自动化脚本平台 - 事件编辑器对话框（Task 12）。
 import json
 import os
 from typing import List, Optional
+from config.config import config  # 地图坐标文件单一事实来源
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -275,6 +276,7 @@ class EventEditorDialog(QDialog):
         self._click_button_combo.addItem("左键单击", "left")
         self._click_button_combo.addItem("右键单击", "right")
         self._click_button_combo.addItem("双击", "double")
+        self._click_button_combo.addItem("鼠标移动(不点击)", "move")
         form.addRow("点击类型：", self._click_button_combo)
 
         self._click_background_check = QCheckBox("后台点击（不激活窗口）")
@@ -893,6 +895,7 @@ class EventEditorDialog(QDialog):
         self._image_button_combo.addItem("左键点击", "left")
         self._image_button_combo.addItem("右键点击", "right")
         self._image_button_combo.addItem("双击", "double")
+        self._image_button_combo.addItem("鼠标移动(不点击)", "move")
 
         self._image_button_container = QWidget()
         button_layout = QHBoxLayout(self._image_button_container)
@@ -960,9 +963,9 @@ class EventEditorDialog(QDialog):
         file_row1 = QHBoxLayout()
         file_row1.addWidget(QLabel("坐标文件："))
         self._image_coord_file_edit = QLineEdit()
-        self._image_coord_file_edit.setPlaceholderText("E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt")
+        self._image_coord_file_edit.setPlaceholderText(config.map_coord_file)
         self._image_coord_file_edit.setText(
-            "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt"
+            config.map_coord_file
         )
         self._image_coord_file_edit.setMinimumWidth(250)
         file_row1.addWidget(self._image_coord_file_edit, 1)
@@ -1028,6 +1031,7 @@ class EventEditorDialog(QDialog):
         self._image_add_button_combo.addItem("左键点击", "left")
         self._image_add_button_combo.addItem("右键点击", "right")
         self._image_add_button_combo.addItem("双击", "double")
+        self._image_add_button_combo.addItem("鼠标移动(不点击)", "move")
         add_config_row.addWidget(self._image_add_button_combo)
         add_config_row.addWidget(QLabel("延迟(ms)："))
         self._image_add_delay_spin = QSpinBox()
@@ -1279,6 +1283,7 @@ class EventEditorDialog(QDialog):
         self._yolo_button_combo.addItem("左键点击", "left")
         self._yolo_button_combo.addItem("右键点击", "right")
         self._yolo_button_combo.addItem("双击", "double")
+        self._yolo_button_combo.addItem("鼠标移动(不点击)", "move")
 
         self._yolo_button_container = QWidget()
         yolo_button_layout = QHBoxLayout(self._yolo_button_container)
@@ -1913,7 +1918,7 @@ class EventEditorDialog(QDialog):
         df_row1.addWidget(QLabel("坐标文件:"))
         self._cond_default_file_edit = QLineEdit()
         self._cond_default_file_edit.setPlaceholderText(
-            "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt"
+            config.map_coord_file
         )
         df_row1.addWidget(self._cond_default_file_edit, 1)
         df_browse = QPushButton("浏览...")
@@ -2075,7 +2080,7 @@ class EventEditorDialog(QDialog):
         从地图坐标.txt中读取条目，自动添加所有 case（每 case 一个空子流程，
         用户随后在'编辑子流程'里配置各自的操作序列）。
         """
-        coord_file = "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt"
+        coord_file = config.map_coord_file
         if not os.path.isfile(coord_file):
             path, _ = QFileDialog.getOpenFileName(
                 self, "选择地图坐标文件", "",
@@ -2093,22 +2098,14 @@ class EventEditorDialog(QDialog):
                     if not line or line.startswith("#"):
                         continue
                     parts = line.split()
-                    if len(parts) < 2:
+                    if not parts:
                         continue
+                    # 第1列 = 地图名（必有，作为 case 匹配值）
+                    # 第2列起可选：坐标 "x,y" 或 "x y"（仅参考，不强校验）
                     map_name = parts[0].strip()
-                    coord_str = parts[1].strip()
-                    if "," in coord_str:
-                        xstr, ystr = coord_str.split(",", 1)
-                    elif len(parts) >= 3:
-                        xstr, ystr = parts[1], parts[2]
-                    else:
+                    if not map_name:
                         continue
-                    try:
-                        int(xstr.strip())
-                        int(ystr.strip())
-                        entries.append(map_name)
-                    except (ValueError, TypeError):
-                        continue
+                    entries.append(map_name)
         except Exception as e:
             QMessageBox.warning(self, "读取失败", f"读取坐标文件失败:\n{e}")
             return
@@ -2353,7 +2350,7 @@ class EventEditorDialog(QDialog):
         self._image_add_y_edit.setText(str(params.get("additional_y", "") or ""))
         # 文件查找
         self._image_coord_file_edit.setText(
-            str(params.get("coord_file", "") or "E:/DS/梦幻西游脚本函数包/地图数据/地图坐标.txt")
+            str(params.get("coord_file", "") or config.map_coord_file)
         )
         match_field = str(params.get("match_field", "target_location") or "target_location")
         self._set_combo_by_data(self._image_match_field_combo, match_field, "target_location")

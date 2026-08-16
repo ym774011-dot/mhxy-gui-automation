@@ -274,10 +274,15 @@ class MainWindow(QMainWindow):
 
         # 开始执行按钮（绿色）
         start_action = QAction("▶ 开始执行", self)
-        start_action.setStatusTip("开始执行当前任务序列")
+        start_action.setStatusTip("开始执行当前任务序列（全部任务）")
         start_action.triggered.connect(self._on_start)
-        # 用 stylesheet 给按钮文字着色（通过 widget 方式更直接，这里用 action 文字）
         toolbar.addAction(start_action)
+
+        # 仅执行当前任务按钮（蓝色）：只跑任务下拉框选中的那个任务
+        single_action = QAction("▶ 执行当前任务", self)
+        single_action.setStatusTip("只执行任务列表下拉框当前选中的任务")
+        single_action.triggered.connect(self._on_start_single)
+        toolbar.addAction(single_action)
 
         # 暂停按钮（黄色）
         pause_action = QAction("⏸ 暂停", self)
@@ -432,6 +437,42 @@ class MainWindow(QMainWindow):
     # ==================================================================
     # 工具栏回调
     # ==================================================================
+    def _on_start_single(self):
+        """工具栏 -> 执行当前任务：只跑任务下拉框选中的那个任务。"""
+        logger.info("用户点击：执行当前任务")
+        self.start_clicked.emit()
+
+        # 获取任务编辑器当前选中的任务下标
+        try:
+            idx = self.task_editor.get_current_task_index()
+        except Exception as e:
+            logger.warning(f"获取当前任务下标失败: {e}")
+            idx = -1
+        if idx < 0:
+            QMessageBox.warning(
+                self, "提示", "任务列表中未选中任何任务，请先在任务列表下拉框选择。"
+            )
+            return
+
+        task_sequence = self._get_current_task_sequence()
+        if task_sequence is None or not task_sequence.tasks:
+            QMessageBox.warning(self, "提示", "当前没有可执行的任务序列。")
+            return
+        if idx >= len(task_sequence.tasks):
+            QMessageBox.warning(self, "提示", "选中的任务下标越界，请重新选择。")
+            return
+
+        task_name = task_sequence.tasks[idx].name
+        ok = task_engine.start(task_sequence, task_indices=[idx])
+        if ok:
+            self._set_status_text("运行中")
+            self._progress_label.setText(f"执行单个任务: {task_name}")
+            self.status_panel.set_task_name(f"{task_name}（仅此任务）")
+        else:
+            QMessageBox.warning(
+                self, "启动失败", "任务引擎启动失败，可能已在运行中。"
+            )
+
     def _on_start(self):
         """工具栏 -> 开始执行：获取当前任务序列并启动 task_engine。"""
         logger.info("用户点击：开始执行")

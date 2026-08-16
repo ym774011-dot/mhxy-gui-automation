@@ -1,87 +1,93 @@
 {
- "window": {
-  "title": "鲜衣怒马 - 怀旧江南版 - (鲜衣怒马 - 然学[701529]) - 2026年08月03日 21:11:51",
-  "pid": 20308,
-  "input_mode": "background"
- },
- "recognition": {
-  "template_threshold": 0.8,
-  "yolo_confidence": 0.5,
-  "yolo_model_path": "models/active.pt",
-  "screenshot_interval": 0.5,
-  "jhrw_roi": [
-   840,
-   156,
-   150,
-   77
-  ]
- },
- "logging": {
-  "level": "INFO",
-  "file_path": "logs/automation.log"
- },
- "task_library": {
-  "modules": [
-   {
-    "name": "JNYW",
-    "path": "library/map_packs/JNYW.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "CAC",
-    "path": "library/map_packs/CAC.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "DHW",
-    "path": "library/map_packs/DHW.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "CSC",
-    "path": "library/map_packs/CSC.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "XLNR",
-    "path": "library/map_packs/XLNR.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "BXG",
-    "path": "library/map_packs/BXG.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "ZZG",
-    "path": "library/map_packs/ZZG.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "JYC",
-    "path": "library/map_packs/JYC.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "ALG",
-    "path": "library/map_packs/ALG.py",
-    "enabled": true,
-    "category": "map"
-   },
-   {
-    "name": "JHRW",
-    "path": "tasks/library/JHRW.py",
-    "enabled": true,
-    "category": "custom"
-   }
-  ]
- }
+  "window": {
+    "title": "鲜衣怒马 - 怀旧江南版 - (鲜衣怒马 - 然学[701529]) - 2026年08月10日 19:50:18",
+    "pid": 10204,
+    "input_mode": "background"
+  },
+  "recognition": {
+    "template_threshold": 0.8,
+    "yolo_confidence": 0.5,
+    "yolo_model_path": "models/active.pt",
+    "screenshot_interval": 0.5,
+    "jhrw_roi": [
+      840,
+      156,
+      150,
+      77
+    ]
+  },
+  "logging": {
+    "level": "INFO",
+    "file_path": "logs/automation.log"
+  },
+  "task_library": {
+    "modules": [
+      {
+        "name": "JNYW",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\JNYW.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "CAC",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\CAC.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "DHW",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\DHW.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "CSC",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\CSC.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "XLNR",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\XLNR.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "BXG",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\BXG.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "ZZG",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\ZZG.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "JYC",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\JYC.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "ALG",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\ALG.py",
+        "enabled": true,
+        "category": "map"
+      },
+      {
+        "name": "JHRW",
+        "path": "E:\\DS\\mhxy-gui-automation\\tasks\\library\\JHRW.py",
+        "enabled": true,
+        "category": "custom"
+      },
+      {
+        "name": "MPCG",
+        "path": "E:\\DS\\mhxy-gui-automation\\library\\map_packs\\MPCG.py",
+        "enabled": true,
+        "category": "custom"
+      }
+    ]
+  }
 }

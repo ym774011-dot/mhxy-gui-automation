@@ -1,0 +1,82 @@
+{
+  "name": "门派闯关专用识别任务（v2 · 对应 GUI 配置）",
+  "description": "对应截图1/2：MPCG_recognize 识别门派闯关任务，返回 target_location 字段；图像识别事件用动态模板路径找对应 NPC；点击传送。需玩家已接门派闯关任务并打开任务栏。",
+  "events": [
+    {
+      "id": "evt_recognize",
+      "name": "函数调用3",
+      "event_type": "function",
+      "enabled": true,
+      "pre_delay": 0,
+      "post_delay": 0.5,
+      "on_error": "retry",
+      "max_retries": 3,
+      "retry_interval": 1.0,
+      "params": {
+        "module": "MPCG",
+        "function": "MPCG_recognize",
+        "kwargs": {}
+      }
+    },
+    {
+      "id": "evt_click_npc",
+      "name": "点击门派NPC",
+      "event_type": "image",
+      "enabled": true,
+      "pre_delay": 0,
+      "post_delay": 0.3,
+      "on_error": "retry",
+      "max_retries": 2,
+      "retry_interval": 1.0,
+      "params": {
+        "template_source": "dynamic",
+        "source_event": "函数调用3",
+        "source_field": "target_location",
+        "template_prefix": "会员传送3(",
+        "template_suffix": ").bmp",
+        "template_dir": "E:/DS/梦幻西游脚本函数包/图片数据",
+        "action": "click",
+        "threshold": 0.8,
+        "region": null,
+        "_comment_dynamic_path": "完整模板路径 = 模板目录 + 前缀 + 字段值 + 后缀 → E:/DS/梦幻西游脚本函数包/图片数据/会员传送3(天宫).bmp（target_location=天宫 时）",
+        "_comment_missing": "⚠️ 这种按地图拆分的 NPC 模板当前未在图片数据目录存在，需先用截图工具采集每个门派地图的 NPC 图标并命名为 会员传送3(天宫).bmp 等"
+      }
+    },
+    {
+      "id": "evt_branch",
+      "name": "验证识别结果",
+      "event_type": "condition",
+      "enabled": true,
+      "pre_delay": 0,
+      "post_delay": 0,
+      "on_error": "skip",
+      "params": {
+        "variable": "${函数调用3.target_location}",
+        "operator": "!=",
+        "value": "",
+        "true_branch": [
+          {
+            "id": "log_success",
+            "name": "识别成功-打日志",
+            "event_type": "key",
+            "params": {
+              "keys": "ALT+E",
+              "text": ""
+            }
+          }
+        ],
+        "false_branch": [
+          {
+            "id": "log_fail",
+            "name": "识别失败-停止",
+            "event_type": "key",
+            "params": {
+              "keys": "ESC",
+              "text": ""
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

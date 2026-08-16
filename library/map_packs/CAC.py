@@ -63,6 +63,13 @@ __function_meta__ = {
         "args": {},
     },
 }
+from library.common.win_utils import (
+    find_game_window as _find_game_window,
+    find_game_pids as _find_game_pids,
+    locate_game_window as _locate_game_window,
+    client_to_screen as _client_to_screen,
+)
+
 import sys
 import ctypes
 import time
@@ -119,117 +126,6 @@ DEFAULT_PID = 28024                # 默认游戏进程PID
 # ============================================================
 # 窗口查找
 # ============================================================
-def _find_game_window(pid):
-    """通过 PID 找游戏窗口句柄，返回 (hwnd, title) 或 (None, None)"""
-    found = []
-    def cb(hwnd, _lp):
-        out = DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(out))
-        if out.value == pid and user32.IsWindowVisible(hwnd):
-            tlen = user32.GetWindowTextLengthW(hwnd)
-            if tlen > 0:
-                buf = ctypes.create_unicode_buffer(tlen + 1)
-                user32.GetWindowTextW(hwnd, buf, tlen + 1)
-                found.append((hwnd, buf.value))
-        return True
-    user32.EnumWindows(WNDENUMPROC(cb), 0)
-    for kw in ('鲜衣', '一梦', '梦幻', '十年'):
-        for hwnd, title in found:
-            if kw in title:
-                return hwnd, title
-    return (found[0] if found else (None, None))
-
-
-def _find_game_pids():
-    """枚举所有'十年一梦.exe'进程 PID（纯 ctypes，不依赖 pymem / tasklist）。
-
-    用于窗口查找的 fallback：当写死的 DEFAULT_PID 失效（重启/切图后 PID 变化）
-    时自动找真实进程。与 JHRW._find_game_pids 逻辑一致，但此处自包含不串依赖。
-    """
-    try:
-        psapi = ctypes.WinDLL('psapi.dll', use_last_error=True)
-        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-    except Exception:
-        return []
-
-    DWORD = ctypes.c_uint32
-    pids_arr = (DWORD * 2048)()
-    bytes_returned = DWORD(0)
-    if not psapi.EnumProcesses(pids_arr, ctypes.sizeof(pids_arr), ctypes.byref(bytes_returned)):
-        return []
-    count = bytes_returned.value // ctypes.sizeof(DWORD)
-
-    PROCESS_QUERY_INFORMATION = 0x0400
-    PROCESS_VM_READ = 0x0010
-    target_names = ['十年一梦', 'yimeng']
-    result = []
-    for i in range(count):
-        pid = pids_arr[i]
-        if pid == 0:
-            continue
-        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not h:
-            continue
-        try:
-            name_buf = ctypes.create_unicode_buffer(260)
-            got = psapi.GetModuleBaseNameW(h, None, name_buf, 260)
-            name = name_buf.value if got else ''
-            if not name:
-                buf = ctypes.create_unicode_buffer(260)
-                size = DWORD(260)
-                if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
-                    name = buf.value
-            name_lower = name.lower()
-            for t in target_names:
-                if t.lower() in name_lower:
-                    result.append(int(pid))
-                    break
-        finally:
-            kernel32.CloseHandle(h)
-    return result
-
-
-_GAME_TITLE_KEYWORDS = ('鲜衣', '一梦', '梦幻', '十年')
-
-
-def _locate_game_window(preferred_pid=None, verbose=False):
-    """定位游戏主窗口句柄。
-
-    优先用 preferred_pid 找；若该 PID 找不到窗口（写死/重启后变化），
-    自动枚举所有游戏进程 PID 兜底，返回第一个能定位到主窗口的。
-    仅接受标题含游戏特征字（鲜衣/一梦/梦幻/十年）的窗口，避免误选
-    _find_game_pids 按 exe 名子串误匹配的无关进程窗口。
-    返回 (hwnd, title)，找不到 (None, None)。
-    """
-    candidates = []
-    if preferred_pid:
-        candidates.append(preferred_pid)
-    try:
-        candidates.extend(_find_game_pids())
-    except Exception:
-        pass
-
-    seen = set()
-    for pid in candidates:
-        if pid in seen:
-            continue
-        seen.add(pid)
-        hwnd, title = _find_game_window(pid)
-        if hwnd and any(kw in (title or '') for kw in _GAME_TITLE_KEYWORDS):
-            if preferred_pid and pid != preferred_pid and verbose:
-                print(f"兜底: 用枚举到的 PID={pid} 定位窗口 (原 PID={preferred_pid} 失效)")
-            return hwnd, title
-    return None, None
-
-def _client_to_screen(hwnd, cx, cy):
-    """客户区坐标 → 屏幕绝对坐标"""
-    pt = POINT(int(cx), int(cy))
-    user32.ClientToScreen(hwnd, ctypes.byref(pt))
-    return (pt.x, pt.y)
-
-# ============================================================
-# 坐标转换核心
-# ============================================================
 def game_to_pixel(gx, gy):
     """游戏逻辑坐标 → 地图像素坐标（客户区相对）
     公式: pixel = origin + game * scale
@@ -256,6 +152,24 @@ def _click_background(hwnd, cx, cy):
     # 后台点击（用户方案 2026-08-06）: PostMessage 完整流程
     # 第一次点击不随机；引擎判定到达失败后置 _JITTER_MODE=True，
     # 下次调用走抖动序列：左键(原)->2s->左键(抖动+1~6)->2s->左键(点回原)->右键
+    # 2026-08-16 光标同步（方案 A）：每次点击前 SetCursorPos 瞬移物理光标
+    # 到目标点，解决 Galaxy2D 自绘引擎 GetCursorPos 命中检测失效（不抢焦点）。
+    import random
+
+    def _lp(x, y):
+        return (int(y) << 16) | (int(x) & 0xFFFF)
+
+    def _sync_cursor(px, py):
+        try:
+            sx, sy = _client_to_screen(hwnd, px, py)
+            user32.SetCursorPos(sx, sy)
+            time.sleep(0.02)
+        except Exception:
+            pass
+
+    # 后台点击（用户方案 2026-08-06）: PostMessage 完整流程
+    # 第一次点击不随机；引擎判定到达失败后置 _JITTER_MODE=True，
+    # 下次调用走抖动序列：左键(原)->2s->左键(抖动+1~6)->2s->左键(点回原)->右键
     import random
 
     def _lp(x, y):
@@ -274,6 +188,7 @@ def _click_background(hwnd, cx, cy):
         _jpx, _jpy = game_to_pixel(_jx, _jy)
 
     # 1) 第一次左键（原坐标，寻路）
+    _sync_cursor(cx, cy)
     user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(cx, cy))
     time.sleep(0.08)
     user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(cx, cy))
@@ -283,12 +198,14 @@ def _click_background(hwnd, cx, cy):
     time.sleep(2.0)
     # 2) 第二次左键：_JITTER_MODE 用抖动坐标，否则原坐标
     if _jpx is not None:
+        _sync_cursor(_jpx, _jpy)
         user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(_jpx, _jpy))
         time.sleep(0.08)
         user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(_jpx, _jpy))
         time.sleep(0.10)
         user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(_jpx, _jpy))
     else:
+        _sync_cursor(cx, cy)
         user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(cx, cy))
         time.sleep(0.08)
         user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(cx, cy))
@@ -297,6 +214,7 @@ def _click_background(hwnd, cx, cy):
     # 等待到达
     time.sleep(2.0)
     # 3) 左键点回原坐标（任务正确坐标）
+    _sync_cursor(cx, cy)
     user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(cx, cy))
     time.sleep(0.08)
     user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _lp(cx, cy))
