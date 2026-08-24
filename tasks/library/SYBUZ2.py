@@ -477,11 +477,12 @@ def SYBUZ2(
                                             verbose=verbose)
     steps["call_npc"] = {"ok": npc_ok, "info": npc_info}
     if not npc_ok:
-        # ★2026-08-24 用户要求：失败不瞬移回长安，原地等任务上下文切换后重试。
-        # 任务 NPC 名称是动态标签（江湖大盗↔鬼怪/巫医/统领），上下文切换后
-        # 同图会重新刷出真名江湖大盗——原地轮询最多 3 次（间隔 2.5s，覆盖
-        # 上下文切换窗口），期间绝不 _return_home。
-        for _ in range(3):
+        # ★2026-08-24 用户要求（v2）：失败不立即瞬移回长安，原地等任务上下文切换
+        # 重试最多 10 次（间隔 2.5s，共 ~25s 窗口）。任务 NPC 名称是动态标签
+        # （江湖大盗↔鬼怪/巫医/统领），上下文切换后同图会重刷真名——原地轮询
+        # 命中率高且省瞬移。**但 10 次全失败必须回城**，否则任务序列永远停在
+        # 任务图上无法推进（JHRW1 读同一任务、SYBUZ2 再失败，死循环）。
+        for _ in range(10):
             time.sleep(2.5)
             npc_ok, npc_info = call_npc_event_start(gateway, npc_name, target_coord=(gx, gy),
                                                     target_location=target_location,
@@ -491,9 +492,10 @@ def SYBUZ2(
                 break
     if not npc_ok:
         steps["battle"] = {"ok": False, "info": f"NPC '{npc_name}' 未找到"}
-        # ★不回城：留原地，下一轮任务从当前位置继续（省一次瞬移）
+        # ★10 次全失败 → 回城重来（兜底，防任务序列卡死在任务图）
+        steps["return_home"] = _return_home(gateway, home_coord, verbose)
         return {"ok": False,
-                "message": f"NPC '{npc_name}' 未找到（原地重试后仍未命中，留在任务图）",
+                "message": f"NPC '{npc_name}' 未找到（原地重试10次后仍未命中，回城重来）",
                 "steps": steps, "target_coord": (gx, gy), "target_location": target_location,
                 "elapsed_ms": round((time.time() - t0) * 1000, 1)}
 
