@@ -468,7 +468,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                     if captcha_active():
                         logger.info("验证码弹窗中，暂停任务等待 captcha_monitor 自动解除...")
                         self._emit_log("info", "验证码弹窗中，暂停等待自动解除")
-                        wait_captcha_clear(timeout=90)
+                        wait_captcha_clear(timeout=75)
                         if self.should_stop.is_set():
                             return False, "任务被停止"
                 except ImportError:
@@ -537,7 +537,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                 if captcha_active():
                     try:
                         from core.captcha_link import wait_captcha_clear
-                        wait_captcha_clear(timeout=60)
+                        wait_captcha_clear(timeout=75)
                     except Exception:
                         time.sleep(0.5)
                     continue  # 解除后重新开始本轮 sleep 计时
