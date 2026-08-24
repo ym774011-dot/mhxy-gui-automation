@@ -46,7 +46,11 @@ __function_meta__ = {
     },
 }
 
-DEFAULT_GATEWAY = "http://127.0.0.1:18082"
+try:
+    from core.group_config import gateway_url
+    DEFAULT_GATEWAY = gateway_url()  # ★2026-08-25 多组：组1=18082，组2=18083...
+except Exception:
+    DEFAULT_GATEWAY = "http://127.0.0.1:18082"
 
 
 def _lua_call(gateway: str, code: str, timeout: float = 10.0) -> dict:

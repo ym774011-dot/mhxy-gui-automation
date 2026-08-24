@@ -12,8 +12,12 @@ import os
 import time
 
 # 验证码弹窗状态文件（captcha_monitor 写/删，本模块只读）
+# ★2026-08-25 多组隔离：组 N 读 captcha_active_gN.txt（组1 无后缀兼容旧路径）。
+#   组号从环境变量 MHXY_GROUP（main.py --group N 设置）。
+_GROUP_ID = int(os.environ.get("MHXY_GROUP", "1") or "1")
 CAPTCHA_FLAG = os.path.join(
-    r"E:\DS\mhxy-mcp-gateway", "debug_captcha", "captcha_active.txt")
+    r"E:\DS\mhxy-mcp-gateway", "debug_captcha",
+    f"captcha_active_g{_GROUP_ID}.txt" if _GROUP_ID > 1 else "captcha_active.txt")
 
 # 文件新鲜度阈值（秒）：超过则视为陈旧标志（monitor 可能已退出/弹窗已超时消失），不阻塞任务
 # ★2026-08-24 v3（用户关键约束）：验证码弹窗 60s 内未验证成功 → 游戏自动下线。

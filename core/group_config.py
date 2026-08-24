@@ -31,6 +31,31 @@ def _default_port(group: int) -> int:
     return 18082 if group <= 1 else 18080 + group
 
 
+def current_group() -> int:
+    """当前进程组号（环境变量 MHXY_GROUP，main.py --group N 设置）。"""
+    try:
+        return int(os.environ.get("MHXY_GROUP", "1") or "1")
+    except ValueError:
+        return 1
+
+
+def gateway_url(group: int = None) -> str:
+    """当前组的网关 URL。
+
+    优先级：config/group<N>/settings.json 的 gateway.port > 默认规则
+    （组1=18082，组N=18080+N）。供任务库（JHRW1/SYBUZ2 等）读取，
+    替代硬编码 DEFAULT_GATEWAY。
+    """
+    g = current_group() if group is None else group
+    port = _default_port(g)
+    try:
+        cfg = load_group_config(g)
+        port = int((cfg.get("gateway") or {}).get("port", port))
+    except Exception:
+        pass
+    return f"http://127.0.0.1:{port}"
+
+
 def load_group_config(group: int) -> dict:
     """加载指定组的配置（组专属覆盖 + 主配置合并）。返回 dict。"""
     merged = {}

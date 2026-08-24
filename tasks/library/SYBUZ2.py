@@ -32,7 +32,11 @@ try:
 except Exception:
     config = None
 
-DEFAULT_GATEWAY = "http://127.0.0.1:18082"
+try:
+    from core.group_config import gateway_url
+    DEFAULT_GATEWAY = gateway_url()  # ★2026-08-25 多组：组1=18082，组2=18083...
+except Exception:
+    DEFAULT_GATEWAY = "http://127.0.0.1:18082"
 
 
 def _http_json(gateway: str, path: str, data=None, timeout: float = 8.0):

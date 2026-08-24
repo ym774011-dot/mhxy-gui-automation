@@ -63,7 +63,12 @@ __function_meta__ = {
 }
 
 # 默认网关地址（可被 GUI/任务参数覆盖）
-DEFAULT_GATEWAY = "http://127.0.0.1:18082"
+# ★2026-08-25 多组：组1=18082，组2=18083...（从 MHXY_GROUP 环境变量解析）
+try:
+    from core.group_config import gateway_url
+    DEFAULT_GATEWAY = gateway_url()
+except Exception:
+    DEFAULT_GATEWAY = "http://127.0.0.1:18082"
 
 # ============================================================
 # 地图跨图拓扑（2026-08-20 实测构建，可扩充）
