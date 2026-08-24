@@ -227,7 +227,46 @@ _G.__out = tostring(ok) .. "|" .. realname"""
         realname = parts[1] if len(parts) > 1 else ""
 
         if not ok:
-            last_err = f"候选{ci} id={nid} CALL 返回 false"
+            # ★2026-08-24 v5：临时微调一次再重试——CALL pcall 失败通常是因为
+            # 任务追踪栏 (97,52) ≠ NPC 实际格子（差 1-3 格），客户端距离校验
+            # 让 pcall 返回 false。临时 SYHS 瞬移到候选 NPC 格子再 CALL 一次。
+            # 不预先微调（避免跳到别人目标），只在 CALL 失败时 retry。
+            try:
+                cx, cy = int(cand["x"]), int(cand["y"])
+                from tasks.library.SYHS import SYHS
+                rs = SYHS((cx, cy), target_location=target_location, gateway=gateway,
+                          verbose=False, wait_stable=False, stable_timeout=10, stable_min_settle=0.8)
+                if rs.get("ok"):
+                    time.sleep(0.3)
+                    # 重试 CALL 事件开始
+                    try:
+                        raw = _lua(gateway, code)
+                    except Exception:
+                        pass
+                    if raw and raw != "NOTFOUND":
+                        parts2 = raw.split("|")
+                        ok2 = parts2[0] == "true"
+                        realname2 = parts2[1] if len(parts2) > 1 else ""
+                        if ok2:
+                            # 重试成功：进入战斗词判定
+                            time.sleep(0.5)
+                            opts = get_dialog_options(gateway)
+                            opt_text = " ".join(opts)
+                            if any(kw in opt_text for kw in battle_keywords):
+                                if verbose:
+                                    logger.info(f"SYBUZ2: 候选{ci} 临时微调+重试成功 id={nid} 实际={realname2}")
+                                return True, f"NPC={realname2} CALL事件开始 ok={ok2} 候选{ci} id={nid} 微调retry对话含战斗词"
+                            # 重试成功但对话不对——关掉
+                            try:
+                                from core.input_controller import input_controller
+                                input_controller.right_click(500, 310, click_delay=200)
+                            except Exception:
+                                pass
+                            time.sleep(0.3)
+                    last_err = f"候选{ci} id={nid} CALL false → 微调retry仍失败"
+            except Exception as e:
+                if verbose:
+                    logger.warning(f"SYBUZ2: 候选{ci} 微调retry 异常 {e}")
             continue
 
         # ★★★ 动态判定：等对话栏刷新，看选项文本是否含战斗关键词 ★★★
