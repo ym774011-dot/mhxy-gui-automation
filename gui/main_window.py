@@ -327,6 +327,30 @@ class MainWindow(QMainWindow):
         )
         toolbar.addWidget(self._window_status_label)
 
+        # ★2026-08-25 多组：一键启动其他组 GUI（独立进程）
+        toolbar.addSeparator()
+        self._group_menu_btn = None
+        try:
+            from PyQt5.QtWidgets import QToolButton, QMenu
+            from PyQt5.QtCore import Qt
+            self._group_menu = QMenu(self)
+            self._group_menu.triggered.connect(self._on_launch_group)
+            # 所有组（排除当前组）
+            for g in (1, 2, 3, 4):
+                if g == getattr(self, "_group_id", 1):
+                    continue
+                act = self._group_menu.addAction(f"启动组{g} GUI")
+                act.setData(g)
+            btn = QToolButton(self)
+            btn.setText("🚀 启动其他组")
+            btn.setPopupMode(QToolButton.InstantPopup)
+            btn.setMenu(self._group_menu)
+            btn.setStyleSheet("padding: 4px 10px; font-weight: bold;")
+            toolbar.addWidget(btn)
+            self._group_menu_btn = btn
+        except Exception as e:
+            logger.warning(f"多组启动按钮初始化失败: {e}")
+
     # ------------------------------------------------------------------
     # 中央标签页
     # ------------------------------------------------------------------
@@ -550,6 +574,32 @@ class MainWindow(QMainWindow):
     # ==================================================================
     # 绑定窗口
     # ==================================================================
+    def _on_launch_group(self, action):
+        """★2026-08-25 多组：点击"启动组N"→ 独立进程拉起对应组 GUI。
+
+        组2 是独立进程（window_manager/网关单例无法同进程双组），
+        从当前 GUI 用 subprocess 拉起另一个 python main.py --group N。
+        """
+        try:
+            target = int(action.data())
+        except (TypeError, ValueError):
+            return
+        import sys, subprocess, os
+        py = sys.executable or r"E:\py\python.exe"
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            proc = subprocess.Popen(
+                [py, os.path.join(root, "main.py"), "--group", str(target)],
+                cwd=root,
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                close_fds=True,
+            )
+            logger.info(f"已拉起组{target} GUI (pid={proc.pid})")
+            self._set_status_text(f"已启动组{target} GUI")
+        except Exception as e:
+            logger.error(f"启动组{target} GUI 失败: {e}")
+            self._set_status_text(f"启动组{target}失败: {e}")
+
     def _on_bind_window(self):
         """
         工具栏 -> 绑定窗口：弹出游戏窗口列表对话框，
