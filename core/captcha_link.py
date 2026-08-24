@@ -16,10 +16,11 @@ CAPTCHA_FLAG = os.path.join(
     r"E:\DS\mhxy-mcp-gateway", "debug_captcha", "captcha_active.txt")
 
 # 文件新鲜度阈值（秒）：超过则视为陈旧标志（monitor 可能已退出/弹窗已超时消失），不阻塞任务
-# ★2026-08-24 v2：验证码弹窗倒计时 60s（用户确认）。max_age=75s =
-# 60s 弹窗 + 15s 处理余量。弹窗 60s 超时消失后（monitor 可能没来得及删
-# 文件），75s 时判定陈旧 → 引擎恢复，不傻等 120s。
-FLAG_MAX_AGE = 75.0
+# ★2026-08-24 v3（用户关键约束）：验证码弹窗 60s 内未验证成功 → 游戏自动下线。
+# 所以引擎等待窗口必须 ≤60s：60s 内 monitor 解完（删文件）→ 引擎恢复；
+# 60s 未解完 → 游戏下线，继续等待无意义，75s/120s 只会白等。
+# max_age=60s = 弹窗完整生存周期，之后一律判定陈旧恢复任务（网关自愈兜底）。
+FLAG_MAX_AGE = 60.0
 
 
 def captcha_active(max_age: float = FLAG_MAX_AGE) -> bool:
