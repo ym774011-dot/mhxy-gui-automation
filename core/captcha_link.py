@@ -16,7 +16,9 @@ CAPTCHA_FLAG = os.path.join(
     r"E:\DS\mhxy-mcp-gateway", "debug_captcha", "captcha_active.txt")
 
 # 文件新鲜度阈值（秒）：超过则视为陈旧标志（monitor 可能已退出），不阻塞任务
-FLAG_MAX_AGE = 8.0
+# ★2026-08-24 v2：验证码弹窗倒计时 ~85s（截图见 17s 倒计时），默认 max_age
+# 改 120s 完全覆盖弹窗生存周期，引擎不会误判"已解除"而继续跑（SIP）。
+FLAG_MAX_AGE = 120.0
 
 
 def captcha_active(max_age: float = FLAG_MAX_AGE) -> bool:
