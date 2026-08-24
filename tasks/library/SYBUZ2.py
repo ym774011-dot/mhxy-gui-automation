@@ -194,7 +194,9 @@ local v = tp.场景.场景人物[tonumber({nid})]
 if not v or type(v) ~= "table" then _G.__out = "NOTFOUND"; return end
 local mt = getmetatable(v)
 local ok, ret = pcall(mt.__index.事件开始, v)
-_G.__out = tostring(ok) .. "|" .. tostring(v.名称 or "")"""
+-- ★任务 NPC 校验: 事件开始后再读 v.名称，捕获任务上下文标签
+local realname = tostring(v.名称 or "")
+_G.__out = tostring(ok) .. "|" .. realname"""
         try:
             raw = _lua(gateway, code)
         except Exception as e:
@@ -205,13 +207,13 @@ _G.__out = tostring(ok) .. "|" .. tostring(v.名称 or "")"""
             continue
         parts = raw.split("|")
         ok = parts[0] == "true"
+        realname = parts[1] if len(parts) > 1 else ""
 
-        # ---- 拒绝语校验：等对话栏刷新，看是否"不认识你" ----
-        time.sleep(0.4)
-        dialog = get_dialog_text(gateway)
-        reject_words = ("不认识", "不认", "不是", "找我", "凭什么", "你是谁", "走开", "别来")
-        if dialog and any(w in dialog for w in reject_words):
-            last_err = f"候选{ci} ({cand.get('x')},{cand.get('y')}) 对话含拒绝语: {dialog[:40]}"
+        # ★★★ 任务 NPC 校验：CALL 后 v.名称 必须等于 npc_name ★★★
+        # 否则是 NPC 模板（超级福利怪/新型冠状病毒/压龙洞小妖）——
+        # 任务上下文未切入到此 NPC，对话选项没有战斗关键词。
+        if realname and realname != npc_name:
+            last_err = f"候选{ci} id={nid} 非任务NPC(实际={realname})，需任务上下文={npc_name}"
             if verbose:
                 logger.warning(f"SYBUZ2: {last_err}，换下一个候选")
             # 关闭拒绝对话（右键空白/ESC），避免遮挡后续 CALL
@@ -223,12 +225,28 @@ _G.__out = tostring(ok) .. "|" .. tostring(v.名称 or "")"""
             time.sleep(0.5)
             continue
 
+        # ---- 拒绝语校验（兜底）：等对话栏刷新，看是否"不认识你" ----
+        time.sleep(0.4)
+        dialog = get_dialog_text(gateway)
+        reject_words = ("不认识", "不认", "不是", "找我", "凭什么", "你是谁", "走开", "别来")
+        if dialog and any(w in dialog for w in reject_words):
+            last_err = f"候选{ci} id={nid} 对话含拒绝语: {dialog[:40]}"
+            if verbose:
+                logger.warning(f"SYBUZ2: {last_err}，换下一个候选")
+            try:
+                from core.input_controller import input_controller
+                input_controller.right_click(500, 310, click_delay=200)
+            except Exception:
+                pass
+            time.sleep(0.5)
+            continue
+
         if ok:
-            return ok, f"NPC={parts[1] if len(parts) > 1 else npc_name} CALL事件开始 ok={ok} 候选{ci} id={nid}"
+            return ok, f"NPC={realname} CALL事件开始 ok={ok} 候选{ci} id={nid}"
 
         last_err = f"候选{ci} id={nid} CALL 返回 false"
 
-    return False, f"全部 {len(all_cands)} 个同名 NPC 均失败（最后: {last_err}）"
+    return False, f"全部 {len(all_cands)} 个同名 NPC 均非任务NPC（最后: {last_err}）"
 
 
 def get_dialog_text(gateway: str) -> str:
