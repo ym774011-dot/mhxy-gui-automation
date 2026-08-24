@@ -1,8 +1,8 @@
 {
   "gateway": { "port": 18083 },
   "window": {
-    "roles": ["凝宛寄静墨"],
-    "title_keywords": ["凝宛寄静墨"]
+    "roles": ["凝宛寄静露"],
+    "title_keywords": ["凝宛寄静露"]
   },
   "task_sequence": "data/task_sequence_group2.json"
 }
