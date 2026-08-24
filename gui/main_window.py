@@ -189,7 +189,22 @@ class MainWindow(QMainWindow):
         # ----------------------------------------------------------------
         # 窗口属性
         # ----------------------------------------------------------------
-        self.setWindowTitle("MHXY GUI 自动化脚本平台")
+        # ★2026-08-25 多组标识：窗口标题带组号，方便多实例区分
+        import os as _os
+        try:
+            self._group_id = int(_os.environ.get("MHXY_GROUP", "1"))
+        except ValueError:
+            self._group_id = 1
+        from core.group_config import group_title, load_group_config, GROUP_STYLE
+        self._group_cfg = load_group_config(self._group_id)
+        # 组标题（角色名由 _update_window_status 动态补全）
+        self.setWindowTitle(group_title(self._group_id, roles=self._group_cfg.get("window", {}).get("roles")))
+        # 组配色（标题栏/强调色区分）
+        _st = GROUP_STYLE.get(self._group_id)
+        if _st:
+            self.setStyleSheet(
+                "QMainWindow::title { color: %s; } QLabel#groupBadge { color: %s; font-weight: bold; }"
+                % (_st["accent"], _st["accent"]))
         self.resize(1280, 800)
 
         # ----------------------------------------------------------------
@@ -375,6 +390,19 @@ class MainWindow(QMainWindow):
         """构建状态栏。"""
         self._status_bar = QStatusBar(self)
         self.setStatusBar(self._status_bar)
+        # ★2026-08-25 组徽章：常驻显示"组N · x号 · 网关:port"（多实例一眼区分）
+        try:
+            from core.group_config import group_status_text, GROUP_STYLE
+            _port = (self._group_cfg.get("gateway") or {}).get("port", 18082)
+            _st = GROUP_STYLE.get(self._group_id)
+            _roles = (self._group_cfg.get("window") or {}).get("roles") or []
+            self._group_badge = QLabel(group_status_text(self._group_id, _port, len(_roles)))
+            if _st:
+                self._group_badge.setStyleSheet("color: %s; font-weight: bold; padding: 0 8px;" % _st["accent"])
+            self._group_badge.setObjectName("groupBadge")
+            self._status_bar.addPermanentWidget(self._group_badge)
+        except Exception:
+            pass
         # 永久标签用于显示运行状态文字（如"就绪"、"运行中"、"已暂停"等）
         self._status_label = QLabel("就绪")
         self._status_bar.addPermanentWidget(self._status_label)
@@ -548,11 +576,28 @@ class MainWindow(QMainWindow):
         更新工具栏的窗口状态标签。
 
         根据 ``window_manager`` 当前绑定状态显示"未绑定"或"已绑定: PID"。
+        ★2026-08-25：同时刷新窗口标题（组号 + 已绑角色名）。
         """
         try:
             valid = window_manager.is_valid()
         except Exception:
             valid = False
+
+        # ★多组：刷新标题带已绑角色名
+        try:
+            from core.group_config import group_title
+            _role = ""
+            try:
+                _title = getattr(window_manager, "window_title", "") or ""
+                import re as _re
+                _m = _re.search(r"\(([^()\[\]]+?)\[", _title)
+                if _m:
+                    _role = _m.group(1).strip()
+            except Exception:
+                pass
+            self.setWindowTitle(group_title(self._group_id, roles=[_role] if _role else None))
+        except Exception:
+            pass
 
         if valid and window_manager.hwnd:
             pid_text = f"PID={window_manager.pid}" if window_manager.pid else "无PID"

@@ -51,6 +51,13 @@ from PyQt5.QtWidgets import QApplication
 
 def main():
     """程序入口：创建 QApplication 并显示主窗口。"""
+    # 多组参数: python main.py --group N
+    import argparse
+    ap = argparse.ArgumentParser(description="MHXY GUI 自动化脚本平台")
+    ap.add_argument("--group", type=int, default=1, help="组号（1/2/3/4），默认 1")
+    args, _ = ap.parse_known_args()
+    os.environ["MHXY_GROUP"] = str(args.group)
+
     # 日志自动清理（启动时一次性执行，按 settings.json 的 auto_clean_days）
     try:
         from config.config import config

@@ -1,0 +1,8 @@
+{
+  "gateway": { "port": 18083 },
+  "window": {
+    "roles": ["支纵", "丽俊", "初凯心秋", "玉凝"],
+    "title_keywords": ["支纵", "丽俊"]
+  },
+  "task_sequence": "data/task_sequence_group2.json"
+}
