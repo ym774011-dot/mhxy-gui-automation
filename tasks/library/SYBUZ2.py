@@ -239,21 +239,9 @@ _G.__out = tostring(ok) .. "|" .. realname"""
         ok = parts[0] == "true"
         realname = parts[1] if len(parts) > 1 else ""
 
-        # ★★★ 任务 NPC 校验：CALL 后 v.名称 必须等于 npc_name ★★★
-        # 否则是 NPC 模板（超级福利怪/新型冠状病毒/压龙洞小妖）——
-        # 任务上下文未切入到此 NPC，对话选项没有战斗关键词。
-        if realname and realname != npc_name:
-            last_err = f"候选{ci} id={nid} 非任务NPC(实际={realname})，需任务上下文={npc_name}"
-            if verbose:
-                logger.warning(f"SYBUZ2: {last_err}，换下一个候选")
-            # 关闭拒绝对话（右键空白/ESC），避免遮挡后续 CALL
-            try:
-                from core.input_controller import input_controller
-                input_controller.right_click(500, 310, click_delay=200)
-            except Exception:
-                pass
-            time.sleep(0.5)
-            continue
+        # ★2026-08-24 v3：去掉 v.名称 严格等于 npc_name 的硬拒绝（任务上下文动态切
+        # 切换中误杀），只 CALL 不判定真假。判定交给主流程 call_dialog_option
+        # 看对话框含"抓归案/对付"等战斗词即可（21:42 实测这才是稳定路径）。
 
         # ---- 拒绝语校验（兜底）：等对话栏刷新，看是否"不认识你" ----
         time.sleep(0.4)
@@ -276,7 +264,7 @@ _G.__out = tostring(ok) .. "|" .. realname"""
 
         last_err = f"候选{ci} id={nid} CALL 返回 false"
 
-    return False, f"全部 {len(all_cands)} 个同名 NPC 均非任务NPC（最后: {last_err}）"
+    return False, f"全部 {len(all_cands)} 个候选 CALL 均失败（最后: {last_err}）"
 
 
 def get_dialog_text(gateway: str) -> str:
