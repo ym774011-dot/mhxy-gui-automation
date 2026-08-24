@@ -138,12 +138,45 @@ class WindowSelectorDialog(QDialog):
     # 数据
     # ------------------------------------------------------------------
     def _load_windows(self):
-        """枚举游戏窗口并填充表格。"""
+        """枚举游戏窗口并填充表格。
+
+        ★2026-08-25 多组：按当前组配置的 window.roles 过滤窗口——
+        组1 GUI 只显示组1 角色（然学等），组2 GUI 只显示组2 角色（支纵等），
+        防止多开时两组号绑定串组。组配置未设 roles 时显示全部（兼容旧行为）。
+        """
+        # 组角色过滤（MHXY_GROUP 环境变量 → config/group<N>/settings.json）
+        import os as _os, json
+        self._group_roles = []
+        self._group_id = 1
+        try:
+            self._group_id = int(_os.environ.get("MHXY_GROUP", "1") or "1")
+        except ValueError:
+            self._group_id = 1
+        try:
+            _cfg_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config", f"group{self._group_id}", "settings.json")
+            if os.path.exists(_cfg_path):
+                with open(_cfg_path, encoding="utf-8") as f:
+                    _cfg = json.load(f)
+                self._group_roles = list((_cfg.get("window") or {}).get("roles") or [])
+        except Exception:
+            pass
+
         windows: List[Tuple[int, str, int, bool]] = []
         try:
             windows = window_manager.list_game_windows()
         except Exception as e:
             logger.error(f"list_game_windows 失败: {e}")
+
+        # 按组角色过滤
+        if self._group_roles:
+            _before = len(windows)
+            windows = [w for w in windows
+                       if extract_role_name(w[1]) in self._group_roles]
+            _filtered = _before - len(windows)
+        else:
+            _filtered = 0
 
         self._windows = windows
         self.table.setRowCount(len(windows))
@@ -162,14 +195,17 @@ class WindowSelectorDialog(QDialog):
                     item.setBackground(Qt.yellow)
                 self.table.setItem(row, col, item)
 
-        # 提示文案
-        self.tip_label.setText(
-            f"找到 {len(windows)} 个游戏窗口，选择要锁定的窗口"
-            f"（多开时用 PID 区分）："
-        )
+        # 提示文案（★多组：显示组号 + 角色过滤信息）
+        _tip = f"组{self._group_id}：找到 {len(windows)} 个游戏窗口"
+        if self._group_roles:
+            _tip += f"（已按本组角色 {'/'.join(self._group_roles)} 过滤，排除 {_filtered} 个其他组窗口）"
+        else:
+            _tip += "（未配置组角色，显示全部）"
+        _tip += "，选择要锁定的窗口（多开时用 PID 区分）："
+        self.tip_label.setText(_tip)
 
         if not windows:
-            logger.warning("window_selector: 未找到游戏窗口")
+            logger.warning(f"window_selector: 组{self._group_id} 未找到匹配角色窗口")
 
     def _update_status_label(self):
         """刷新底部绑定状态标签。"""

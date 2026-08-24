@@ -183,4 +183,11 @@ def cleanup_old_logs(log_file_path: str, days: int) -> int:
 
 
 # 模块级单例实例，默认日志文件为项目根目录下 logs/automation.log，级别 INFO
-logger = Logger(name="mhxy", log_file="logs/automation.log", level="INFO")
+# ★2026-08-25 多组隔离：组 N 输出 logs/automation_gN.log（组1 无后缀兼容）。
+import os as _os
+try:
+    _g = int(_os.environ.get("MHXY_GROUP", "1") or "1")
+except ValueError:
+    _g = 1
+_log_file = f"logs/automation_g{_g}.log" if _g > 1 else "logs/automation.log"
+logger = Logger(name="mhxy", log_file=_log_file, level="INFO")

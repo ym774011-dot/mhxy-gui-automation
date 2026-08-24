@@ -1,0 +1,6 @@
+{
+  "gateway": { "port": 18082 },
+  "window": {
+    "roles": ["然学"]
+  }
+}
