@@ -132,15 +132,37 @@ _G.__out = table.concat(out, ";")"""
     return cands[0]
 
 
-def find_npcs_by_name(gateway: str, npc_name: str) -> List[dict]:
-    """返回全部同名 NPC 候选列表（[{id,x,y},...]），供逐个 CALL 排除"不认识你"。
-    ★2026-08-24：多开场景下同名 NPC 分属不同玩家任务实例，需逐个尝试。
-    ★id 是数字 key（tp.场景.场景人物 的 key 为 number:1,2,3...），保留数字供 CALL 精确索引。"""
-    code = f"""
+def find_npcs_by_name(gateway: str, npc_name: str, npc_model: str = "") -> List[dict]:
+    """返回任务 NPC 候选列表（[{id,x,y,model},...]）。
+
+    ★2026-08-24 多开同名修复（实测关键结论）：NPC 对象的「名称」是**动态任务标签**——
+      任务上下文切到本任务时叫"江湖大盗"，切走时叫真实单位名（"御林军左统领"
+      "超级福利怪"等）。「模型」字段是**静态模板标识**（如"护卫"）——
+      任务追踪栏 NPC 类型名(JHRW1.npc) 与「模型」一致。
+
+    匹配策略（按可靠性排序）：
+      1. npc_model 非空 → 按「模型」精确过滤（名称只做辅助记录，不参与过滤）
+      2. npc_model 为空 → 退回按名称过滤（兼容旧调用）
+
+    ★id 是数字 key（tp.场景.场景人物 的 key 为 number:1,2,3...），保留数字供 CALL 精确索引。
+    """
+    if npc_model:
+        # 模型优先：名称动态，模型静态
+        code = f"""
+local out = {{}}
+for id,u in pairs(tp.场景.场景人物 or {{}}) do
+  if type(u)=="table" and tostring(u.模型 or "")=="{npc_model}" then
+    out[#out+1] = string.format("%s|%s|%s|%s", tostring(id), tostring(u.格子x or ""), tostring(u.格子y or ""), tostring(u.名称 or ""))
+  end
+end
+_G.__out = table.concat(out, ";")"""
+    else:
+        # 名称兜底
+        code = f"""
 local out = {{}}
 for id,u in pairs(tp.场景.场景人物 or {{}}) do
   if type(u)=="table" and tostring(u.名称 or "")=="{npc_name}" then
-    out[#out+1] = string.format("%s|%s|%s", tostring(id), tostring(u.格子x or ""), tostring(u.格子y or ""))
+    out[#out+1] = string.format("%s|%s|%s|%s", tostring(id), tostring(u.格子x or ""), tostring(u.格子y or ""), tostring(u.模型 or ""))
   end
 end
 _G.__out = table.concat(out, ";")"""
@@ -153,27 +175,35 @@ _G.__out = table.concat(out, ";")"""
         if "|" in entry:
             parts = entry.split("|")
             if len(parts) >= 3:
-                cands.append({"id": parts[0], "x": parts[1], "y": parts[2]})
+                cands.append({"id": parts[0], "x": parts[1], "y": parts[2],
+                              "model": parts[3] if len(parts) > 3 else ""})
     return cands
 
 
 def call_npc_event_start(gateway: str, npc_name: str, target_coord=None, target_location=None,
-                         verbose: bool = False) -> Tuple[bool, str]:
+                         npc_model: str = "", verbose: bool = False) -> Tuple[bool, str]:
     """按名称搜 NPC → 在目标坐标上 CALL 事件开始() 弹对话.
 
     ★2026-08-24 定论（用户要求）：**只在目标坐标上 CALL，绝不瞬移去找 NPC**。
       角色已由 SYBUZ2 主流程瞬移到任务坐标 (gx,gy)——NPC 就刷新在任务坐标附近，
-      直接在原地按名称+就近选候选，用候选 **id 精确索引** CALL。
+      直接在原地按名称+模型+就近选候选，用候选 **id 精确索引** CALL。
       禁止 SYHS 微调瞬移：会把角色带到别人的 NPC 格子上（跳到别人目标）。
 
     ★2026-08-24 多开同名修复：同图多个同名 NPC（别人任务的江湖大盗）——
-      按离目标坐标最近的候选，用 id 精确 CALL（不走 pairs 遍历，避免抓错）；
-      若对话栏出现"不认识你"等拒绝语 → 换下一个候选重试。
+      用 npc_model（JHRW1.npc，如"护卫"）过滤「模型」字段，直接锁定自己的
+      任务 NPC（别人的同名 NPC/模板怪模型不同），再用 id 精确 CALL。
+      CALL 后仍校验 v.名称 + 拒绝语，双保险。
 
+    :param npc_model: 任务追踪栏 NPC 类型名（JHRW1 返回的 npc 字段），
+        对应 NPC 对象的「模型」字段。为空则只按名称过滤。
     :return: (ok, 详情)
     """
-    # ---- 全部候选，按离任务坐标（=角色当前位置）曼哈顿距离升序 ----
-    all_cands = find_npcs_by_name(gateway, npc_name)
+    # ---- 全部候选（按名称 + 模型过滤），按离任务坐标曼哈顿距离升序 ----
+    all_cands = find_npcs_by_name(gateway, npc_name, npc_model=npc_model)
+    if not all_cands:
+        # 模型过滤后无候选：可能是 npc_model 不匹配（任务阶段 NPC 名变化），
+        # 退回只按名称过滤（保留 CALL 后 v.名称 校验兜底）
+        all_cands = find_npcs_by_name(gateway, npc_name)
     if not all_cands:
         return False, f"未找到 NPC '{npc_name}'（可能未刷新/不在此图）"
     if target_coord is not None:
@@ -353,6 +383,7 @@ def SYBUZ2(
     target_coord: Union[Tuple[int, int], dict, str, None] = None,
     target_location: Optional[str] = None,
     npc_name: str = "江湖大盗",
+    npc_model: str = "",
     home_coord: Tuple[int, int] = (240, 101),
     battle_timeout: float = 180.0,
     gateway: str = DEFAULT_GATEWAY,
@@ -366,6 +397,8 @@ def SYBUZ2(
     :param target_coord: (gx, gy) 地图坐标 / JHRW dict / 地图名(字符串)
     :param target_location: 目标地图名（跨图判断，如 "江南野外"）
     :param npc_name: 目标 NPC 名称（默认"江湖大盗"）
+    :param npc_model: 任务追踪栏 NPC 类型名（JHRW1.npc，如"护卫"）——
+        对应 NPC 对象的「模型」字段，用于多开同名 NPC 精确定位（2026-08-24）
     :param home_coord: 站桩点（默认 240,101 长安）
     :param battle_timeout: 战斗等待超时秒数
     :param gateway: 网关地址
@@ -387,6 +420,10 @@ def SYBUZ2(
     if isinstance(target_coord, dict):
         if not target_location:
             target_location = target_coord.get("target_location")
+        # ★2026-08-24 多开同名修复：从 JHRW dict 取 npc 字段（任务追踪栏 NPC 类型名，
+        #   如"护卫"），作为 NPC「模型」过滤条件
+        if not npc_model:
+            npc_model = target_coord.get("npc") or ""
         tc = target_coord.get("target_coord") or target_coord.get("internal_coord")
         if isinstance(tc, (list, tuple)) and len(tc) >= 2:
             gx, gy = int(tc[0]), int(tc[1])
@@ -416,15 +453,17 @@ def SYBUZ2(
         return {"ok": False, "message": f"SYHS 调用异常: {e}", "steps": steps,
                 "elapsed_ms": round((time.time() - t0) * 1000, 1)}
 
-    # ---- 2) 按名称搜 NPC → 在任务坐标上 CALL 事件开始（★核心突破，不瞬移）----
+    # ---- 2) 按名称+模型搜 NPC → 在任务坐标上 CALL 事件开始（★核心突破，不瞬移）----
     npc_ok, npc_info = call_npc_event_start(gateway, npc_name, target_coord=(gx, gy),
-                                            target_location=target_location, verbose=verbose)
+                                            target_location=target_location, npc_model=npc_model,
+                                            verbose=verbose)
     steps["call_npc"] = {"ok": npc_ok, "info": npc_info}
     if not npc_ok:
         # NPC 未找到：等 1.5s 重试（任务 NPC 可能延迟刷新）
         time.sleep(1.5)
         npc_ok, npc_info = call_npc_event_start(gateway, npc_name, target_coord=(gx, gy),
-                                                target_location=target_location, verbose=verbose)
+                                                target_location=target_location, npc_model=npc_model,
+                                                verbose=verbose)
         steps["call_npc_retry"] = {"ok": npc_ok, "info": npc_info}
     if not npc_ok:
         steps["battle"] = {"ok": False, "info": f"NPC '{npc_name}' 未找到"}
