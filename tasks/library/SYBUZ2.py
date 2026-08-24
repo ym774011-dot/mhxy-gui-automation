@@ -134,12 +134,13 @@ _G.__out = table.concat(out, ";")"""
 
 def find_npcs_by_name(gateway: str, npc_name: str) -> List[dict]:
     """返回全部同名 NPC 候选列表（[{id,x,y},...]），供逐个 CALL 排除"不认识你"。
-    ★2026-08-24：多开场景下同名 NPC 分属不同玩家任务实例，需逐个尝试。"""
+    ★2026-08-24：多开场景下同名 NPC 分属不同玩家任务实例，需逐个尝试。
+    ★id 是数字 key（tp.场景.场景人物 的 key 为 number:1,2,3...），保留数字供 CALL 精确索引。"""
     code = f"""
 local out = {{}}
 for id,u in pairs(tp.场景.场景人物 or {{}}) do
   if type(u)=="table" and tostring(u.名称 or "")=="{npc_name}" then
-    out[#out+1] = string.format("%s|%s|%s", id, tostring(u.格子x or ""), tostring(u.格子y or ""))
+    out[#out+1] = string.format("%s|%s|%s", tostring(id), tostring(u.格子x or ""), tostring(u.格子y or ""))
   end
 end
 _G.__out = table.concat(out, ";")"""
@@ -158,65 +159,49 @@ _G.__out = table.concat(out, ";")"""
 
 def call_npc_event_start(gateway: str, npc_name: str, target_coord=None, target_location=None,
                          verbose: bool = False) -> Tuple[bool, str]:
-    """按名称搜 NPC → （若需要）微调瞬移到 NPC 实际格子 → CALL 事件开始() 弹对话.
+    """按名称搜 NPC → 在目标坐标上 CALL 事件开始() 弹对话.
 
-    ★2026-08-24 修复「距离太远」：事件开始() 内部有客户端距离校验，
-      角色坐标必须与 NPC 格子一致。任务追踪栏坐标(如 162,124)是任务目标点，
-      NPC 实际刷新在附近格子 → 直接用任务坐标 CALL 会弹"您距离这个npc太远了"。
-      故先 find_npc_by_name 拿 NPC 格子，若与当前坐标不一致 → SYHS 同图微调瞬移，
-      确保角色坐标 = NPC 格子后再 CALL。
+    ★2026-08-24 定论（用户要求）：**只在目标坐标上 CALL，绝不瞬移去找 NPC**。
+      角色已由 SYBUZ2 主流程瞬移到任务坐标 (gx,gy)——NPC 就刷新在任务坐标附近，
+      直接在原地按名称+就近选候选，用候选 **id 精确索引** CALL。
+      禁止 SYHS 微调瞬移：会把角色带到别人的 NPC 格子上（跳到别人目标）。
 
     ★2026-08-24 多开同名修复：同图多个同名 NPC（别人任务的江湖大盗）——
-      先按坐标就近取最近候选；若 CALL 后对话栏出现"不认识你"等拒绝语，
-      说明抓到了别人的任务 NPC → 换下一个候选重试。
+      按离目标坐标最近的候选，用 id 精确 CALL（不走 pairs 遍历，避免抓错）；
+      若对话栏出现"不认识你"等拒绝语 → 换下一个候选重试。
 
     :return: (ok, 详情)
     """
-    # ---- 第一候选：按坐标就近（自己的任务 NPC 必在目标点附近）----
-    info = find_npc_by_name(gateway, npc_name, target_coord=target_coord)
-    if not info:
-        return False, f"未找到 NPC '{npc_name}'（可能未刷新/不在此图）"
-
-    # 收集全部候选（供拒绝语后换人）
+    # ---- 全部候选，按离任务坐标（=角色当前位置）曼哈顿距离升序 ----
     all_cands = find_npcs_by_name(gateway, npc_name)
     if not all_cands:
-        all_cands = [info]
+        return False, f"未找到 NPC '{npc_name}'（可能未刷新/不在此图）"
+    if target_coord is not None:
+        try:
+            tx, ty = int(target_coord[0]), int(target_coord[1])
+            all_cands.sort(key=lambda c: (abs(int(c["x"]) - tx) + abs(int(c["y"]) - ty), c["id"]))
+        except (ValueError, TypeError, IndexError):
+            pass
 
     last_err = "未知"
     for ci, cand in enumerate(all_cands):
-        try:
-            nx, ny = int(cand["x"]), int(cand["y"])
-        except (ValueError, TypeError):
+        nid = cand.get("id")
+        if not nid:
             continue
-        # ---- 微调瞬移到该候选格子 ----
-        try:
-            if (target_coord is None or (nx, ny) != tuple(int(v) for v in target_coord)) and nx >= 0 and ny >= 0:
-                from tasks.library.SYHS import SYHS
-                rs = SYHS((nx, ny), target_location=target_location, gateway=gateway,
-                          verbose=verbose, wait_stable=True, stable_timeout=20, stable_min_settle=2.0)
-                if verbose:
-                    logger.info(f"SYBUZ2: 候选{ci} 微调瞬移到 ({nx},{ny}) rs_ok={rs.get('ok')}")
-        except Exception as e:
-            if verbose:
-                logger.warning(f"SYBUZ2: 候选{ci} 微调瞬移异常 {e}，继续尝试 CALL")
-
-        # ---- CALL 事件开始 ----
+        # ---- CALL 事件开始：用候选 id 精确索引，不走 pairs 遍历 ----
         code = f"""
-local v = nil
-for id,u in pairs(tp.场景.场景人物 or {{}}) do
-  if type(u)=="table" and tostring(u.名称 or "")=="{npc_name}" then v = u break end
-end
-if not v then _G.__out = "NOTFOUND"; return end
+local v = tp.场景.场景人物[tonumber({nid})]
+if not v or type(v) ~= "table" then _G.__out = "NOTFOUND"; return end
 local mt = getmetatable(v)
 local ok, ret = pcall(mt.__index.事件开始, v)
-_G.__out = tostring(ok) .. "|" .. tostring(v.名称)"""
+_G.__out = tostring(ok) .. "|" .. tostring(v.名称 or "")"""
         try:
             raw = _lua(gateway, code)
         except Exception as e:
             last_err = f"CALL 异常: {e}"
             continue
         if not raw or raw == "NOTFOUND":
-            last_err = f"NPC '{npc_name}' 消失"
+            last_err = f"候选{ci} id={nid} 消失"
             continue
         parts = raw.split("|")
         ok = parts[0] == "true"
@@ -226,7 +211,7 @@ _G.__out = tostring(ok) .. "|" .. tostring(v.名称)"""
         dialog = get_dialog_text(gateway)
         reject_words = ("不认识", "不认", "不是", "找我", "凭什么", "你是谁", "走开", "别来")
         if dialog and any(w in dialog for w in reject_words):
-            last_err = f"候选{ci} ({nx},{ny}) 对话含拒绝语: {dialog[:40]}"
+            last_err = f"候选{ci} ({cand.get('x')},{cand.get('y')}) 对话含拒绝语: {dialog[:40]}"
             if verbose:
                 logger.warning(f"SYBUZ2: {last_err}，换下一个候选")
             # 关闭拒绝对话（右键空白/ESC），避免遮挡后续 CALL
@@ -239,8 +224,9 @@ _G.__out = tostring(ok) .. "|" .. tostring(v.名称)"""
             continue
 
         if ok:
-            return ok, f"NPC={parts[1] if len(parts) > 1 else npc_name} CALL事件开始 ok={ok} 候选{ci} ({nx},{ny})"
-        last_err = f"候选{ci} ({nx},{ny}) CALL 返回 false"
+            return ok, f"NPC={parts[1] if len(parts) > 1 else npc_name} CALL事件开始 ok={ok} 候选{ci} id={nid}"
+
+        last_err = f"候选{ci} id={nid} CALL 返回 false"
 
     return False, f"全部 {len(all_cands)} 个同名 NPC 均失败（最后: {last_err}）"
 
@@ -412,7 +398,7 @@ def SYBUZ2(
         return {"ok": False, "message": f"SYHS 调用异常: {e}", "steps": steps,
                 "elapsed_ms": round((time.time() - t0) * 1000, 1)}
 
-    # ---- 2) 按名称搜 NPC → 微调瞬移到 NPC 格子 → CALL 事件开始（★核心突破）----
+    # ---- 2) 按名称搜 NPC → 在任务坐标上 CALL 事件开始（★核心突破，不瞬移）----
     npc_ok, npc_info = call_npc_event_start(gateway, npc_name, target_coord=(gx, gy),
                                             target_location=target_location, verbose=verbose)
     steps["call_npc"] = {"ok": npc_ok, "info": npc_info}
