@@ -249,7 +249,7 @@ _G.__out = tostring(ok) .. "|" .. realname"""
                         realname2 = parts2[1] if len(parts2) > 1 else ""
                         if ok2:
                             # 重试成功：进入战斗词判定
-                            time.sleep(0.5)
+                            time.sleep(0.3)
                             opts = get_dialog_options(gateway)
                             opt_text = " ".join(opts)
                             if any(kw in opt_text for kw in battle_keywords):
@@ -272,7 +272,7 @@ _G.__out = tostring(ok) .. "|" .. realname"""
         # ★★★ 动态判定：等对话栏刷新，看选项文本是否含战斗关键词 ★★★
         # 这是真正的稳定性判定（21:42 实测路径）——
         # CAL 任何 NPC 都可能成功，但只有任务 NPC 会弹"抓归案/对付"等战斗选项。
-        time.sleep(0.5)
+        time.sleep(0.3)
         opts = get_dialog_options(gateway)
         opt_text = " ".join(opts)
         if not any(kw in opt_text for kw in battle_keywords):
@@ -285,7 +285,7 @@ _G.__out = tostring(ok) .. "|" .. realname"""
                 input_controller.right_click(500, 310, click_delay=200)
             except Exception:
                 pass
-            time.sleep(0.5)
+            time.sleep(0.3)
             continue
 
         # 含战斗词 = 任务 NPC
@@ -452,10 +452,13 @@ def SYBUZ2(
                 "elapsed_ms": round((time.time() - t0) * 1000, 1)}
 
     # ---- 1) 瞬移任务点（跨图 0.3s 闪变）----
+    # ★2026-08-24 提速：wait_stable=False——CALL 事件开始是纯 Lua 数据层操作，
+    #   不依赖画面定格；等画面定格(4-5s)纯属浪费。场景人物表在瞬移后 Lua 层即
+    #   已就绪。若 find NPC 为空由 call_npc_event_start 内部 retry 兜底。
     try:
         from tasks.library.SYHS import SYHS
         r = SYHS((gx, gy), target_location=target_location, gateway=gateway,
-                 verbose=verbose, wait_stable=True, stable_timeout=20, stable_min_settle=2.0)
+                 verbose=verbose, wait_stable=False)
         steps["teleport_to_target"] = {
             "ok": r.get("ok"), "coord": (gx, gy),
             "map_switch": (r.get("map_switch") or {}).get("mode"),
@@ -474,8 +477,8 @@ def SYBUZ2(
                                             verbose=verbose)
     steps["call_npc"] = {"ok": npc_ok, "info": npc_info}
     if not npc_ok:
-        # NPC 未找到：等 1.5s 重试（任务 NPC 可能延迟刷新）
-        time.sleep(1.5)
+        # NPC 未找到：等 0.4s 重试（任务 NPC 可能延迟刷新；提速版）
+        time.sleep(0.4)
         npc_ok, npc_info = call_npc_event_start(gateway, npc_name, target_coord=(gx, gy),
                                                 target_location=target_location, npc_model=npc_model,
                                                 verbose=verbose)
@@ -488,7 +491,7 @@ def SYBUZ2(
                 "elapsed_ms": round((time.time() - t0) * 1000, 1)}
 
     # ---- 3) 读选项 → CALL 事件解析 选战斗 ----
-    time.sleep(0.6)  # 等对话栏刷新
+    time.sleep(0.3)  # 等对话栏刷新（提速：0.6s→0.3s，对话在 CALL 返回后已写入）
     opt_ok, opt_info = call_dialog_option(gateway, keyword="抓捕")
     steps["dialog_option"] = {"ok": opt_ok, "info": opt_info}
     if not opt_ok:
@@ -538,8 +541,9 @@ def SYBUZ2(
 def _return_home(gateway: str, home_coord: Tuple[int, int], verbose: bool = False) -> dict:
     try:
         from tasks.library.SYHS import SYHS
+        # 提速：wait_stable=False，回城后下一轮任务会重新瞬移，无需定格等待
         rb = SYHS(home_coord, target_location="长安", gateway=gateway,
-                  verbose=verbose, wait_stable=True, stable_timeout=20, stable_min_settle=2.0)
+                  verbose=verbose, wait_stable=False)
         return {"ok": rb.get("ok"), "message": rb.get("message")}
     except Exception as e:
         return {"ok": False, "message": str(e)}
