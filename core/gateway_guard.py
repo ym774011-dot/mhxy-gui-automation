@@ -26,6 +26,8 @@ if _APP_ROOT not in sys.path:
     sys.path.insert(0, _APP_ROOT)
 
 GATEWAY_HOST = "127.0.0.1"
+# 2026-08-25：端口改为运行时按组解析（组1=18082，组2=18083...）。
+# 旧模块常量 GATEWAY_PORT=18082 保留作 fallback（兼容独立 CLI 调用）。
 GATEWAY_PORT = 18082
 GATEWAY_URL = f"http://{GATEWAY_HOST}:{GATEWAY_PORT}"
 GATEWAY_DIR = r"E:\DS\mhxy-mcp-gateway"
@@ -36,9 +38,26 @@ CREATE_NO_WINDOW = 0x08000000
 _lock = threading.Lock()
 
 
+def _gw_port() -> int:
+    """当前组的网关端口：优先 config/group<N>/settings.json gateway.port，
+    无组配置时回退 18082（兼容 CLI 独立运行）。"""
+    try:
+        from core.group_config import gateway_port
+        p = gateway_port()
+        if p:
+            return int(p)
+    except Exception:
+        pass
+    return GATEWAY_PORT
+
+
+def _gw_url() -> str:
+    return f"http://{GATEWAY_HOST}:{_gw_port()}"
+
+
 def _status(timeout: float = 1.2) -> dict:
     try:
-        req = urllib.request.Request(GATEWAY_URL + "/api/status", timeout=timeout)
+        req = urllib.request.Request(_gw_url() + "/api/status", timeout=timeout)
         with urllib.request.urlopen(req) as resp:
             d = json.loads(resp.read().decode("utf-8", "replace"))
         return d.get("result") or {}
@@ -80,8 +99,10 @@ def _is_game_process(pid: int) -> bool:
         return False
 
 
-def _listener_pid_on_port(port: int = GATEWAY_PORT):
+def _listener_pid_on_port(port: int = None):
     """netstat 找占用端口的监听进程 PID（杀旧网关用）。"""
+    if port is None:
+        port = _gw_port()
     try:
         out = subprocess.check_output(
             f"netstat -ano | findstr :{port}", shell=True).decode("gbk", "ignore")
@@ -95,13 +116,15 @@ def _listener_pid_on_port(port: int = GATEWAY_PORT):
     return None
 
 
-def _graceful_kill(pid: int, port: int = GATEWAY_PORT) -> bool:
+def _graceful_kill(pid: int, port: int = None) -> bool:
     """杀旧网关前先优雅 detach（2026-08-24 铁律）。
 
     强杀正在 frida-attach 的网关 → frida session 非正常中断 → 游戏端 agent
     异常 → **游戏闪退**（20:15/20:24 两次实测）。必须先调 /api/admin/shutdown
     让 gateway 先 session.detach() 再退出，taskkill 仅作兜底。
     """
+    if port is None:
+        port = _gw_port()
     try:
         req = urllib.request.Request(
             f"http://{GATEWAY_HOST}:{port}/api/admin/shutdown",
@@ -123,7 +146,8 @@ def _kill_pid(pid: int) -> bool:
 
 def _spawn(pid) -> bool:
     """拉起网关并 attach 指定 PID（多开场景禁止 --auto，避免 attach 错实例）。"""
-    args = [PYW, GATEWAY_PY, str(pid), "--port", str(GATEWAY_PORT)]
+    port = _gw_port()
+    args = [PYW, GATEWAY_PY, str(pid), "--port", str(port)]
     try:
         subprocess.Popen(args, cwd=GATEWAY_DIR, creationflags=CREATE_NO_WINDOW)
         return True

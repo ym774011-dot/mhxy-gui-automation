@@ -39,12 +39,11 @@ def current_group() -> int:
         return 1
 
 
-def gateway_url(group: int = None) -> str:
-    """当前组的网关 URL。
+def gateway_port(group: int = None) -> int:
+    """当前组的网关端口（供 gateway_guard 拉起网关用，与 gateway_url 同源）。
 
     优先级：config/group<N>/settings.json 的 gateway.port > 默认规则
-    （组1=18082，组N=18080+N）。供任务库（JHRW1/SYBUZ2 等）读取，
-    替代硬编码 DEFAULT_GATEWAY。
+    （组1=18082，组N=18080+N）。
     """
     g = current_group() if group is None else group
     port = _default_port(g)
@@ -53,7 +52,17 @@ def gateway_url(group: int = None) -> str:
         port = int((cfg.get("gateway") or {}).get("port", port))
     except Exception:
         pass
-    return f"http://127.0.0.1:{port}"
+    return port
+
+
+def gateway_url(group: int = None) -> str:
+    """当前组的网关 URL。
+
+    优先级：config/group<N>/settings.json 的 gateway.port > 默认规则
+    （组1=18082，组N=18080+N）。供任务库（JHRW1/SYBUZ2 等）读取，
+    替代硬编码 DEFAULT_GATEWAY。
+    """
+    return f"http://127.0.0.1:{gateway_port(group)}"
 
 
 def load_group_config(group: int) -> dict:
