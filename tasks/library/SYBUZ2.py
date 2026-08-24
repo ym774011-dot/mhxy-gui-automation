@@ -133,36 +133,26 @@ _G.__out = table.concat(out, ";")"""
 
 
 def find_npcs_by_name(gateway: str, npc_name: str, npc_model: str = "") -> List[dict]:
-    """返回任务 NPC 候选列表（[{id,x,y,model},...]）。
+    """返回名称匹配的 NPC 候选列表（[{id,x,y,model},...]）。
 
-    ★2026-08-24 多开同名修复（实测关键结论）：NPC 对象的「名称」是**动态任务标签**——
-      任务上下文切到本任务时叫"江湖大盗"，切走时叫真实单位名（"御林军左统领"
-      "超级福利怪"等）。「模型」字段是**静态模板标识**（如"护卫"）——
-      任务追踪栏 NPC 类型名(JHRW1.npc) 与「模型」一致。
+    ★2026-08-24 v4 定论：**只用名称过滤，不再过滤模型**——
+      不同地图的江湖大盗 NPC 模型不同（建邺城=护卫，东海湾/江南野外
+      可能是其他，巫医/御林军示例证实混淆），硬按 npc_model 过滤会
+      漏掉真候选；任务上下文的元表代理让 `t.名称` 返回"江湖大盗"，
+      但 CALL 时 v.名称 返回真实名（"超级巫医"/"御林军左统领"/"护卫"等）。
 
-    匹配策略（按可靠性排序）：
-      1. npc_model 非空 → 按「模型」精确过滤（名称只做辅助记录，不参与过滤）
-      2. npc_model 为空 → 退回按名称过滤（兼容旧调用）
+    真假由 call_npc_event_start 的"对话含战斗词"动态判定，本函数
+    只负责尽可能多地圈出"可能是任务 NPC"的候选。
 
-    ★id 是数字 key（tp.场景.场景人物 的 key 为 number:1,2,3...），保留数字供 CALL 精确索引。
+    ★id 是数字 key（tp.场景.场景人物 的 key 为 number:1,2,3...），
+      保留数字供 CALL 精确索引。
     """
-    if npc_model:
-        # 模型优先：名称动态，模型静态
-        code = f"""
-local out = {{}}
-for id,u in pairs(tp.场景.场景人物 or {{}}) do
-  if type(u)=="table" and tostring(u.模型 or "")=="{npc_model}" then
-    out[#out+1] = string.format("%s|%s|%s|%s", tostring(id), tostring(u.格子x or ""), tostring(u.格子y or ""), tostring(u.名称 or ""))
-  end
-end
-_G.__out = table.concat(out, ";")"""
-    else:
-        # 名称兜底
-        code = f"""
+    code = f"""
 local out = {{}}
 for id,u in pairs(tp.场景.场景人物 or {{}}) do
   if type(u)=="table" and tostring(u.名称 or "")=="{npc_name}" then
-    out[#out+1] = string.format("%s|%s|%s|%s", tostring(id), tostring(u.格子x or ""), tostring(u.格子y or ""), tostring(u.模型 or ""))
+    out[#out+1] = string.format("%s|%s|%s|%s", tostring(id),
+      tostring(u.格子x or ""), tostring(u.格子y or ""), tostring(u.模型 or ""))
   end
 end
 _G.__out = table.concat(out, ";")"""
@@ -198,12 +188,8 @@ def call_npc_event_start(gateway: str, npc_name: str, target_coord=None, target_
         对应 NPC 对象的「模型」字段。为空则只按名称过滤。
     :return: (ok, 详情)
     """
-    # ---- 全部候选（按名称 + 模型过滤），按离任务坐标曼哈顿距离升序 ----
-    all_cands = find_npcs_by_name(gateway, npc_name, npc_model=npc_model)
-    if not all_cands:
-        # 模型过滤后无候选：可能是 npc_model 不匹配（任务阶段 NPC 名变化），
-        # 退回只按名称过滤（保留 CALL 后 v.名称 校验兜底）
-        all_cands = find_npcs_by_name(gateway, npc_name)
+# ---- 全部候选（只按名称），按离任务坐标曼哈顿距离升序 ----
+    all_cands = find_npcs_by_name(gateway, npc_name)
     if not all_cands:
         return False, f"未找到 NPC '{npc_name}'（可能未刷新/不在此图）"
     if target_coord is not None:
@@ -213,24 +199,25 @@ def call_npc_event_start(gateway: str, npc_name: str, target_coord=None, target_
         except (ValueError, TypeError, IndexError):
             pass
 
+    # ★2026-08-24 v4：动态判定——CALL 后看对话框选项含战斗词才认，否就关掉换下一个
+    battle_keywords = ("抓归案", "抓捕", "对付", "教训", "击杀", "杀死", "击败")
     last_err = "未知"
     for ci, cand in enumerate(all_cands):
         nid = cand.get("id")
         if not nid:
             continue
-        # ---- CALL 事件开始：用候选 id 精确索引，不走 pairs 遍历 ----
+        # ---- CALL 事件开始：用候选 id 精确索引 ----
         code = f"""
 local v = tp.场景.场景人物[tonumber({nid})]
 if not v or type(v) ~= "table" then _G.__out = "NOTFOUND"; return end
 local mt = getmetatable(v)
 local ok, ret = pcall(mt.__index.事件开始, v)
--- ★任务 NPC 校验: 事件开始后再读 v.名称，捕获任务上下文标签
 local realname = tostring(v.名称 or "")
 _G.__out = tostring(ok) .. "|" .. realname"""
         try:
             raw = _lua(gateway, code)
         except Exception as e:
-            last_err = f"CALL 异常: {e}"
+            last_err = f"候选{ci} id={nid} CALL 异常: {e}"
             continue
         if not raw or raw == "NOTFOUND":
             last_err = f"候选{ci} id={nid} 消失"
@@ -239,18 +226,21 @@ _G.__out = tostring(ok) .. "|" .. realname"""
         ok = parts[0] == "true"
         realname = parts[1] if len(parts) > 1 else ""
 
-        # ★2026-08-24 v3：去掉 v.名称 严格等于 npc_name 的硬拒绝（任务上下文动态切
-        # 切换中误杀），只 CALL 不判定真假。判定交给主流程 call_dialog_option
-        # 看对话框含"抓归案/对付"等战斗词即可（21:42 实测这才是稳定路径）。
+        if not ok:
+            last_err = f"候选{ci} id={nid} CALL 返回 false"
+            continue
 
-        # ---- 拒绝语校验（兜底）：等对话栏刷新，看是否"不认识你" ----
-        time.sleep(0.4)
-        dialog = get_dialog_text(gateway)
-        reject_words = ("不认识", "不认", "不是", "找我", "凭什么", "你是谁", "走开", "别来")
-        if dialog and any(w in dialog for w in reject_words):
-            last_err = f"候选{ci} id={nid} 对话含拒绝语: {dialog[:40]}"
+        # ★★★ 动态判定：等对话栏刷新，看选项文本是否含战斗关键词 ★★★
+        # 这是真正的稳定性判定（21:42 实测路径）——
+        # CAL 任何 NPC 都可能成功，但只有任务 NPC 会弹"抓归案/对付"等战斗选项。
+        time.sleep(0.5)
+        opts = get_dialog_options(gateway)
+        opt_text = " ".join(opts)
+        if not any(kw in opt_text for kw in battle_keywords):
+            # 不是任务 NPC（CALL 到了巫医/路人等）——关闭对话换下一个
+            last_err = f"候选{ci} id={nid} 实际={realname} 对话无战斗词, 关掉换下一个"
             if verbose:
-                logger.warning(f"SYBUZ2: {last_err}，换下一个候选")
+                logger.warning(f"SYBUZ2: {last_err}, opts={opts}")
             try:
                 from core.input_controller import input_controller
                 input_controller.right_click(500, 310, click_delay=200)
@@ -259,12 +249,10 @@ _G.__out = tostring(ok) .. "|" .. realname"""
             time.sleep(0.5)
             continue
 
-        if ok:
-            return ok, f"NPC={realname} CALL事件开始 ok={ok} 候选{ci} id={nid}"
+        # 含战斗词 = 任务 NPC
+        return ok, f"NPC={realname} CALL事件开始 ok={ok} 候选{ci} id={nid} 对话含战斗词"
 
-        last_err = f"候选{ci} id={nid} CALL 返回 false"
-
-    return False, f"全部 {len(all_cands)} 个候选 CALL 均失败（最后: {last_err}）"
+    return False, f"全部 {len(all_cands)} 个候选 CALL 后对话均无战斗词（最后: {last_err}）"
 
 
 def get_dialog_text(gateway: str) -> str:
