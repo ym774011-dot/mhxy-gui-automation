@@ -2385,7 +2385,7 @@
         },
         {
           "id": "15d0e911-c1e1-4360-bedc-4dc390a74cd6",
-          "name": "鼠标点击 2",
+          "name": "获取任务",
           "event_type": "click",
           "params": {
             "x": 266,
@@ -2406,6 +2406,30 @@
           "retry_interval": 1.0,
           "enabled": true,
           "var_name": "鼠标点击2"
+        },
+        {
+          "id": "ac999296-8014-4f1a-b847-c88049cfbd80",
+          "name": "关闭对话框",
+          "event_type": "click",
+          "params": {
+            "x": 550,
+            "y": 85,
+            "button": "right",
+            "background": true,
+            "press_delay": 0.1,
+            "verify": true,
+            "probe_x": 550,
+            "probe_y": 85,
+            "verify_retries": 3,
+            "verify_threshold": 30
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "鼠标点击10"
         },
         {
           "id": "344339cd-ac31-4655-ab6b-283b1eef142a",
@@ -2682,7 +2706,7 @@
       "loop_count": 0,
       "loop_delay": 0.5,
       "created_at": "2026-08-20 22:35:57",
-      "updated_at": "2026-08-23 23:30:07"
+      "updated_at": "2026-08-24 22:27:43"
     }
   ],
   "current_task_index": 0,
