@@ -81,8 +81,60 @@ def _lua_expr(gateway: str, expr: str) -> str:
     return r.get("result", {}).get("value") or ""
 
 
-def find_npc_by_name(gateway: str, npc_name: str) -> Optional[dict]:
-    """在 tp.场景.场景人物 按名称搜索 NPC，返回 {id, 格子x, 格子y, 名称} 或 None."""
+def find_npc_by_name(gateway: str, npc_name: str, target_coord=None) -> Optional[dict]:
+    """在 tp.场景.场景人物 按名称搜索 NPC，返回 {id, 格子x, 格子y, 名称} 或 None.
+
+    ★2026-08-24 多开同名修复：同一场景可能同时存在多个同名 NPC（不同玩家任务
+      实例各自刷一个，如多个"江湖大盗"）。返回**全部候选**中离 target_coord
+      最近的一个——自己的任务 NPC 一定在任务追踪栏坐标附近（1~3 格），
+      别人的在更远坐标。无 target_coord 时返回第一个匹配。
+    """
+    code = f"""
+local out = {{}}
+for id,u in pairs(tp.场景.场景人物 or {{}}) do
+  if type(u)=="table" and tostring(u.名称 or "")=="{npc_name}" then
+    local gx = tonumber(u.格子x or -1) or -1
+    local gy = tonumber(u.格子y or -1) or -1
+    out[#out+1] = string.format("%s|%s|%s|%s", id, gx, gy, gx*1000+gy)
+  end
+end
+-- 按格子坐标排序（稳定输出，pairs 顺序不定会导致抓错同名 NPC）
+table.sort(out, function(a,b)
+  local _,_,_,sa = string.find(a, "|%d+|%d+|(%d+)$")
+  local _,_,_,sb = string.find(b, "|%d+|%d+|(%d+)$")
+  return (sa or "0") < (sb or "0")
+end)
+_G.__out = table.concat(out, ";")"""
+    try:
+        raw = _lua(gateway, code)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    cands = []
+    for entry in raw.split(";"):
+        if "|" in entry:
+            parts = entry.split("|")
+            if len(parts) >= 3:
+                try:
+                    cands.append({"id": parts[0], "x": parts[1], "y": parts[2]})
+                except Exception:
+                    pass
+    if not cands:
+        return None
+    # 按与 target_coord 的曼哈顿距离升序选最近
+    if target_coord is not None:
+        try:
+            tx, ty = int(target_coord[0]), int(target_coord[1])
+            cands.sort(key=lambda c: (abs(int(c["x"]) - tx) + abs(int(c["y"]) - ty), c["id"]))
+        except (ValueError, TypeError, IndexError):
+            pass
+    return cands[0]
+
+
+def find_npcs_by_name(gateway: str, npc_name: str) -> List[dict]:
+    """返回全部同名 NPC 候选列表（[{id,x,y},...]），供逐个 CALL 排除"不认识你"。
+    ★2026-08-24：多开场景下同名 NPC 分属不同玩家任务实例，需逐个尝试。"""
     code = f"""
 local out = {{}}
 for id,u in pairs(tp.场景.场景人物 or {{}}) do
@@ -94,15 +146,14 @@ _G.__out = table.concat(out, ";")"""
     try:
         raw = _lua(gateway, code)
     except Exception:
-        return None
-    if not raw:
-        return None
-    for entry in raw.split(";"):
+        return []
+    cands = []
+    for entry in (raw or "").split(";"):
         if "|" in entry:
             parts = entry.split("|")
-            if len(parts) >= 2:
-                return {"id": parts[0], "x": parts[1], "y": parts[2] if len(parts) > 2 else ""}
-    return None
+            if len(parts) >= 3:
+                cands.append({"id": parts[0], "x": parts[1], "y": parts[2]})
+    return cands
 
 
 def call_npc_event_start(gateway: str, npc_name: str, target_coord=None, target_location=None,
@@ -115,29 +166,42 @@ def call_npc_event_start(gateway: str, npc_name: str, target_coord=None, target_
       故先 find_npc_by_name 拿 NPC 格子，若与当前坐标不一致 → SYHS 同图微调瞬移，
       确保角色坐标 = NPC 格子后再 CALL。
 
+    ★2026-08-24 多开同名修复：同图多个同名 NPC（别人任务的江湖大盗）——
+      先按坐标就近取最近候选；若 CALL 后对话栏出现"不认识你"等拒绝语，
+      说明抓到了别人的任务 NPC → 换下一个候选重试。
+
     :return: (ok, 详情)
     """
-    info = find_npc_by_name(gateway, npc_name)
+    # ---- 第一候选：按坐标就近（自己的任务 NPC 必在目标点附近）----
+    info = find_npc_by_name(gateway, npc_name, target_coord=target_coord)
     if not info:
         return False, f"未找到 NPC '{npc_name}'（可能未刷新/不在此图）"
 
-    # ---- 微调瞬移到 NPC 实际格子（消除"距离太远"）----
-    try:
-        nx, ny = int(info["x"]), int(info["y"])
-        if (target_coord is None or (nx, ny) != tuple(int(v) for v in target_coord)) and nx >= 0 and ny >= 0:
-            from tasks.library.SYHS import SYHS
-            rs = SYHS((nx, ny), target_location=target_location, gateway=gateway,
-                      verbose=verbose, wait_stable=True, stable_timeout=20, stable_min_settle=2.0)
-            if rs.get("ok"):
-                if verbose:
-                    logger.info(f"SYBUZ2: 微调瞬移到 NPC 格子 ({nx},{ny}) 消除距离校验")
-            else:
-                if verbose:
-                    logger.warning(f"SYBUZ2: 微调瞬移失败 ({nx},{ny}): {rs.get('message')}，继续尝试 CALL")
-    except (ValueError, TypeError):
-        pass
+    # 收集全部候选（供拒绝语后换人）
+    all_cands = find_npcs_by_name(gateway, npc_name)
+    if not all_cands:
+        all_cands = [info]
 
-    code = f"""
+    last_err = "未知"
+    for ci, cand in enumerate(all_cands):
+        try:
+            nx, ny = int(cand["x"]), int(cand["y"])
+        except (ValueError, TypeError):
+            continue
+        # ---- 微调瞬移到该候选格子 ----
+        try:
+            if (target_coord is None or (nx, ny) != tuple(int(v) for v in target_coord)) and nx >= 0 and ny >= 0:
+                from tasks.library.SYHS import SYHS
+                rs = SYHS((nx, ny), target_location=target_location, gateway=gateway,
+                          verbose=verbose, wait_stable=True, stable_timeout=20, stable_min_settle=2.0)
+                if verbose:
+                    logger.info(f"SYBUZ2: 候选{ci} 微调瞬移到 ({nx},{ny}) rs_ok={rs.get('ok')}")
+        except Exception as e:
+            if verbose:
+                logger.warning(f"SYBUZ2: 候选{ci} 微调瞬移异常 {e}，继续尝试 CALL")
+
+        # ---- CALL 事件开始 ----
+        code = f"""
 local v = nil
 for id,u in pairs(tp.场景.场景人物 or {{}}) do
   if type(u)=="table" and tostring(u.名称 or "")=="{npc_name}" then v = u break end
@@ -146,15 +210,67 @@ if not v then _G.__out = "NOTFOUND"; return end
 local mt = getmetatable(v)
 local ok, ret = pcall(mt.__index.事件开始, v)
 _G.__out = tostring(ok) .. "|" .. tostring(v.名称)"""
+        try:
+            raw = _lua(gateway, code)
+        except Exception as e:
+            last_err = f"CALL 异常: {e}"
+            continue
+        if not raw or raw == "NOTFOUND":
+            last_err = f"NPC '{npc_name}' 消失"
+            continue
+        parts = raw.split("|")
+        ok = parts[0] == "true"
+
+        # ---- 拒绝语校验：等对话栏刷新，看是否"不认识你" ----
+        time.sleep(0.4)
+        dialog = get_dialog_text(gateway)
+        reject_words = ("不认识", "不认", "不是", "找我", "凭什么", "你是谁", "走开", "别来")
+        if dialog and any(w in dialog for w in reject_words):
+            last_err = f"候选{ci} ({nx},{ny}) 对话含拒绝语: {dialog[:40]}"
+            if verbose:
+                logger.warning(f"SYBUZ2: {last_err}，换下一个候选")
+            # 关闭拒绝对话（右键空白/ESC），避免遮挡后续 CALL
+            try:
+                from core.input_controller import input_controller
+                input_controller.right_click(500, 310, click_delay=200)
+            except Exception:
+                pass
+            time.sleep(0.5)
+            continue
+
+        if ok:
+            return ok, f"NPC={parts[1] if len(parts) > 1 else npc_name} CALL事件开始 ok={ok} 候选{ci} ({nx},{ny})"
+        last_err = f"候选{ci} ({nx},{ny}) CALL 返回 false"
+
+    return False, f"全部 {len(all_cands)} 个同名 NPC 均失败（最后: {last_err}）"
+
+
+def get_dialog_text(gateway: str) -> str:
+    """读对话栏当前文本（NPC 说的话），用于拒绝语校验。"""
+    code = """local out = {}
+local t = tp.窗口.对话栏.记录文本 or {}
+for k,v in pairs(t) do
+  if type(v)=="table" then
+    for kk,vv in pairs(v) do
+      if type(vv)=="string" and #vv > 0 then out[#out+1] = vv end
+    end
+  elseif type(v)=="string" and #v > 0 then
+    out[#out+1] = v
+  end
+end
+if #out == 0 then
+  -- 兜底: 选项基本内容（NPC 台词常在选项区上方）
+  local o = tp.窗口.对话栏.选项 or {}
+  for k,v in pairs(o) do
+    if type(v)=="table" then out[#out+1] = tostring(v.基本内容 or "") end
+  end
+end
+_G.__out = table.concat(out, "|")"""
     try:
         raw = _lua(gateway, code)
-    except Exception as e:
-        return False, f"CALL 异常: {e}"
-    if not raw or raw == "NOTFOUND":
-        return False, f"NPC '{npc_name}' 消失（战斗后刷新或任务未到阶段）"
-    parts = raw.split("|")
-    ok = parts[0] == "true"
-    return ok, f"NPC={parts[1] if len(parts) > 1 else npc_name} CALL事件开始 ok={ok}"
+    except Exception:
+        return ""
+    return raw or ""
 
 
 def get_dialog_options(gateway: str) -> List[str]:
