@@ -26,6 +26,25 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #   类型 "json_len" → 参数 = 最小 entries 数
 #   类型 "json_no"  → 参数 = 不允许存在的 hash 前缀
 CHECKS = [
+    # 0. 瞬移/任务 Lua 函数包（2026-08-20 新增）
+    ("瞬移函数包: SYHS.py 存在", "tasks/library/SYHS.py", "regex",
+     (r"def SYHS\(", False)),
+    ("瞬移函数包: SYHS 调用网关 teleport", "tasks/library/SYHS.py", "regex",
+     (r"/api/act/teleport", False)),
+    ("瞬移函数包: SYHS 画面定格检测存在", "tasks/library/SYHS.py", "regex",
+     (r"def _wait_scene_stable", False)),
+    ("瞬移函数包: SYHS 瞬移后等定格", "tasks/library/SYHS.py", "regex",
+     (r"wait_stable", False)),
+    ("回长安函数包: HCA.py 存在", "tasks/library/HCA.py", "regex",
+     (r"def HCA\(", False)),
+    ("回长安函数包: HCA 复用 SYHS", "tasks/library/HCA.py", "regex",
+     (r"from SYHS import SYHS", False)),
+    ("回长安函数包: HCA 目标长安", "tasks/library/HCA.py", "regex",
+     (r"target_location=\"长安\"", False)),
+    ("任务Lua直读: JHRW1.py 存在", "tasks/library/JHRW1.py", "regex",
+     (r"def JHRW1\(", False)),
+    ("任务Lua直读: JHRW1 读任务追踪栏", "tasks/library/JHRW1.py", "regex",
+     (r"任务追踪栏", False)),
     # 1. 窗口绑定升级（列表式 WindowSelectorDialog）
     ("窗口绑定: window_selector.py 存在", "gui/window_selector.py", "regex", (r".+", False)),
     ("窗口绑定: main_window 调用 WindowSelectorDialog", "gui/main_window.py", "regex", (r"WindowSelectorDialog", False)),
@@ -122,6 +141,25 @@ CHECKS = [
     # 部分 UI 需 hover 状态才可点，如传送菜单项）
     ("后台化: 点击前先发 WM_MOUSEMOVE", "core/input_controller.py", "regex",
      (r"WM_MOUSEMOVE, 0, lparam\)", False)),
+    # 2026-08-18 点击前确认上一次点击完成（用户方案：SendMessageTimeout WM_NULL
+    # 同步探针，确认队列排空再发下一个点击，防状态串扰）
+    ("后台化: 点击前确认上一次完成", "core/input_controller.py", "regex",
+     (r"_wait_prev_click_done", False)),
+    # 2026-08-18 点击像素验证：点击前后对比验证点颜色，未变则重试
+    ("点击验证: click_verified 存在", "core/input_controller.py", "regex",
+     (r"def click_verified", False)),
+    ("点击验证: 取色 probe 存在", "core/input_controller.py", "regex",
+     (r"def _probe_color", False)),
+    # 2026-08-18 GUI 事件编辑器接入点击验证
+    # 2026-08-18 GUI 事件编辑器接入点击验证（页面入口在 event_editor.py，
+    # 注意 param_pages.py 里的 ClickParamPage 是死代码，重构遗留）
+    ("点击验证: GUI 编辑器有验证组", "gui/event_editor.py", "regex",
+     (r"_click_verify_check", False)),
+    # 2026-08-18 验证失败重试加 1~2 像素随机偏移（用户方案，防卡同像素点）
+    ("点击验证: 重试带随机偏移", "core/input_controller.py", "regex",
+     (r"random\.choice\(\(-2, -1, 1, 2\)\)", False)),
+    ("点击验证: 引擎执行 click_verified", "core/task_engine.py", "regex",
+     (r"input_controller\.click_verified\(", False)),
     # 2026-08-05 ALT 组合键修复：伴随 ALT 的 SYSKEYDOWN lparam 必须带 bit29(0x20000000)
     ("后台化: SYSKEYDOWN 带 Alt bit29", "core/input_controller.py", "regex",
      (r"0x20000000", False)),

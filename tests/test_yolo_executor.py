@@ -74,7 +74,9 @@ def test_yolo_record_returns_detections(monkeypatch):
     dets = [{"class": "npc", "confidence": 0.8, "center": (10, 20)}]
     _install_yolo(monkeypatch, dets)
 
-    ok, result = eng._execute_yolo_detect({"action": "record"})
+    # 2026-08-23 起：target_class 空且非 near_mode → 直接模板降级（不触发推理），
+    # 故 record 用例显式传 target_class 以验证"真推理 record"分支。
+    ok, result = eng._execute_yolo_detect({"action": "record", "target_class": "npc"})
     assert ok is True
     assert result["method"] == "yolo"
     assert result["targets"] == dets

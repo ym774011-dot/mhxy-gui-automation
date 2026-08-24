@@ -41,7 +41,11 @@ class YoloMixin:
 
         params 结构：
             {"template_path": "", "threshold": 0.8,
-             "action": "click"/"wait"/"record", "region": [x,y,w,h]}
+             "action": "click"/"wait"/"record", "region": [x,y,w,h],
+             "near_mode": false,          # ★2026-08-23: true=三级ROI(角色为中心,近距离优先)
+             "target_class": "",          # near_mode 时配合类别过滤
+             "near_radius": 250, "mid_radius": 450,
+             "conf_near": 0.7, "conf_mid": 0.55, "conf_far": 0.4}
 
         action 行为：
             - click：找到后点击目标中心
@@ -51,14 +55,26 @@ class YoloMixin:
         :param params: 事件参数
         :return: (success, result)
         """
-        # 尝试使用YOLO模型推理
-        # _get_yolo_detector 定义于主模块 core/task_engine.py（延迟导入单例）。
-        # 必须运行时局部导入：① task_engine 是父模块，模块级导入会循环；
-        # ② 测试通过 patch task_engine._get_yolo_detector 注入 fake，运行时取模块属性才能生效
-        #    （与 click_mixin._do_click 取 input_controller 的模式一致）。
         from core.task_engine import _get_yolo_detector
         yolo = _get_yolo_detector()
-        if yolo is not None and hasattr(yolo, 'model') and yolo.model is not None:
+
+        # ★2026-08-23 优化: 目标类别空 AND 未勾选近距模式 → 跳过 YOLO 推理
+        #   直接走模板匹配（用户明确"关闭" YOLO 时，省 0.5-1s 模型加载/推理开销）
+        target_class = str(params.get("target_class", "") or "").strip()
+        near_mode = bool(params.get("near_mode", False))
+        if not target_class and not near_mode:
+            return self._execute_yolo_fallback(params)
+
+        # 首次触发自动加载（GUI 进程里单例不会主动 load_model）
+        if yolo is not None and yolo.model is None:
+            try:
+                if yolo.load_model():
+                    logger.info("YOLO 模型已加载（首次触发）")
+                else:
+                    logger.warning("YOLO 模型加载失败，将降级为模板匹配")
+            except Exception as e:
+                logger.error(f"YOLO 模型加载异常: {e}")
+        if yolo is not None and yolo.model is not None:
             try:
                 # 延迟导入 screen_capture
                 from core.screen_capture import screen_capture
@@ -69,7 +85,23 @@ class YoloMixin:
                 if screenshot is not None:
                     # YOLO推理
                     logger.info("YOLO模型推理中...")
-                    results = yolo.detect(screenshot)
+                    near_mode = bool(params.get("near_mode", False))
+                    if near_mode and hasattr(yolo, "detect_near_target"):
+                        # ★三级 ROI：角色（屏幕中心）附近优先，逐级扩大保证识别到
+                        target_class = str(params.get("target_class", "") or "").strip() or None
+                        results = yolo.detect_near_target(
+                            target_class=target_class,
+                            confidence=(params.get("conf_near", 0.7),
+                                        params.get("conf_mid", 0.55),
+                                        params.get("conf_far", 0.4)),
+                            radii=(params.get("near_radius", 250),
+                                   params.get("mid_radius", 450)),
+                        )
+                        if results:
+                            logger.info(f"YOLO 三级ROI命中 {len(results)} 个目标"
+                                        f"(class={target_class or '任意'})")
+                    else:
+                        results = yolo.detect(screenshot)
 
                     if results:
                         # 真推理成功：按配置 action（click/wait/record）执行，
@@ -176,7 +208,7 @@ class YoloMixin:
             click_on_found = bool(params.get("click_on_found", False))
             deadline = time.time() + timeout
             while time.time() < deadline:
-                if self.should_stop:
+                if self.should_stop.is_set():
                     return False, "任务被停止"
                 shot = screen_capture.capture()
                 cur = yolo.detect(shot) if shot is not None else []

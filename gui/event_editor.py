@@ -37,6 +37,19 @@ import os
 from typing import List, Optional
 from config.config import config  # 地图坐标文件单一事实来源
 
+# YOLO 目标类别：中文标签 → 模型英文类别名（models/active.pt 的 8 类）
+# 2026-08-23: GUI 下拉显示中文，data/存储用英文；自定义输入中文时反向映射
+_YOLO_CLASS_EN_MAP = {
+    "NPC": "NPC",
+    "怪物": "monster",
+    "敌人": "enemy",
+    "玩家": "player",
+    "首领": "boss",
+    "宝箱": "chest",
+    "道具": "item",
+    "门": "door",
+}
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -295,6 +308,49 @@ class EventEditorDialog(QDialog):
         )
         form.addRow("按下延迟(ms)：", self._click_press_delay_spin)
 
+        # —— 点击验证（2026-08-18 像素颜色对比确认点击生效）——
+        form.addRow(QLabel(""))
+        verify_group = QGroupBox("点击验证（颜色对比确认生效）")
+        verify_layout = QFormLayout(verify_group)
+
+        self._click_verify_check = QCheckBox(
+            "启用验证：点击后验证点颜色变化才算成功，未变自动重试"
+        )
+        verify_layout.addRow("", self._click_verify_check)
+
+        probe_row = QHBoxLayout()
+        self._click_probe_x_edit = QLineEdit()
+        self._click_probe_x_edit.setPlaceholderText("验证点 X（整数或 ${变量}）")
+        probe_row.addWidget(self._click_probe_x_edit, 1)
+        self._click_probe_y_edit = QLineEdit()
+        self._click_probe_y_edit.setPlaceholderText("验证点 Y（整数或 ${变量}）")
+        probe_row.addWidget(self._click_probe_y_edit, 1)
+        self._click_probe_fill_btn = QPushButton("=点击点")
+        self._click_probe_fill_btn.setToolTip("验证点设为点击点坐标（仅调试用）")
+        self._click_probe_fill_btn.clicked.connect(self._fill_probe_from_click)
+        probe_row.addWidget(self._click_probe_fill_btn)
+        verify_layout.addRow("验证点：", probe_row)
+
+        self._click_verify_retries_spin = QSpinBox()
+        self._click_verify_retries_spin.setRange(0, 10)
+        self._click_verify_retries_spin.setValue(3)
+        verify_layout.addRow("失败重试次数：", self._click_verify_retries_spin)
+
+        self._click_verify_threshold_spin = QSpinBox()
+        self._click_verify_threshold_spin.setRange(1, 441)
+        self._click_verify_threshold_spin.setValue(30)
+        verify_layout.addRow("颜色变化阈值：", self._click_verify_threshold_spin)
+
+        verify_hint = QLabel(
+            "验证点应选「点击后颜色会持久变化」的位置（弹出的对话框 / NPC 气泡 /\n"
+            "按钮高亮区）。不要用点击点本身：按下会高亮、释放后恢复原色，会误判。"
+        )
+        verify_hint.setStyleSheet("color: #666; font-size: 10px;")
+        verify_hint.setWordWrap(True)
+        verify_layout.addRow("", verify_hint)
+
+        form.addRow(verify_group)
+
         # —— 承接参数：列出前序函数调用事件 ——
         form.addRow(QLabel(""))
         inherit_group = QGroupBox("承接参数（从前序函数调用结果中取值）")
@@ -509,6 +565,12 @@ class EventEditorDialog(QDialog):
         var_name = src.var_name if src.var_name else src.name.replace(" ", "").replace("_", "")
         self._click_x_edit.setText(f"${{{var_name}.target_coord.0}}")
         self._click_y_edit.setText(f"${{{var_name}.target_coord.1}}")
+
+    def _fill_probe_from_click(self) -> None:
+        """验证点 = 点击点（复制 X/Y 输入框当前值，含 ${变量} 原样拷贝）。"""
+        if hasattr(self, '_click_probe_x_edit') and hasattr(self, '_click_probe_y_edit'):
+            self._click_probe_x_edit.setText(self._click_x_edit.text())
+            self._click_probe_y_edit.setText(self._click_y_edit.text())
 
     # ------------------------------------------------------------------
     # 位置数据容器辅助方法
@@ -1318,6 +1380,82 @@ class EventEditorDialog(QDialog):
         region_container.setLayout(region_row)
         form.addRow("识别区域：", region_container)
 
+        # ---- YOLO 模型增强（2026-08-23 新增）----
+        # 目标类别：可编辑下拉（中文显示、英文 data 存值，匹配 models/active.pt 类别）
+        self._yolo_target_class_combo = QComboBox()
+        self._yolo_target_class_combo.setEditable(True)
+        for _cls, _label in (("", "(不限类别)"), ("NPC", "NPC"), ("monster", "怪物"),
+                             ("enemy", "敌人"), ("player", "玩家"), ("boss", "首领"),
+                             ("chest", "宝箱"), ("item", "道具"), ("door", "门")):
+            self._yolo_target_class_combo.addItem(_label, _cls)
+        self._yolo_target_class_combo.setCurrentIndex(0)
+        self._yolo_target_class_combo.setToolTip(
+            "YOLO 模型类别（models/active.pt 预置 8 类）：\n"
+            "NPC / 怪物(monster) / 敌人(enemy) / 玩家(player) / 首领(boss)\n"
+            "宝箱(chest) / 道具(item) / 门(door)\n"
+            "选「(不限类别)」= 识别所有类别；也可手输自定义类别名"
+        )
+        form.addRow("目标类别：", self._yolo_target_class_combo)
+
+        # 三级 ROI 开关
+        self._yolo_near_mode_check = QCheckBox(
+            "启用（角色为中心，近距优先，逐级扩大保证识别到）"
+        )
+        self._yolo_near_mode_check.setToolTip(
+            "三级 ROI：近(r=near) conf≥conf_near → 中(r=mid) conf≥conf_mid → "
+            "全屏 conf≥conf_far(按距离近优先, 超 max_dist 丢弃除非 conf≥0.8)"
+        )
+        self._yolo_near_mode_check.toggled.connect(self._on_yolo_near_mode_toggled)
+        form.addRow("三级ROI检测：", self._yolo_near_mode_check)
+
+        # 三级参数（near_mode 勾选时启用）
+        self._yolo_near_radius_spin = QSpinBox()
+        self._yolo_near_radius_spin.setRange(50, 5000)
+        self._yolo_near_radius_spin.setValue(250)
+        self._yolo_mid_radius_spin = QSpinBox()
+        self._yolo_mid_radius_spin.setRange(50, 5000)
+        self._yolo_mid_radius_spin.setValue(450)
+
+        radius_row = QHBoxLayout()
+        radius_row.addWidget(QLabel("近半径:"))
+        radius_row.addWidget(self._yolo_near_radius_spin)
+        radius_row.addWidget(QLabel("中半径:"))
+        radius_row.addWidget(self._yolo_mid_radius_spin)
+        radius_row.addStretch(1)
+        radius_container = QWidget()
+        radius_container.setLayout(radius_row)
+        form.addRow("ROI半径(px)：", radius_container)
+
+        conf_row = QHBoxLayout()
+        self._yolo_conf_near_spin = QDoubleSpinBox()
+        self._yolo_conf_near_spin.setRange(0.05, 1.0)
+        self._yolo_conf_near_spin.setSingleStep(0.05)
+        self._yolo_conf_near_spin.setDecimals(2)
+        self._yolo_conf_near_spin.setValue(0.7)
+        self._yolo_conf_mid_spin = QDoubleSpinBox()
+        self._yolo_conf_mid_spin.setRange(0.05, 1.0)
+        self._yolo_conf_mid_spin.setSingleStep(0.05)
+        self._yolo_conf_mid_spin.setDecimals(2)
+        self._yolo_conf_mid_spin.setValue(0.55)
+        self._yolo_conf_far_spin = QDoubleSpinBox()
+        self._yolo_conf_far_spin.setRange(0.05, 1.0)
+        self._yolo_conf_far_spin.setSingleStep(0.05)
+        self._yolo_conf_far_spin.setDecimals(2)
+        self._yolo_conf_far_spin.setValue(0.4)
+        conf_row.addWidget(QLabel("近:"))
+        conf_row.addWidget(self._yolo_conf_near_spin)
+        conf_row.addWidget(QLabel("中:"))
+        conf_row.addWidget(self._yolo_conf_mid_spin)
+        conf_row.addWidget(QLabel("全屏:"))
+        conf_row.addWidget(self._yolo_conf_far_spin)
+        conf_row.addStretch(1)
+        conf_container = QWidget()
+        conf_container.setLayout(conf_row)
+        form.addRow("置信度门槛：", conf_container)
+
+        # 初始联动
+        self._on_yolo_near_mode_toggled(False)
+
         # 模板变量提示（用户也可手动输入 ${变量} 模板）
         var_hint = QLabel(
             "💡 提示：\n"
@@ -1339,6 +1477,14 @@ class EventEditorDialog(QDialog):
         show_click_type = (action == "click")
         self._yolo_button_container.setVisible(show_click_type)
         self._yolo_button_label.setVisible(show_click_type)
+
+    def _on_yolo_near_mode_toggled(self, checked):
+        """三级 ROI 开关联动：勾选时启用半径/置信度控件，未勾选时禁用（避免误改）。"""
+        near_on = self._yolo_near_mode_check.isChecked() if hasattr(self, '_yolo_near_mode_check') else False
+        for w in (self._yolo_near_radius_spin, self._yolo_mid_radius_spin,
+                  self._yolo_conf_near_spin, self._yolo_conf_mid_spin,
+                  self._yolo_conf_far_spin):
+            w.setEnabled(near_on)
 
     def _on_yolo_field_changed(self, index):
         """字段选择变化时显示/隐藏自定义输入框。"""
@@ -2226,6 +2372,13 @@ class EventEditorDialog(QDialog):
         except (TypeError, ValueError):
             press_ms = 50
         self._click_press_delay_spin.setValue(press_ms)
+        # 2026-08-18 点击验证参数（旧事件无 verify 字段 → 默认不验证）
+        if hasattr(self, '_click_verify_check'):
+            self._click_verify_check.setChecked(bool(params.get("verify", False)))
+            self._click_probe_x_edit.setText(str(params.get("probe_x", 0) or 0))
+            self._click_probe_y_edit.setText(str(params.get("probe_y", 0) or 0))
+            self._click_verify_retries_spin.setValue(int(params.get("verify_retries", 3)))
+            self._click_verify_threshold_spin.setValue(int(params.get("verify_threshold", 30)))
 
     def _load_key_params(self, params: dict):
         """加载键盘输入参数到控件。"""
@@ -2444,6 +2597,26 @@ class EventEditorDialog(QDialog):
         self._yolo_region_w_spin.setValue(int(region[2] or 0))
         self._yolo_region_h_spin.setValue(int(region[3] or 0))
 
+        # YOLO 模型增强（2026-08-23）
+        target_class = str(params.get("target_class", "") or "")
+        if target_class:
+            _idx = self._yolo_target_class_combo.findData(target_class)
+            if _idx >= 0:
+                self._yolo_target_class_combo.setCurrentIndex(_idx)
+            else:
+                # 自定义类别（非预置 8 类）：editable 下拉直接放文本
+                self._yolo_target_class_combo.setEditText(target_class)
+        self._yolo_near_mode_check.setChecked(bool(params.get("near_mode", False)))
+        try:
+            self._yolo_near_radius_spin.setValue(int(params.get("near_radius", 250)))
+            self._yolo_mid_radius_spin.setValue(int(params.get("mid_radius", 450)))
+            self._yolo_conf_near_spin.setValue(float(params.get("conf_near", 0.7)))
+            self._yolo_conf_mid_spin.setValue(float(params.get("conf_mid", 0.55)))
+            self._yolo_conf_far_spin.setValue(float(params.get("conf_far", 0.4)))
+        except (TypeError, ValueError):
+            pass
+        self._on_yolo_near_mode_toggled(self._yolo_near_mode_check.isChecked())
+
     def _load_function_params(self, params: dict):
         """加载函数调用参数到控件。"""
         module_name = str(params.get("module", "") or "")
@@ -2656,6 +2829,17 @@ class EventEditorDialog(QDialog):
             "background": self._click_background_check.isChecked(),
             # 按下→弹起延迟（秒），由 GUI 的 ms spin 换算
             "press_delay": self._click_press_delay_spin.value() / 1000.0,
+            # 2026-08-18 点击验证（像素颜色对比确认点击生效）
+            "verify": (self._click_verify_check.isChecked()
+                       if hasattr(self, '_click_verify_check') else False),
+            "probe_x": (_try_int(self._click_probe_x_edit.text().strip())
+                        if hasattr(self, '_click_probe_x_edit') else 0),
+            "probe_y": (_try_int(self._click_probe_y_edit.text().strip())
+                        if hasattr(self, '_click_probe_y_edit') else 0),
+            "verify_retries": (self._click_verify_retries_spin.value()
+                               if hasattr(self, '_click_verify_retries_spin') else 3),
+            "verify_threshold": (self._click_verify_threshold_spin.value()
+                                 if hasattr(self, '_click_verify_threshold_spin') else 30),
         }
         return True
 
@@ -2788,6 +2972,13 @@ class EventEditorDialog(QDialog):
         else:
             tpl_value = ""
 
+        # 目标类别：优先取下拉 data（英文类别名），自定义输入时中文标签反向映射
+        _target_class = self._yolo_target_class_combo.currentData()
+        if not _target_class:
+            _target_class = self._yolo_target_class_combo.currentText().strip()
+            _target_class = _YOLO_CLASS_EN_MAP.get(_target_class, _target_class)
+            if _target_class == "(不限类别)":
+                _target_class = ""
         event.params = {
             "template_path": tpl_value,
             "template_paths": template_paths,  # 始终存列表，引擎层读取
@@ -2800,6 +2991,14 @@ class EventEditorDialog(QDialog):
                 self._yolo_region_w_spin.value(),
                 self._yolo_region_h_spin.value(),
             ],
+            # YOLO 模型增强（2026-08-23）
+            "target_class": _target_class,
+            "near_mode": self._yolo_near_mode_check.isChecked(),
+            "near_radius": self._yolo_near_radius_spin.value(),
+            "mid_radius": self._yolo_mid_radius_spin.value(),
+            "conf_near": self._yolo_conf_near_spin.value(),
+            "conf_mid": self._yolo_conf_mid_spin.value(),
+            "conf_far": self._yolo_conf_far_spin.value(),
         }
         return True
 

@@ -210,3 +210,18 @@
   - gui/event_editor.py: 替换2处print为logger.debug
   - 保留了合理的print位置（logger模块内部、文档示例、示例脚本）
   - 提升了日志系统的规范性和可维护性
+
+---
+
+## 跟踪项（Phase 3 质量门豁免登记）
+
+### Issue VM-EXEMPT · verification_monitor 引擎内重接入（豁免中）
+- **来源**：Phase 3 架构评审门 B1（`docs/architecture/REVIEW.md`）；ADR-0003
+- **状态**：⚠️ 显式豁免（用户 2026-08-24 拍板）—— 当前阶段不自动处理验证码，依赖用户独立 `captcha_monitor.py` 外部监控 + 手动解谜
+- **影响**：引擎内无验证码/防卡死监控，遇验证码弹窗可能卡死/失控
+- **重新启用触发条件（满足任一即须按 ADR-0003 在 Phase 4 重接入）**：
+  1. 某次私服更新后频繁弹验证码，外部 `captcha_monitor.py` 无法稳定覆盖
+  2. 出现验证码未处理导致任务链卡死/失控的生产事故
+  3. 用户决定启用自动防挂机（不再人工介入）
+- **方案**：引擎内轻量探测（image_recognition 模板/状态识别）+ 专用 signal 上报 GUI；与 gateway_guard 解耦；状态用 threading.Event；禁用旧线程类与裸 except（见 ADR-0003）
+- **关联**：CONTROL_CHECKLIST 门禁在 PR 对照

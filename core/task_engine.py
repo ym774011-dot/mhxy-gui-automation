@@ -131,8 +131,8 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         super().__init__()
         # 运行状态标志
         self.is_running: bool = False
-        self.is_paused: bool = False
-        self.should_stop: bool = False
+        self.is_paused: threading.Event = threading.Event()      # set=暂停中
+        self.should_stop: threading.Event = threading.Event()    # set=请求停止
         # 当前执行上下文（供 GUI 查询）
         self.current_task: Optional[Task] = None
         self.current_event: Optional[Event] = None
@@ -178,8 +178,8 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
 
         # 重置状态
         self.is_running = True
-        self.is_paused = False
-        self.should_stop = False
+        self.is_paused.clear()
+        self.should_stop.clear()
         self.current_task = None
         self.current_event = None
         self.current_event_index = 0
@@ -207,16 +207,16 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
 
     def pause(self) -> None:
         """暂停执行（在下一个事件边界生效）。"""
-        if self.is_running and not self.is_paused:
-            self.is_paused = True
+        if self.is_running and not self.is_paused.is_set():
+            self.is_paused.set()
             logger.info("任务引擎已暂停")
             self._emit_status("已暂停")
             self._emit_log("info", "任务已暂停")
 
     def resume(self) -> None:
         """恢复执行。"""
-        if self.is_running and self.is_paused:
-            self.is_paused = False
+        if self.is_running and self.is_paused.is_set():
+            self.is_paused.clear()
             logger.info("任务引擎已恢复")
             self._emit_status("运行中")
             self._emit_log("info", "任务已恢复")
@@ -230,8 +230,8 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         复位运行状态（守护线程不会阻塞主进程，但 is_running 必须复位才能重启）。
         """
         if self.is_running:
-            self.should_stop = True
-            self.is_paused = False  # 解除暂停,让工作线程能跑出去
+            self.should_stop.set()
+            self.is_paused.clear()  # 解除暂停,让工作线程能跑出去
             logger.info("任务引擎请求停止")
             self._emit_status("正在停止")
             self._emit_log("info", "任务请求停止")
@@ -249,12 +249,12 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                         "正在停止）。如旧线程仍在操作，请勿立即重复启动。"
                     )
                     self.is_running = False
-                    self.is_paused = False
+                    self.is_paused.clear()
                     self._emit_status("已停止")
             except Exception as e:
                 logger.warning(f"停止等待线程异常: {e}")
                 self.is_running = False
-                self.is_paused = False
+                self.is_paused.clear()
                 self._emit_status("已停止")
 
     def get_location_container(self) -> LocationDataContainer:
@@ -329,10 +329,10 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             total_tasks = len(task_list)
             while seq_loop_index < seq_loop_count:
                 # 暂停等待：在暂停期间循环 sleep，直到恢复或停止
-                while self.is_paused and not self.should_stop:
+                while self.is_paused.is_set() and not self.should_stop.is_set():
                     time.sleep(0.1)
                 # 停止信号检查
-                if self.should_stop:
+                if self.should_stop.is_set():
                     message = "任务序列已被停止"
                     success = False
                     break
@@ -361,10 +361,10 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                 # 逐个任务执行
                 for task_idx, task in enumerate(task_list):
                     # 暂停等待
-                    while self.is_paused and not self.should_stop:
+                    while self.is_paused.is_set() and not self.should_stop.is_set():
                         time.sleep(0.1)
                     # 停止信号检查
-                    if self.should_stop:
+                    if self.should_stop.is_set():
                         message = "任务序列已被停止"
                         success = False
                         break
@@ -414,7 +414,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         finally:
             # 清理状态
             self.is_running = False
-            self.is_paused = False
+            self.is_paused.clear()
             self.current_task = None
             self.current_event = None
             # 清理位置数据容器
@@ -437,10 +437,10 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
 
         while loop_index < loop_count:
             # 暂停等待：在暂停期间循环 sleep，直到恢复或停止
-            while self.is_paused and not self.should_stop:
+            while self.is_paused.is_set() and not self.should_stop.is_set():
                 time.sleep(0.1)
             # 停止信号检查
-            if self.should_stop:
+            if self.should_stop.is_set():
                 return False, "任务被停止"
 
             self.current_loop = loop_index + 1
@@ -457,11 +457,22 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             # 逐个事件执行
             for event_idx, event in enumerate(task.events):
                 # 暂停等待
-                while self.is_paused and not self.should_stop:
+                while self.is_paused.is_set() and not self.should_stop.is_set():
                     time.sleep(0.1)
                 # 停止信号检查
-                if self.should_stop:
+                if self.should_stop.is_set():
                     return False, "任务被停止"
+                # 验证码弹窗中：事件执行前等待自动解除（引擎联动，2026-08-24）
+                try:
+                    from core.captcha_link import captcha_active, wait_captcha_clear
+                    if captcha_active():
+                        logger.info("验证码弹窗中，暂停任务等待 captcha_monitor 自动解除...")
+                        self._emit_log("info", "验证码弹窗中，暂停等待自动解除")
+                        wait_captcha_clear(timeout=90)
+                        if self.should_stop.is_set():
+                            return False, "任务被停止"
+                except ImportError:
+                    pass
 
                 self.current_event = event
                 self.current_event_index = event_idx
@@ -505,17 +516,33 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         """
         可中断的 sleep：以 0.1 秒为粒度轮询 should_stop / is_paused。
 
+        2026-08-24：验证码联动——轮询期间若验证码弹窗中（captcha_active 标志
+        新鲜），暂停计时并等待 captcha_monitor 自动解完（不点击干扰验证码窗口）。
+        超时未解除则放弃等待继续（避免 monitor 异常时卡死任务）。
+
         :param seconds: 总睡眠秒数
         """
         elapsed = 0.0
         step = 0.1
         while elapsed < seconds:
-            if self.should_stop:
+            if self.should_stop.is_set():
                 return
             # 暂停期间也暂停 loop_delay 计时
-            if self.is_paused:
+            if self.is_paused.is_set():
                 time.sleep(0.1)
                 continue
+            # 验证码弹窗中：暂停任务流等待自动解除（引擎联动，2026-08-24）
+            try:
+                from core.captcha_link import captcha_active
+                if captcha_active():
+                    try:
+                        from core.captcha_link import wait_captcha_clear
+                        wait_captcha_clear(timeout=60)
+                    except Exception:
+                        time.sleep(0.5)
+                    continue  # 解除后重新开始本轮 sleep 计时
+            except ImportError:
+                pass
             time.sleep(min(step, seconds - elapsed))
             elapsed += step
 
@@ -810,7 +837,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         if event.pre_delay and event.pre_delay > 0:
             logger.debug(f"事件 {event.name!r} pre_delay={event.pre_delay}s")
             self._interruptible_sleep(event.pre_delay)
-            if self.should_stop:
+            if self.should_stop.is_set():
                 return False, "任务被停止"
 
         # 分发执行（带重试逻辑）
@@ -823,7 +850,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             #     完成（验证前 emit，避免被验证失败/重试耗尽门控），此处不重复。
 
         # 执行后延迟（即使失败也执行 post_delay，保证节奏一致）
-        if event.post_delay and event.post_delay > 0 and not self.should_stop:
+        if event.post_delay and event.post_delay > 0 and not self.should_stop.is_set():
             logger.debug(f"事件 {event.name!r} post_delay={event.post_delay}s")
             self._interruptible_sleep(event.post_delay)
 
@@ -848,7 +875,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
 
         for attempt in range(1, max_attempts + 1):
             # 停止信号检查
-            if self.should_stop:
+            if self.should_stop.is_set():
                 return False, "任务被停止"
 
             # 2026-08-05 增强：事件执行前打印"开始执行"+参数摘要，
@@ -991,6 +1018,30 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             return False, f"鼠标点击参数非法: {e}"
 
         # 使用统一的 _do_click 方法
+        # 2026-08-18 点击验证：params.verify=true 时用像素颜色对比确认点击生效，
+        # 未变自动重试（GUI 事件编辑器"点击验证"组配置）。双击场景不验证。
+        if params.get("verify") and button in ("left", "right"):
+            try:
+                probe_xy = None
+                try:
+                    probe_xy = (int(params.get("probe_x", 0)), int(params.get("probe_y", 0)))
+                except (TypeError, ValueError):
+                    probe_xy = None
+                ok = input_controller.click_verified(
+                    x, y,
+                    probe_xy=probe_xy,
+                    retries=int(params.get("verify_retries", 3)),
+                    threshold=float(params.get("verify_threshold", 30)),
+                    click_delay=click_delay,
+                    press_delay=press_delay,
+                    button=button,
+                )
+                if ok:
+                    result = f"点击验证成功 ({x},{y}) button={button}"
+                    return True, result
+                return False, f"点击验证失败（重试耗尽）({x},{y})"
+            except Exception as e:
+                logger.exception(f"点击验证执行异常，回退普通点击: {e}")
         success = self._do_click((x, y), button, click_delay, press_delay)
         if success:
             result = f"点击 ({x},{y}) button={button}"
@@ -1206,14 +1257,14 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         # ---- 逐个模板匹配并点击 ----
         matched_results = []
         for tpl_path in template_paths:
-            if self.should_stop:
+            if self.should_stop.is_set():
                 break
 
             pos, conf = None, 0.0
 
             # ---- 识别重试循环 ----
             for attempt in range(1 + recognize_retries):
-                if self.should_stop:
+                if self.should_stop.is_set():
                     break
 
                 try:
@@ -1221,14 +1272,14 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                         timeout = float(params.get("timeout", 10.0))
                         pos, conf = image_recognition.wait_for_template(
                             tpl_path, timeout=timeout, threshold=threshold,
-                            region=region, should_stop_cb=lambda: self.should_stop
+                            region=region, should_stop_cb=lambda: self.should_stop.is_set()
                         )
                     elif action == "wait_disappear":
                         # 等待模板从画面消失（与“等待出现”对偶）
                         timeout = float(params.get("timeout", 10.0))
                         disappeared = image_recognition.wait_for_template_disappear(
                             tpl_path, timeout=timeout, threshold=threshold,
-                            region=region, should_stop_cb=lambda: self.should_stop
+                            region=region, should_stop_cb=lambda: self.should_stop.is_set()
                         )
                         if disappeared:
                             matched_results.append({
@@ -1320,7 +1371,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         need_summary_click = (action == "click") and (batch_click_mode not in ("each_wait", "first"))
         if need_summary_click:
             for match in matched_results:
-                if self.should_stop:
+                if self.should_stop.is_set():
                     break
                 pos = match["pos"]
                 # 执行图像识别匹配点击
@@ -1343,7 +1394,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         # wait / wait_disappear 动作也支持附加点击
         if action in ("wait", "wait_disappear") and additional_click_enabled and matched_results:
             for match in matched_results:
-                if self.should_stop:
+                if self.should_stop.is_set():
                     break
                 # wait 动作：主点击 → click_delay 等游戏反应 → 附加点击
                 if action == "wait" and match.get("pos") is not None:
@@ -1827,7 +1878,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             )
 
             def _should_stop():
-                return self.should_stop or self.is_paused
+                return self.should_stop.is_set() or self.is_paused.is_set()
 
             self._emit_log(
                 "info",
@@ -1979,7 +2030,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             max_attempts = 1 + wait_arrival_retries
         
         for attempt in range(1, max_attempts + 1):
-            if self.should_stop:
+            if self.should_stop.is_set():
                 return False, "任务被停止"
 
             try:
@@ -2024,7 +2075,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                                 # 未到达，检查是否还能重试
                                 if attempt < max_attempts:
                                     # 如果任务被停止，不重试
-                                    if self.should_stop:
+                                    if self.should_stop.is_set():
                                         return True, result
                                     # 检查坐标读取是否可用，避免无意义重试
                                     if not self._check_coord_readable():
@@ -2065,7 +2116,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                             if arrived:
                                 return True, result
                             if attempt < max_attempts:
-                                if self.should_stop:
+                                if self.should_stop.is_set():
                                     return True, result
                                 if not self._check_coord_readable():
                                     logger.error("坐标地址失效，无法等待到达，停止重试")
@@ -2083,7 +2134,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                     if arrived:
                         return True, result
                     if attempt < max_attempts:
-                        if self.should_stop:
+                        if self.should_stop.is_set():
                             return True, result
                         if not self._check_coord_readable():
                             logger.error("坐标地址失效，无法等待到达，停止重试")
@@ -2263,7 +2314,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
 
             executed_results = []
             for branch_event_data in branch_events:
-                if self.should_stop:
+                if self.should_stop.is_set():
                     break
 
                 # 从字典创建事件实例
@@ -2375,14 +2426,14 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         if event.pre_delay and event.pre_delay > 0:
             logger.debug(f"分支事件 {event.name!r} pre_delay={event.pre_delay}s")
             self._interruptible_sleep(event.pre_delay)
-            if self.should_stop:
+            if self.should_stop.is_set():
                 return False, "任务被停止"
 
         # 分发执行（带重试逻辑）
         success, result = self._dispatch_with_retry_and_depth(event, depth)
 
         # 执行后延迟
-        if event.post_delay and event.post_delay > 0 and not self.should_stop:
+        if event.post_delay and event.post_delay > 0 and not self.should_stop.is_set():
             logger.debug(f"分支事件 {event.name!r} post_delay={event.post_delay}s")
             self._interruptible_sleep(event.post_delay)
 
@@ -2408,7 +2459,7 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         last_error = None
 
         for attempt in range(1, max_attempts + 1):
-            if self.should_stop:
+            if self.should_stop.is_set():
                 return False, "任务被停止"
 
             # 2026-08-05 增强：子流程/分支事件也打印"开始执行"，便于

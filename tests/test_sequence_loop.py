@@ -179,7 +179,7 @@ class TestRunSequenceLoop:
             call_count["n"] += 1
             # 第 3 次调用后请求停止
             if call_count["n"] >= 3:
-                engine.should_stop = True
+                engine.should_stop.set()
             return True, "ok"
 
         with patch.object(engine, "_run_task", side_effect=fake_run_task):
@@ -230,7 +230,7 @@ class TestRunSequenceLoop:
             call_count["n"] += 1
             # 第 1 轮完成后设置停止标志
             if call_count["n"] >= 1:
-                engine.should_stop = True
+                engine.should_stop.set()
             return True, "ok"
 
         with patch.object(engine, "_run_task", side_effect=fake_run_task):
@@ -283,10 +283,10 @@ class TestRunSequenceLoop:
             call_count["n"] += 1
             if call_count["n"] >= 1:
                 # 进入暂停状态，模拟外部 stop 在暂停中被调用
-                engine.is_paused = True
+                engine.is_paused.set()
                 # 用小钩子让暂停循环尽快退出：直接置位停止
-                engine.should_stop = True
-                engine.is_paused = False
+                engine.should_stop.set()
+                engine.is_paused.clear()
             return True, "ok"
 
         with patch.object(engine, "_run_task", side_effect=fake_run_task):
@@ -310,6 +310,6 @@ class TestRunSequenceLoop:
             engine._run_sequence(seq)
 
         assert engine.is_running is False
-        assert engine.is_paused is False
+        assert not engine.is_paused.is_set()
         assert engine.current_task is None
         assert engine.current_event is None

@@ -142,7 +142,7 @@ class SwitchMixin:
 
             executed_results = []
             for action_data in actions:
-                if self.should_stop:
+                if self.should_stop.is_set():
                     break
 
                 # 从动作数据创建事件实例

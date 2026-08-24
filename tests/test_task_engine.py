@@ -15,8 +15,8 @@ class TestTaskEngine:
         engine = TaskEngine()
         assert engine.current_task is None
         assert engine.is_running is False
-        assert engine.is_paused is False
-        assert engine.should_stop is False
+        assert not engine.is_paused.is_set()
+        assert not engine.should_stop.is_set()
         assert engine._last_result is None
         assert engine._var_context == {}
 
@@ -581,15 +581,15 @@ class TestTaskEngine:
         engine.is_running = True
 
         # 初始状态
-        assert engine.is_paused is False
+        assert not engine.is_paused.is_set()
 
         # 暂停
         engine.pause()
-        assert engine.is_paused is True
+        assert engine.is_paused.is_set()
 
         # 恢复
         engine.resume()
-        assert engine.is_paused is False
+        assert not engine.is_paused.is_set()
 
     def test_stop(self):
         """测试停止"""
@@ -598,8 +598,8 @@ class TestTaskEngine:
 
         engine.stop()
 
-        assert engine.should_stop is True
-        assert engine.is_paused is False
+        assert engine.should_stop.is_set()
+        assert not engine.is_paused.is_set()
 
     def test_interruptible_sleep(self):
         """测试可中断睡眠"""
@@ -612,7 +612,7 @@ class TestTaskEngine:
         assert elapsed >= 0.1
 
         # 停止信号中断睡眠
-        engine.should_stop = True
+        engine.should_stop.set()
         start = time.time()
         engine._interruptible_sleep(1.0)
         elapsed = time.time() - start

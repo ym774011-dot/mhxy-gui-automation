@@ -171,6 +171,48 @@ class ClickParamPage(BaseParamPage):
         self._click_background_check = QCheckBox("后台点击（不激活窗口）")
         form.addRow("", self._click_background_check)
 
+        # —— 点击验证（2026-08-18 像素颜色对比确认点击生效）——
+        verify_group = QGroupBox("点击验证（颜色对比确认生效）")
+        verify_layout = QFormLayout(verify_group)
+
+        self._click_verify_check = QCheckBox(
+            "启用验证：点击后验证点颜色变化才算成功，未变自动重试"
+        )
+        verify_layout.addRow("", self._click_verify_check)
+
+        probe_row = QHBoxLayout()
+        self._click_probe_x_edit = QLineEdit()
+        self._click_probe_x_edit.setPlaceholderText("验证点 X（整数或 ${变量}）")
+        probe_row.addWidget(self._click_probe_x_edit, 1)
+        self._click_probe_y_edit = QLineEdit()
+        self._click_probe_y_edit.setPlaceholderText("验证点 Y（整数或 ${变量}）")
+        probe_row.addWidget(self._click_probe_y_edit, 1)
+        self._click_probe_fill_btn = QPushButton("=点击点")
+        self._click_probe_fill_btn.setToolTip("验证点设为点击点坐标（仅调试用，见下方说明）")
+        self._click_probe_fill_btn.clicked.connect(self._fill_probe_from_click)
+        probe_row.addWidget(self._click_probe_fill_btn)
+        verify_layout.addRow("验证点：", probe_row)
+
+        self._click_verify_retries_spin = QSpinBox()
+        self._click_verify_retries_spin.setRange(0, 10)
+        self._click_verify_retries_spin.setValue(3)
+        verify_layout.addRow("失败重试次数：", self._click_verify_retries_spin)
+
+        self._click_verify_threshold_spin = QSpinBox()
+        self._click_verify_threshold_spin.setRange(1, 441)
+        self._click_verify_threshold_spin.setValue(30)
+        verify_layout.addRow("颜色变化阈值：", self._click_verify_threshold_spin)
+
+        verify_hint = QLabel(
+            "验证点应选「点击后颜色会持久变化」的位置（弹出的对话框 / NPC 气泡 /\n"
+            "按钮高亮区）。不要用点击点本身：按下会高亮、释放后恢复原色，会误判。"
+        )
+        verify_hint.setStyleSheet("color: #666; font-size: 10px;")
+        verify_hint.setWordWrap(True)
+        verify_layout.addRow("", verify_hint)
+
+        form.addRow(verify_group)
+
         # —— 承接参数：列出前序函数调用事件 ——
         form.addRow(QLabel(""))
         inherit_group = QGroupBox("承接参数（从前序函数调用结果中取值）")
@@ -378,6 +420,11 @@ class ClickParamPage(BaseParamPage):
         self._click_x_edit.setText(f"${{{var_name}.target_coord.0}}")
         self._click_y_edit.setText(f"${{{var_name}.target_coord.1}}")
 
+    def _fill_probe_from_click(self) -> None:
+        """验证点 = 点击点（复制 X/Y 输入框当前值，含 ${变量} 原样拷贝）。"""
+        self._click_probe_x_edit.setText(self._click_x_edit.text())
+        self._click_probe_y_edit.setText(self._click_y_edit.text())
+
     # ------------------------------------------------------------------
     # 位置数据容器辅助方法
     # ------------------------------------------------------------------
@@ -430,6 +477,12 @@ class ClickParamPage(BaseParamPage):
             self._click_button_combo, params.get("button", "left"), "left"
         )
         self._click_background_check.setChecked(bool(params.get("background", False)))
+        # 2026-08-18 点击验证参数（旧事件无这些字段 → 默认不验证）
+        self._click_verify_check.setChecked(bool(params.get("verify", False)))
+        self._click_probe_x_edit.setText(str(params.get("probe_x", 0) or 0))
+        self._click_probe_y_edit.setText(str(params.get("probe_y", 0) or 0))
+        self._click_verify_retries_spin.setValue(int(params.get("verify_retries", 3)))
+        self._click_verify_threshold_spin.setValue(int(params.get("verify_threshold", 30)))
 
     def apply(self, event: Event) -> bool:
         """将鼠标点击参数写回 Event.params。X/Y 可能是字符串（含模板变量）。"""
@@ -450,6 +503,12 @@ class ClickParamPage(BaseParamPage):
             "y": _try_int(y_text),
             "button": self._click_button_combo.currentData() or "left",
             "background": self._click_background_check.isChecked(),
+            # 2026-08-18 点击验证（像素颜色对比确认生效）
+            "verify": self._click_verify_check.isChecked(),
+            "probe_x": _try_int(self._click_probe_x_edit.text().strip()),
+            "probe_y": _try_int(self._click_probe_y_edit.text().strip()),
+            "verify_retries": self._click_verify_retries_spin.value(),
+            "verify_threshold": self._click_verify_threshold_spin.value(),
         }
         return True
 

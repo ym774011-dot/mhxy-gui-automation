@@ -14,21 +14,30 @@
           "params": {
             "template_path": [
               "E:/DS/梦幻西游脚本函数包/图片数据/杜少海.bmp",
-              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp"
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海2.bmp"
             ],
             "template_paths": [
               "E:/DS/梦幻西游脚本函数包/图片数据/杜少海.bmp",
-              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp"
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海2.bmp"
             ],
-            "threshold": 0.8,
+            "threshold": 0.7,
             "action": "click",
             "button": "left",
             "region": [
-              288,
-              286,
-              81,
-              105
-            ]
+              232,
+              340,
+              216,
+              197
+            ],
+            "target_class": "NPC",
+            "near_mode": false,
+            "near_radius": 250,
+            "mid_radius": 450,
+            "conf_near": 0.7,
+            "conf_mid": 0.55,
+            "conf_far": 0.4
           },
           "pre_delay": 0.0,
           "post_delay": 0.5,
@@ -47,10 +56,15 @@
             "y": 390,
             "button": "left",
             "background": false,
-            "press_delay": 0.05
+            "press_delay": 0.05,
+            "verify": false,
+            "probe_x": 0,
+            "probe_y": 0,
+            "verify_retries": 3,
+            "verify_threshold": 30
           },
           "pre_delay": 0.03,
-          "post_delay": 0.5,
+          "post_delay": 0.3,
           "on_error": "skip",
           "max_retries": 3,
           "retry_interval": 1.0,
@@ -66,10 +80,15 @@
             "y": 330,
             "button": "right",
             "background": false,
-            "press_delay": 0.05
+            "press_delay": 0.05,
+            "verify": false,
+            "probe_x": 0,
+            "probe_y": 0,
+            "verify_retries": 3,
+            "verify_threshold": 30
           },
           "pre_delay": 0.05,
-          "post_delay": 0.5,
+          "post_delay": 0.6,
           "on_error": "skip",
           "max_retries": 3,
           "retry_interval": 1.0,
@@ -81,15 +100,20 @@
           "name": "打开背包",
           "event_type": "click",
           "params": {
-            "x": 690,
-            "y": 600,
+            "x": 693,
+            "y": 604,
             "button": "left",
-            "background": false,
-            "press_delay": 0.05
+            "background": true,
+            "press_delay": 0.1,
+            "verify": true,
+            "probe_x": 163,
+            "probe_y": 278,
+            "verify_retries": 3,
+            "verify_threshold": 30
           },
           "pre_delay": 0.0,
           "post_delay": 0.5,
-          "on_error": "skip",
+          "on_error": "retry",
           "max_retries": 3,
           "retry_interval": 1.0,
           "enabled": true,
@@ -230,11 +254,16 @@
                     "name": "关闭背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 606,
-                      "button": "left",
-                      "background": false,
-                      "press_delay": 0.1
+                      "x": 350,
+                      "y": 170,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.0,
                     "post_delay": 1.0,
@@ -356,7 +385,14 @@
                         0,
                         0,
                         0
-                      ]
+                      ],
+                      "target_class": "NPC",
+                      "near_mode": true,
+                      "near_radius": 250,
+                      "mid_radius": 450,
+                      "conf_near": 0.7,
+                      "conf_mid": 0.55,
+                      "conf_far": 0.4
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -429,7 +465,7 @@
                     "pre_delay": 2.0,
                     "post_delay": 1.0,
                     "on_error": "retry",
-                    "max_retries": 3,
+                    "max_retries": 30,
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "图像识别7"
@@ -477,8 +513,8 @@
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
-                    "on_error": "skip",
-                    "max_retries": 3,
+                    "on_error": "retry",
+                    "max_retries": 5,
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "图像识别8"
@@ -505,9 +541,33 @@
                     "name": "打开背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 605,
+                      "x": 693,
+                      "y": 604,
                       "button": "left",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": "鼠标点击13"
+                  },
+                  {
+                    "id": "1ab5b9b5-989c-4890-a8d8-f28c84692d27",
+                    "name": "关闭对话框",
+                    "event_type": "click",
+                    "params": {
+                      "x": 967,
+                      "y": 576,
+                      "button": "right",
                       "background": true,
                       "press_delay": 0.1
                     },
@@ -517,7 +577,7 @@
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
-                    "var_name": "鼠标点击13"
+                    "var_name": "鼠标点击18"
                   },
                   {
                     "id": "88adab6c-532e-4d00-b793-345e6e594f34",
@@ -622,11 +682,16 @@
                     "name": "关闭背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 605,
-                      "button": "left",
-                      "background": false,
-                      "press_delay": 0.05
+                      "x": 350,
+                      "y": 170,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -658,10 +723,16 @@
                     "name": "打开任务栏",
                     "event_type": "click",
                     "params": {
-                      "x": 990,
-                      "y": 140,
+                      "x": 994,
+                      "y": 143,
                       "button": "left",
-                      "background": false
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 844,
+                      "probe_y": 149,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.051,
                     "post_delay": 0.5,
@@ -670,6 +741,30 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击14"
+                  },
+                  {
+                    "id": "48239d4c-d84d-4b2a-9500-b9df5dcbbbd3",
+                    "name": "右键",
+                    "event_type": "click",
+                    "params": {
+                      "x": 100,
+                      "y": 100,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": false,
+                      "probe_x": 0,
+                      "probe_y": 0,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.2,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": "鼠标点击19"
                   }
                 ]
               },
@@ -748,11 +843,16 @@
                     "name": "关闭背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 600,
-                      "button": "left",
-                      "background": false,
-                      "press_delay": 0.05
+                      "x": 350,
+                      "y": 170,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.5,
                     "post_delay": 0.5,
@@ -812,36 +912,12 @@
                       "y": 560,
                       "button": "left",
                       "background": false,
-                      "verify": {
-                        "enabled": false,
-                        "type": "template_appear",
-                        "template_path": "",
-                        "threshold": 0.8,
-                        "region": [
-                          0,
-                          0,
-                          0,
-                          0
-                        ],
-                        "color": "#FFFFFF",
-                        "color_tolerance": 30,
-                        "color_min_pixels": 10,
-                        "verify_module": "JHRW",
-                        "verify_function": "JHRW",
-                        "verify_field": "target_location",
-                        "verify_field_custom": "",
-                        "verify_operator": "==",
-                        "verify_value": "",
-                        "target_x": "",
-                        "target_y": "",
-                        "target_field": "",
-                        "coord_tolerance": 2.0,
-                        "stable_count": 2,
-                        "timeout": 5.0,
-                        "poll_interval": 0.3,
-                        "on_fail": "retry",
-                        "retry_times": 2
-                      }
+                      "press_delay": 0.1,
+                      "verify": false,
+                      "probe_x": 0,
+                      "probe_y": 0,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.0,
                     "post_delay": 1.5,
@@ -945,7 +1021,14 @@
                         0,
                         0,
                         0
-                      ]
+                      ],
+                      "target_class": "NPC",
+                      "near_mode": true,
+                      "near_radius": 250,
+                      "mid_radius": 450,
+                      "conf_near": 0.7,
+                      "conf_mid": 0.55,
+                      "conf_far": 0.4
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -964,7 +1047,7 @@
                       "y": 420,
                       "button": "left",
                       "background": false,
-                      "press_delay": 0.05
+                      "press_delay": 0.1
                     },
                     "pre_delay": 0.5,
                     "post_delay": 2.5,
@@ -1018,7 +1101,7 @@
                     "pre_delay": 2.0,
                     "post_delay": 2.0,
                     "on_error": "retry",
-                    "max_retries": 3,
+                    "max_retries": 30,
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "图像识别7"
@@ -1066,8 +1149,8 @@
                     },
                     "pre_delay": 0.0,
                     "post_delay": 1.5,
-                    "on_error": "skip",
-                    "max_retries": 3,
+                    "on_error": "retry",
+                    "max_retries": 5,
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "图像识别8"
@@ -1094,9 +1177,33 @@
                     "name": "打开背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 605,
+                      "x": 693,
+                      "y": 604,
                       "button": "left",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": "鼠标点击13"
+                  },
+                  {
+                    "id": "1ab5b9b5-989c-4890-a8d8-f28c84692d27",
+                    "name": "关闭对话框",
+                    "event_type": "click",
+                    "params": {
+                      "x": 967,
+                      "y": 576,
+                      "button": "right",
                       "background": true,
                       "press_delay": 0.1
                     },
@@ -1106,7 +1213,7 @@
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
-                    "var_name": "鼠标点击13"
+                    "var_name": "鼠标点击18"
                   },
                   {
                     "id": "88adab6c-532e-4d00-b793-345e6e594f34",
@@ -1211,11 +1318,16 @@
                     "name": "关闭背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 605,
-                      "button": "left",
-                      "background": false,
-                      "press_delay": 0.05
+                      "x": 350,
+                      "y": 170,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1247,10 +1359,16 @@
                     "name": "打开任务栏",
                     "event_type": "click",
                     "params": {
-                      "x": 990,
-                      "y": 140,
+                      "x": 994,
+                      "y": 143,
                       "button": "left",
-                      "background": false
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 844,
+                      "probe_y": 149,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.051,
                     "post_delay": 0.5,
@@ -1259,6 +1377,30 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击14"
+                  },
+                  {
+                    "id": "48239d4c-d84d-4b2a-9500-b9df5dcbbbd3",
+                    "name": "右键",
+                    "event_type": "click",
+                    "params": {
+                      "x": 100,
+                      "y": 100,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": false,
+                      "probe_x": 0,
+                      "probe_y": 0,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.2,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": "鼠标点击19"
                   }
                 ]
               },
@@ -1316,13 +1458,19 @@
                   },
                   {
                     "id": "adde50cf-c79e-4f05-8b72-2130376b5e1d",
-                    "name": "鼠标点击 2",
+                    "name": "点击飞行坐标",
                     "event_type": "click",
                     "params": {
-                      "x": 589,
-                      "y": 410,
+                      "x": 603,
+                      "y": 420,
                       "button": "left",
-                      "background": false
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 432,
+                      "probe_y": 429,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.2,
                     "post_delay": 0.9,
@@ -1337,11 +1485,16 @@
                     "name": "关闭背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 605,
-                      "button": "left",
-                      "background": false,
-                      "press_delay": 0.05
+                      "x": 350,
+                      "y": 170,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1381,15 +1534,15 @@
                       "action": "click",
                       "button": "left",
                       "region": [
-                        558,
-                        440,
-                        650,
-                        590
+                        355,
+                        407,
+                        160,
+                        173
                       ]
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.9,
-                    "on_error": "skip",
+                    "on_error": "retry",
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
@@ -1506,7 +1659,14 @@
                         0,
                         0,
                         0
-                      ]
+                      ],
+                      "target_class": "NPC",
+                      "near_mode": true,
+                      "near_radius": 250,
+                      "mid_radius": 450,
+                      "conf_near": 0.7,
+                      "conf_mid": 0.55,
+                      "conf_far": 0.4
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.8,
@@ -1579,7 +1739,7 @@
                     "pre_delay": 2.0,
                     "post_delay": 2.0,
                     "on_error": "retry",
-                    "max_retries": 3,
+                    "max_retries": 30,
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "图像识别7"
@@ -1627,8 +1787,8 @@
                     },
                     "pre_delay": 0.0,
                     "post_delay": 1.5,
-                    "on_error": "skip",
-                    "max_retries": 3,
+                    "on_error": "retry",
+                    "max_retries": 5,
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "图像识别8"
@@ -1638,9 +1798,33 @@
                     "name": "打开背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 605,
+                      "x": 693,
+                      "y": 604,
                       "button": "left",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.5,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": "鼠标点击13"
+                  },
+                  {
+                    "id": "1ab5b9b5-989c-4890-a8d8-f28c84692d27",
+                    "name": "关闭对话框",
+                    "event_type": "click",
+                    "params": {
+                      "x": 967,
+                      "y": 576,
+                      "button": "right",
                       "background": true,
                       "press_delay": 0.1
                     },
@@ -1650,7 +1834,7 @@
                     "max_retries": 3,
                     "retry_interval": 1.0,
                     "enabled": true,
-                    "var_name": "鼠标点击13"
+                    "var_name": "鼠标点击18"
                   },
                   {
                     "id": "e053f394-4e9f-4655-ba20-92880ad1e183",
@@ -1772,11 +1956,16 @@
                     "name": "关闭背包",
                     "event_type": "click",
                     "params": {
-                      "x": 690,
-                      "y": 605,
-                      "button": "left",
-                      "background": false,
-                      "press_delay": 0.05
+                      "x": 350,
+                      "y": 170,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 163,
+                      "probe_y": 278,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.0,
                     "post_delay": 0.5,
@@ -1808,10 +1997,16 @@
                     "name": "打开任务栏",
                     "event_type": "click",
                     "params": {
-                      "x": 990,
-                      "y": 140,
+                      "x": 994,
+                      "y": 143,
                       "button": "left",
-                      "background": false
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": true,
+                      "probe_x": 844,
+                      "probe_y": 149,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
                     },
                     "pre_delay": 0.051,
                     "post_delay": 0.5,
@@ -1820,6 +2015,30 @@
                     "retry_interval": 1.0,
                     "enabled": true,
                     "var_name": "鼠标点击14"
+                  },
+                  {
+                    "id": "48239d4c-d84d-4b2a-9500-b9df5dcbbbd3",
+                    "name": "右键",
+                    "event_type": "click",
+                    "params": {
+                      "x": 100,
+                      "y": 100,
+                      "button": "right",
+                      "background": true,
+                      "press_delay": 0.1,
+                      "verify": false,
+                      "probe_x": 0,
+                      "probe_y": 0,
+                      "verify_retries": 3,
+                      "verify_threshold": 30
+                    },
+                    "pre_delay": 0.0,
+                    "post_delay": 0.2,
+                    "on_error": "skip",
+                    "max_retries": 3,
+                    "retry_interval": 1.0,
+                    "enabled": true,
+                    "var_name": "鼠标点击19"
                   }
                 ]
               }
@@ -2118,6 +2337,352 @@
       "loop_delay": 1.0,
       "created_at": "2026-08-10 19:59:38",
       "updated_at": "2026-08-10 21:47:26"
+    },
+    {
+      "id": "f69a0725-6a35-48b3-99d7-0bc2592ed531",
+      "name": "瞬移",
+      "description": "",
+      "events": [
+        {
+          "id": "c58dd891-9e23-41cc-9cb9-93e2afbe183a",
+          "name": "YOLO 检测 1",
+          "event_type": "yolo",
+          "params": {
+            "template_path": [
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海2.bmp"
+            ],
+            "template_paths": [
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海1.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/杜少海2.bmp"
+            ],
+            "threshold": 0.7,
+            "action": "click",
+            "button": "left",
+            "region": [
+              232,
+              340,
+              216,
+              197
+            ],
+            "target_class": "",
+            "near_mode": false,
+            "near_radius": 250,
+            "mid_radius": 450,
+            "conf_near": 0.7,
+            "conf_mid": 0.55,
+            "conf_far": 0.4
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 30,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "YOLO检测1"
+        },
+        {
+          "id": "15d0e911-c1e1-4360-bedc-4dc390a74cd6",
+          "name": "鼠标点击 2",
+          "event_type": "click",
+          "params": {
+            "x": 266,
+            "y": 392,
+            "button": "left",
+            "background": true,
+            "press_delay": 0.1,
+            "verify": true,
+            "probe_x": 266,
+            "probe_y": 392,
+            "verify_retries": 3,
+            "verify_threshold": 30
+          },
+          "pre_delay": 0.5,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "鼠标点击2"
+        },
+        {
+          "id": "344339cd-ac31-4655-ab6b-283b1eef142a",
+          "name": "函数调用 3",
+          "event_type": "function",
+          "params": {
+            "module": "JHRW1",
+            "function": "JHRW1",
+            "args": [],
+            "kwargs": {},
+            "result_validate_field": "target_location",
+            "result_validate_whitelist": [
+              "江南野外",
+              "建邺城",
+              "东海湾"
+            ],
+            "result_validate_retries": 3,
+            "result_validate_retry_interval": 0.5,
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "函数调用3"
+        },
+        {
+          "id": "16999662-9a2c-4264-8e49-e77f8e0f30d2",
+          "name": "函数调用 4",
+          "event_type": "function",
+          "params": {
+            "module": "SYBUZ2",
+            "function": "SYBUZ2",
+            "args": [
+              "${函数调用3.target_location}"
+            ],
+            "kwargs": {
+              "x": "${函数调用3.target_coord.0}",
+              "y": "${函数调用3.target_coord.1}"
+            },
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "函数调用4"
+        },
+        {
+          "id": "6f482766-b8d9-4f39-a88a-c1f2aa1b16fa",
+          "name": "YOLO 检测 5",
+          "event_type": "yolo",
+          "params": {
+            "template_path": [
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗1.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗2.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗3.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗4.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗5.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗6.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗7.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗8.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗9.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗10.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗11.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗12.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗13.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗14.bmp"
+            ],
+            "template_paths": [
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗1.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗2.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗3.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗4.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗5.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗6.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗7.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗8.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗9.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗10.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗11.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗12.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗13.bmp",
+              "E:/DS/梦幻西游脚本函数包/图片数据/江湖大盗14.bmp"
+            ],
+            "threshold": 0.7,
+            "action": "click",
+            "button": "left",
+            "region": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "target_class": "",
+            "near_mode": false,
+            "near_radius": 250,
+            "mid_radius": 450,
+            "conf_near": 0.7,
+            "conf_mid": 0.55,
+            "conf_far": 0.4
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 30,
+          "retry_interval": 1.0,
+          "enabled": false,
+          "var_name": "YOLO检测5"
+        },
+        {
+          "id": "297b9905-cd58-41c7-83b6-e2ea63006e43",
+          "name": "鼠标点击 6",
+          "event_type": "click",
+          "params": {
+            "x": 365,
+            "y": 415,
+            "button": "left",
+            "background": true,
+            "press_delay": 0.1,
+            "verify": true,
+            "probe_x": 252,
+            "probe_y": 274,
+            "verify_retries": 3,
+            "verify_threshold": 30
+          },
+          "pre_delay": 0.0,
+          "post_delay": 2.5,
+          "on_error": "retry",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": false,
+          "var_name": "鼠标点击6"
+        },
+        {
+          "id": "82b76d03-bcc2-4fb3-9a5b-96c003319cd2",
+          "name": "自动战斗",
+          "event_type": "image",
+          "params": {
+            "source_mode": "direct",
+            "template_path": "assets/game_data/图片数据/自动战斗.bmp",
+            "threshold": 0.8,
+            "action": "wait_disappear",
+            "button": "left",
+            "click_delay": 300,
+            "region": [
+              68,
+              307,
+              104,
+              38
+            ],
+            "prefix": "",
+            "dir_path": "",
+            "suffix": ".bmp",
+            "dyn_field": "target_location",
+            "dyn_custom_field": "",
+            "allowed_maps": null,
+            "recognize_retries": 2,
+            "recognize_retry_interval": 0.5,
+            "batch_dir": "",
+            "batch_ext": ".bmp",
+            "batch_use_var": false,
+            "batch_var_field": "target_location",
+            "batch_sort": "name",
+            "batch_click_mode": "all",
+            "additional_click_enabled": false,
+            "additional_mode": "direct",
+            "additional_x": "",
+            "additional_y": "",
+            "coord_file": "assets/game_data/地图数据/地图坐标.txt",
+            "match_field": "target_location",
+            "match_custom_field": "",
+            "additional_button": "left",
+            "additional_delay": 200
+          },
+          "pre_delay": 1.0,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 30,
+          "retry_interval": 1.0,
+          "enabled": false,
+          "var_name": "图像识别7"
+        },
+        {
+          "id": "7c8b091a-b310-4471-8c3a-eba0043c43f5",
+          "name": "战斗结束",
+          "event_type": "image",
+          "params": {
+            "source_mode": "direct",
+            "template_path": "assets/game_data/图片数据/战斗结束.bmp",
+            "threshold": 0.8,
+            "action": "click",
+            "button": "right",
+            "click_delay": 300,
+            "region": [
+              262,
+              149,
+              58,
+              70
+            ],
+            "prefix": "",
+            "dir_path": "",
+            "suffix": ".bmp",
+            "dyn_field": "target_location",
+            "dyn_custom_field": "",
+            "allowed_maps": null,
+            "recognize_retries": 2,
+            "recognize_retry_interval": 0.5,
+            "batch_dir": "",
+            "batch_ext": ".bmp",
+            "batch_use_var": false,
+            "batch_var_field": "target_location",
+            "batch_sort": "name",
+            "batch_click_mode": "all",
+            "additional_click_enabled": false,
+            "additional_mode": "direct",
+            "additional_x": "5",
+            "additional_y": "5",
+            "coord_file": "assets/game_data/地图数据/地图坐标.txt",
+            "match_field": "target_location",
+            "match_custom_field": "",
+            "additional_button": "move",
+            "additional_delay": 200
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "retry",
+          "max_retries": 10,
+          "retry_interval": 1.0,
+          "enabled": false,
+          "var_name": "图像识别8"
+        },
+        {
+          "id": "8b706ddb-7083-4417-b438-7dc010ded04c",
+          "name": "函数调用 9",
+          "event_type": "function",
+          "params": {
+            "module": "HCA",
+            "function": "HCA",
+            "args": [],
+            "kwargs": {},
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 1.0,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": false,
+          "var_name": "函数调用9"
+        }
+      ],
+      "loop_count": 0,
+      "loop_delay": 0.5,
+      "created_at": "2026-08-20 22:35:57",
+      "updated_at": "2026-08-23 23:30:07"
     }
   ],
   "current_task_index": 0,

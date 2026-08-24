@@ -31,3 +31,9 @@ data/current_quest.json
 # 系统
 Thumbs.db
 .DS_Store
+
+# 调试截图（不入库）
+*.png
+*.jpg
+*.jpeg
+!assets/game_data/图片数据/*.bmp

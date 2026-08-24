@@ -24,6 +24,7 @@
 """
 import time
 import threading
+import random
 
 import win32gui
 import win32api
@@ -168,6 +169,122 @@ class InputController:
         else:
             # 前台模式：先移动鼠标再右键点击
             self._click_foreground(x, y, "right", click_delay)
+
+    # ==================================================================
+    # 带验证的点击（2026-08-18 用户方案）
+    # ==================================================================
+    def click_verified(self, x, y, probe_xy=None, retries=None, threshold=None,
+                       settle_delay=None, button="left", press_delay=0.05,
+                       click_delay=0.0):
+        """
+        带像素验证的点击：点击前取验证点颜色 → 点击 → 等待画面稳定 →
+        再取同点颜色对比。颜色改变 = 点击成功；颜色未变 = 点击失败，重试。
+
+        解决"点击偶发失效"：PostMessage 只保证消息送达，不保证点击生效，
+        像素对比是确认"点击真的产生了画面变化"的最直接手段。
+
+        :param x, y: 点击目标客户区坐标
+        :param probe_xy: 验证点客户区坐标 (px, py)。默认 None = 用点击点。
+            ⚠️ 验证点应选"点击后颜色会持久变化"的位置（如弹出的对话框
+            区域、按钮高亮区、NPC 头顶对话气泡）。点击点本身按下/释放后
+            往往恢复原色，且 hover 变色区会误判，需人工选定稳定变化点。
+        :param retries: 失败重试次数（默认取配置 input.verify_retries=3）
+        :param threshold: 颜色变化阈值（RGB 欧氏距离 0~441，
+            默认取配置 input.verify_threshold=30）
+        :param settle_delay: 点击后等待画面稳定的秒数
+            （默认取配置 input.verify_settle_delay=0.2）
+        :param button: "left" / "right" / "middle"
+        :param press_delay: 按下→弹起保持时间（秒），透传给后台点击
+        :param click_delay: 点击前等待（秒），透传
+        :return: bool，True=验证成功；False=重试耗尽仍未变化。
+            取色失败时（窗口最小化/截图失败）降级为普通点击并返回 True，
+            避免"无法验证"被误判成"点击失败"无限重试。
+        """
+        if not self._ensure_window():
+            return False
+        if probe_xy is None:
+            probe_xy = (x, y)
+        retries = int(config.get("input.verify_retries", 3) if retries is None else retries)
+        threshold = float(
+            config.get("input.verify_threshold", 30) if threshold is None else threshold)
+        settle_delay = float(
+            config.get("input.verify_settle_delay", 0.2)
+            if settle_delay is None else settle_delay)
+
+        attempts = max(1, int(retries) + 1)
+        for attempt in range(attempts):
+            # ① 先确认上一次点击已完成、画面稳定（2026-08-18 用户指出的逻辑 bug：
+            #    before 必须在"确认完成"之后采样——否则上一次点击还在队列里处理时
+            #    取色，before 采到的是"上次点击进行中"的画面，after 已含上次点击
+            #    的效果 → 即使本次点击完全失败色差也很大 → 误判成功）。
+            self._wait_prev_click_done()
+            # ② 取基线色（稳定的"点击前"状态）
+            before = self._probe_color(probe_xy[0], probe_xy[1])
+            if before is None:
+                logger.warning(
+                    f"点击验证: 取色失败（窗口最小化/截图失败），降级普通点击 ({x},{y})")
+                self.click(x, y, button=button, click_delay=click_delay,
+                           press_delay=press_delay)
+                return True
+            # ③ 点击（内部已有 hover 强化 + 点击前确认）
+            # 2026-08-18 用户方案：第一次失败后，重试点击加 1~2 像素随机偏移，
+            # 避免反复点在同一像素位置（可能恰好落在 UI 缝隙/命中检测盲区，
+            # 永远失败）。偏移只影响点击坐标，验证点 probe 保持不变。
+            click_x, click_y = x, y
+            if attempt > 0:
+                click_x = x + random.choice((-2, -1, 1, 2))
+                click_y = y + random.choice((-2, -1, 1, 2))
+            self.click(click_x, click_y, button=button, click_delay=click_delay,
+                       press_delay=press_delay)
+            # ④ 等画面稳定
+            time.sleep(max(0.05, settle_delay))
+            # ⑤ 取点击后颜色
+            after = self._probe_color(probe_xy[0], probe_xy[1])
+            if after is None:
+                logger.warning("点击验证: 点击后取色失败，无法确认（视为已点击）")
+                return True
+            # ⑥ 对比：颜色变化 = 点击成功
+            diff = self._color_diff(before, after)
+            if diff > threshold:
+                logger.info(
+                    f"点击验证成功 ({click_x},{click_y}) 验证点{probe_xy} "
+                    f"before={before} after={after} 色差={diff:.0f} "
+                    f"(第{attempt + 1}次)")
+                return True
+            remain = attempts - attempt - 1
+            logger.warning(
+                f"点击验证失败 ({click_x},{click_y}) 验证点{probe_xy} "
+                f"before={before} after={after} 色差={diff:.0f} "
+                f"阈值{threshold:.0f}（第{attempt + 1}次，剩余{remain}次）"
+                f"[提示: 色差0=验证点位置点击前后颜色不变，先用 tools/pick_color.py "
+                f"确认该点是否随点击变化，或换验证点]")
+        logger.error(f"点击验证失败: 重试耗尽 ({x},{y}) 验证点{probe_xy}")
+        return False
+
+    def _probe_color(self, x, y):
+        """
+        读取客户区 (x, y) 处的颜色。
+
+        用 screen_capture.capture_region 截 1x1 像素点（mss 通道），
+        返回 RGB tuple；窗口未绑定/截图失败返回 None。
+        """
+        try:
+            # 延迟导入避免循环依赖（screen_capture 依赖 window_manager）
+            from core.screen_capture import screen_capture
+            img = screen_capture.capture_region(int(x), int(y), 1, 1)
+            if img is None or img.size == 0:
+                return None
+            b, g, r = img[0][0]  # OpenCV BGR
+            return (int(r), int(g), int(b))
+        except Exception as e:
+            logger.debug(f"取色失败 ({x},{y}): {e}")
+            return None
+
+    @staticmethod
+    def _color_diff(c1, c2):
+        """RGB 欧氏距离（0~441），0=完全相同，越大差异越大。"""
+        return ((c1[0] - c2[0]) ** 2 + (c1[1] - c2[1]) ** 2
+                + (c1[2] - c2[2]) ** 2) ** 0.5
 
     def move_to(self, x, y, duration=0.1):
         """
@@ -634,6 +751,45 @@ class InputController:
             logger.exception(f"PostMessage(msg=0x{msg:X}) 失败: {e}")
             return False
 
+    def _wait_prev_click_done(self, timeout=0.5) -> bool:
+        """
+        点击前确认上一次点击事件已被游戏处理完（2026-08-18 用户方案）。
+
+        PostMessage 是异步投递：返回 True 只代表消息进入目标线程消息队列，
+        不代表游戏已经处理。连发点击时引擎可能还在处理上一个 DOWN/UP，
+        新消息到达即状态串扰（偶发点击失效的根因之一）。
+
+        实现：SendMessageTimeout 发 WM_NULL 同步探针——WM_NULL 排在目标
+        窗口消息队列尾部（PostMessage 与 SendMessage 同队、FIFO 保序），
+        它被处理时，排在它前面的所有消息（上次点击的 DOWN/UP）必然已完成。
+
+        SMTO_ABORTIFHUNG：目标窗口挂起时立即返回，不无限阻塞自动化。
+
+        :param timeout: 最大等待秒数（默认 0.5s），超时放弃（不阻塞流程）
+        :return: True=确认已完成；False=超时/失败（上层继续执行不中断）
+        """
+        if not config.get("input.confirm_click_done", True):
+            return True
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            WM_NULL = 0x0000
+            SMTO_ABORTIFHUNG = 0x0002
+            result = wintypes.DWORD(0)
+            ms = int(max(0.05, float(timeout or 0.5)) * 1000)
+            ok = user32.SendMessageTimeoutW(
+                self._wm.hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, ms,
+                ctypes.byref(result))
+            if not ok:
+                logger.debug(
+                    f"点击完成确认未返回（超时/窗口忙），继续执行: "
+                    f"err={ctypes.get_last_error()}")
+            return bool(ok)
+        except Exception as e:
+            logger.debug(f"点击完成确认异常（继续执行）: {e}")
+            return False
+
     def _sync_cursor(self, x, y) -> None:
         """
         光标同步（2026-08-16）：PostMessage 点击前让游戏读到目标光标位置。
@@ -740,15 +896,37 @@ class InputController:
                 borrowed = self._borrow_cursor(x, y)
         except Exception:
             pass
+        # 2026-08-16 偶发失灵诊断（默认关闭，input.debug_click=true 开启）：
+        # 引擎 newjc.dll FUN_10018de0 用 GetCursorPos+PtInRect 判断物理光标
+        # 是否在客户区，不在则不处理 hover 相关点击。记录该状态便于定位。
+        dbg = config.get("input.debug_click", False)
+        if dbg:
+            try:
+                _cur = win32api.GetCursorPos()
+                _cr = self._wm.get_client_rect()
+                _in = (_cr[0] <= _cur[0] < _cr[2] and _cr[1] <= _cur[1] < _cr[3]) if _cr else None
+                logger.info(
+                    f"[点击诊断] 目标({x},{y}) 物理光标({_cur[0]},{_cur[1]}) "
+                    f"客户区{_cr if _cr else '?'} 光标在客户区={_in}"
+                )
+            except Exception:
+                pass
+        # 2026-08-18 点击前确认上一次点击已完成（用户方案；替代 08-18 误加的
+        # 复位 UP——用户实测"更不行了"，盲发 UP 会打断引擎正在处理的事件）：
+        # PostMessage 是异步投递，返回只代表消息进队列，不代表被游戏处理。
+        # 连发点击时引擎可能还在处理上一个 DOWN/UP → 状态串扰 → 偶发失效。
+        # 用 SendMessageTimeout(WM_NULL) 同步探针：WM_NULL 排在队列尾，它被
+        # 处理时说明排在它前面的所有消息（上次点击的 DOWN/UP）都已完成。
+        self._wait_prev_click_done()
         # 2026-08-05 可靠性强化（解决"偶发点击失效"）：
-        # 1) MOUSEMOVE 发 2 次（间隔 10ms）——确保游戏建立 hover 状态
-        #    （部分 UI 需 hover 才响应 DOWN，如传送菜单项）；
+        # 1) MOUSEMOVE 发 4 次（间隔 15ms）——确保引擎内部鼠标状态充分更新，
+        #    newjc.dll 的 UI 控件系统由 MOUSEMOVE 消息驱动内部 hover 状态；
         # 2) DOWN 后按下保持 50ms —— 部分游戏要求按下时长 ≥30~50ms
         #    才判定"有效按下"，20ms 太快会被当抖动忽略；
         # 3) DOWN 发送失败自动重试 1 次（防消息偶发丢弃）。
-        for _ in range(2):
+        for _ in range(4):
             self._post_message(self.WM_MOUSEMOVE, 0, lparam)
-            time.sleep(0.01)
+            time.sleep(0.015)
         down_wparam = self._MOUSE_DOWN_WPARAM.get(button.lower(), 0)
         ok = self._post_message(down_msg, down_wparam, lparam)
         if not ok:
@@ -758,7 +936,12 @@ class InputController:
         if ok:
             # 按下保持 press_delay 再抬起（模拟真实按住时长，可 GUI 配置）
             time.sleep(max(0.0, float(press_delay or 0.0)))
-            self._post_message(up_msg, 0, lparam)
+            up_ok = self._post_message(up_msg, 0, lparam)
+            if not up_ok:
+                # 2026-08-18 UP 失败重试（与 DOWN 对称）：UP 丢失 = 引擎残留
+                # "按下"状态 = 后续所有点击全部失效，必须确保 UP 送达。
+                time.sleep(0.03)
+                self._post_message(up_msg, 0, lparam)
         # 光标归还原位（借出即还，不抢用户鼠标）
         if borrowed:
             self._restore_cursor(borrowed)
@@ -766,7 +949,6 @@ class InputController:
 
     def _post_double_click(self, x, y):
         """后台双击：发送 DOWN -> UP -> DBLCLK -> UP 序列。"""
-        lparam = self._make_mouse_lparam(x, y)
         lparam = self._make_mouse_lparam(x, y)
         # 2026-08-16 光标借出（方案 A，同单击）；双击结束后归还。
         # 默认纯 PostMessage（cursor_sync_click=false，光标完全不动）
@@ -776,9 +958,14 @@ class InputController:
                 borrowed = self._borrow_cursor(x, y)
         except Exception:
             pass
+        # 2026-08-18 点击前确认上一次点击已完成（同单击）：避免引擎还在处理
+        # 上一个点击时新的双击序列到达 → 状态串扰。
+        self._wait_prev_click_done()
         # 先移动鼠标到目标位置（与单击一致，部分 UI 需 hover 状态）
-        self._post_message(self.WM_MOUSEMOVE, 0, lparam)
-        time.sleep(0.01)
+        # 2026-08-16 强化：MOUSEMOVE 发 3 次确保引擎内部 hover 状态建立
+        for _ in range(3):
+            self._post_message(self.WM_MOUSEMOVE, 0, lparam)
+            time.sleep(0.015)
         # 双击标准序列：DOWN(MK_LBUTTON) -> UP -> DBLCLK -> UP
         self._post_message(self.WM_LBUTTONDOWN, self._MOUSE_DOWN_WPARAM["left"], lparam)
         time.sleep(0.02)

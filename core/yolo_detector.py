@@ -255,24 +255,107 @@ class YoloDetector:
     # ------------------------------------------------------------------
     # 类别筛选
     # ------------------------------------------------------------------
-    def detect_class(self, target_class, confidence=None) -> list:
+    def detect_class(self, target_class, confidence=None, image=None) -> list:
         """
         只返回指定类别的检测结果。
 
         :param target_class: 目标类别名（字符串），需与模型训练时的类别名一致
         :param confidence: 置信度阈值，为 None 时从 config 读取
+        :param image: BGR numpy 数组，为 None 时走 detect 默认截图。
+            ★2026-08-23 新增：支持传裁剪后的 ROI 图（三级 ROI 检测用）
         :return: 检测结果列表，格式同 ``detect``，按置信度降序排列
         """
         if target_class is None:
             # target_class 为 None 时退化为返回全部结果，并给出警告
             logger.warning("detect_class 的 target_class 为 None，返回全部检测结果")
-            return self.detect(confidence=confidence)
+            return self.detect(confidence=confidence, image=image)
 
-        all_detections = self.detect(confidence=confidence)
+        all_detections = self.detect(confidence=confidence, image=image)
         # 类别名按字符串相等匹配
         filtered = [d for d in all_detections if d["class"] == target_class]
         # detect 已按置信度降序，过滤后顺序保持
         return filtered
+
+    # ------------------------------------------------------------------
+    # 三级 ROI 检测（角色为中心，近距离优先）
+    # ------------------------------------------------------------------
+    def detect_near_target(self, target_class=None, confidence=(0.7, 0.55, 0.4),
+                           radii=(250, 450), max_dist_ratio=0.45):
+        """
+        以角色（屏幕中心）为圆心的三级 ROI 检测，保证识别到目标。
+
+        角色永远渲染在屏幕中心（镜头跟随），所以"人物坐标附近"
+        = 以 (W/2, H/2) 为圆心的动态 ROI。三级逐级扩大、门槛逐级降低：
+
+          ① 近 ROI（r=radii[0]）→ conf=confidence[0] → 命中即返回
+          ② 中 ROI（r=radii[1]）→ conf=confidence[1] → 命中即返回
+          ③ 全屏          → conf=confidence[2] → 按到角色距离升序，
+             超 max_dist_ratio 者丢弃（除非 conf>=0.8 极可信）
+
+        ROI 裁剪的检测框坐标自动还原回客户区坐标。
+
+        :param target_class: 目标类别名，None=不限类别
+        :param confidence: 三级置信度门槛 (近, 中, 全屏)
+        :param radii: 近/中 ROI 半径（像素）
+        :param max_dist_ratio: 全屏结果的"距角色最大距离"比例（对角占比）
+        :return: 检测结果列表（已按距离升序），格式同 detect；全空返回 []
+        """
+        from core.screen_capture import screen_capture
+        bgr = screen_capture.capture()
+        if bgr is None:
+            logger.error("截图失败（窗口未绑定或截图异常），detect_near_target 返回空列表")
+            return []
+        H, W = bgr.shape[:2]
+        cx, cy = W // 2, H // 2
+        try:
+            conf_near, conf_mid, conf_far = float(confidence[0]), float(confidence[1]), float(confidence[2])
+            r_near, r_mid = int(radii[0]), int(radii[1])
+            max_dist_ratio = float(max_dist_ratio)
+        except (TypeError, ValueError, IndexError):
+            conf_near, conf_mid, conf_far = 0.7, 0.55, 0.4
+            r_near, r_mid = 250, 450
+            max_dist_ratio = 0.45
+
+        def _run_roi(conf, radius):
+            """裁剪 ROI → 推理 → 坐标还原 → 距离升序。radius=None 表示全屏。"""
+            if radius is None:
+                img, ox, oy = bgr, 0, 0
+            else:
+                x0, y0 = max(0, cx - radius), max(0, cy - radius)
+                x1, y1 = min(W, cx + radius), min(H, cy + radius)
+                if x1 <= x0 or y1 <= y0:
+                    return []
+                img, ox, oy = bgr[y0:y1, x0:x1], x0, y0
+            dets = self.detect_class(target_class, confidence=conf, image=img)
+            if not dets:
+                return []
+            for d in dets:
+                x1b, y1b, x2b, y2b = d["bbox"]
+                d["bbox"] = (x1b + ox, y1b + oy, x2b + ox, y2b + oy)
+                d["center"] = ((d["bbox"][0] + d["bbox"][2]) // 2,
+                               (d["bbox"][1] + d["bbox"][3]) // 2)
+            dets.sort(key=lambda d: ((d["center"][0] - cx) ** 2 + (d["center"][1] - cy) ** 2))
+            return dets
+
+        # ① 近 ROI
+        near = _run_roi(conf_near, r_near)
+        if near:
+            return near
+        # ② 中 ROI
+        mid = _run_roi(conf_mid, r_mid)
+        if mid:
+            return mid
+        # ③ 全屏兜底：距离过滤
+        far = _run_roi(conf_far, None)
+        if not far:
+            return []
+        max_d = ((W * max_dist_ratio) ** 2 + (H * max_dist_ratio) ** 2) ** 0.5
+        near_far = [d for d in far if ((d["center"][0] - cx) ** 2 + (d["center"][1] - cy) ** 2) ** 0.5 <= max_d]
+        if near_far:
+            return near_far
+        # 超远但极高置信度（conf>=0.8）仍保留，避免"必须识别到"落空
+        high_conf = [d for d in far if d["confidence"] >= 0.8]
+        return high_conf
 
     # ------------------------------------------------------------------
     # 最佳目标
