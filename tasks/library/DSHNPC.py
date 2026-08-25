@@ -118,6 +118,41 @@ _G.__out = "open|" .. tl .. "|" .. ol"""
     }
 
 
+def _pick_dialog_option(gateway: str, keyword: str) -> dict:
+    """按关键词选对话栏选项（复用 SYBUZ2 call_dialog_option 模式）。
+
+    同时匹配「基本内容」与「跳转链接」；找不到返回 {"ok": False, ...}。
+    """
+    code = f"""
+local t = tp.窗口.对话栏.选项 or {{}}
+local target = nil
+local label = nil
+for k,v in pairs(t) do
+  if type(v)=="table" and v.跳转链接 then
+    local text = tostring(v.基本内容 or "") .. "|" .. tostring(v.跳转链接 or "")
+    if text:find("{keyword}") then target = v.跳转链接; label = tostring(v.基本内容 or v.跳转链接); break end
+  end
+end
+if not target then _G.__out = "NOOPTION"; return end
+local ok, ret = pcall(function() return tp.窗口.对话栏:事件解析(target) end)
+_G.__out = tostring(ok) .. "|" .. tostring(label)"""
+    try:
+        raw = _lua(gateway, code)
+    except Exception as e:
+        return {"ok": False, "info": f"CALL 异常: {e}"}
+    if not raw or raw == "NOTFOUND":
+        return {"ok": False, "info": "NPC 消失"}
+    if raw == "NOOPTION":
+        return {"ok": False, "info": f"无含'{keyword}'的选项"}
+    parts = raw.split("|")
+    ok = parts[0] == "true"
+    return {
+        "ok": ok,
+        "info": f"选项[{parts[1] if len(parts) > 1 else ''}] 事件解析 ok={ok}",
+        "label": parts[1] if len(parts) > 1 else "",
+    }
+
+
 def _right_click_close():
     """右键关闭对话弹窗（窗口像素坐标，与任务序列"关闭对话框"一致）。"""
     try:
@@ -193,22 +228,59 @@ _G.__out = tostring(ok) .. "|" .. tostring(v.名称 or "")"""
         dialog = _check_dialog(gateway)
         steps["dialog"] = dialog
 
-        if dialog["open"]:
-            # 有弹窗 → 右键关闭
-            closed = _right_click_close()
-            steps["close"] = {"ok": closed, "pos": list(CLOSE_DIALOG_POS)}
+        if not dialog["open"]:
+            # 没弹窗（罕见）→ 不打扰
+            steps["close"] = {"ok": True, "skipped": "CALL 成功但无弹窗"}
             return {
                 "ok": True,
-                "message": f"CALL {realname} 成功，检测到弹窗已右键关闭",
+                "message": f"CALL {realname} 成功，无弹窗",
                 "steps": steps,
                 "target": {"npc": realname, "id": nid},
                 "elapsed_ms": round((time.time() - t0) * 1000, 1),
             }
-        # 无弹窗 → 不右键（不打扰）
-        steps["close"] = {"ok": True, "skipped": "无弹窗，不右键"}
+
+        # 有弹窗 → 选"接受任务/告诉我要怎么做吧"选项（不要右键关，否则任务没接）
+        accept_kw = ["接取", "怎么", "接受", "好"]
+        picked = None
+        for kw in accept_kw:
+            r = _pick_dialog_option(gateway, kw)
+            if r["ok"]:
+                picked = r
+                steps["pick_accept"] = {"kw": kw, **r}
+                break
+            if verbose:
+                logger.info(f"DSHNPC: 关键词'{kw}'未命中, {r.get('info')}")
+
+        if not picked:
+            # 没找到接受选项 → 兜底右键关（避免卡住）
+            closed = _right_click_close()
+            steps["close"] = {"ok": closed, "pos": list(CLOSE_DIALOG_POS),
+                              "fallback": "未找到接受选项，兜底右键关"}
+            return {
+                "ok": False,
+                "message": f"有弹窗但未找到接受选项（{accept_kw}），已兜底右键关",
+                "steps": steps,
+                "target": {"npc": realname, "id": nid},
+                "elapsed_ms": round((time.time() - t0) * 1000, 1),
+            }
+
+        # ---- 4) 选完接受后可能再弹"少侠再见"告别对话 → 选它关掉 ----
+        time.sleep(0.4)
+        dialog2 = _check_dialog(gateway)
+        steps["dialog2"] = dialog2
+        if dialog2["open"]:
+            goodbye = _pick_dialog_option(gateway, "再见")
+            if goodbye["ok"]:
+                steps["pick_goodbye"] = goodbye
+            else:
+                # 兜底右键关
+                _right_click_close()
+                steps["close"] = {"ok": True, "pos": list(CLOSE_DIALOG_POS),
+                                  "fallback": "无再见选项，右键关"}
+
         return {
             "ok": True,
-            "message": f"CALL {realname} 成功，无弹窗（未右键）",
+            "message": f"杜少海 CALL+接受任务成功（选{picked.get('label', '?')}）",
             "steps": steps,
             "target": {"npc": realname, "id": nid},
             "elapsed_ms": round((time.time() - t0) * 1000, 1),
