@@ -416,8 +416,8 @@ def SYBUZ2(
     x: Union[int, str, None] = None,
     y: Union[int, str, None] = None,
     random_offset: bool = True,
-    offset_x: tuple = (10, 30),
-    offset_y: tuple = (10, 30),
+    offset_x: tuple = (5, 15),
+    offset_y: tuple = (5, 15),
 ):
     """
     站桩瞬移任务完整流程（Lua 直接 CALL 版，2026-08-23 突破）。
@@ -432,12 +432,13 @@ def SYBUZ2(
     :param gateway: 网关地址
     :param x/y: 独立坐标分量（GUI 事件拆传兼容）
     :param random_offset: ★2026-08-25 仿人化——瞬移落点随机偏移，
-        避免每次精确命中任务坐标暴露脚本规律（默认 x±10~30, y±10~30，
-        随机符号）。实测多次：
-        - x±400 → 偏移 50+ 仍超阈值触发"距离太远"（用户截图）
-        - x±100 → 仍偶发"距离太远"（第二次截图偏移 40）
-        - x±30 → 最大 60 接近阈值边缘，理论不再触发
-        仍能在 ±30 格内随机偏移，避免每次精确命中。
+        避免每次精确命中任务坐标暴露脚本规律（默认 x±5~15, y±5~15，
+        随机符号，最大曼哈顿 30）。三轮实测：
+        - x±400 → 91 触发 ❌
+        - x±100 → 40 仍触发 ❌
+        - x±30  → 48 仍触发 ❌
+        - x±5~15 → 最大 30 留 20 余量给 NPC 散布，理论不触发
+        仿人化效果减弱（5~15 格随机），但绝对安全。
         任务序列如需关闭传 random_offset=false。
     :param offset_x/offset_y: 偏移范围 (min, max)
     :return: dict {ok, message, steps, target_coord, target_location, elapsed_ms}
