@@ -57,15 +57,25 @@ _JHRW_ROI_DEFAULT = (840, 130, 150, 103)  # (x, y, w, h) — 多色文字
 
 
 def get_jhrw_roi() -> Tuple[int, int, int, int]:
-    """返回 JHRW 任务面板 ROI（优先读取 settings 配置，缺失时用默认值）。"""
+    """返回 JHRW 任务面板 ROI（优先读取 settings 配置，缺失时用默认值）。
+
+    2026-08-25 分辨率自适应：ROI 按设计基准（1000x600）配置，
+    窗口缩放到其他尺寸时换算为当前客户区物理坐标。
+    """
     try:
         from config.config import config
         v = config.get("recognition.jhrw_roi")
         if isinstance(v, (list, tuple)) and len(v) == 4:
-            return (int(v[0]), int(v[1]), int(v[2]), int(v[3]))
+            x, y, w, h = int(v[0]), int(v[1]), int(v[2]), int(v[3])
+        else:
+            x, y, w, h = _JHRW_ROI_DEFAULT
     except Exception:
-        pass
-    return _JHRW_ROI_DEFAULT
+        x, y, w, h = _JHRW_ROI_DEFAULT
+    try:
+        from core.resolution import logical_rect
+        return logical_rect(x, y, w, h)
+    except Exception:
+        return (x, y, w, h)
 
 
 # 兼容旧引用：模块级常量（写死旧值会与 settings 冲突，故也跟随配置）

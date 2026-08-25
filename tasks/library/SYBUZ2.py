@@ -27,6 +27,16 @@ import time
 from typing import Optional, Tuple, Union, List
 from utils.logger import logger
 
+
+
+def _logical(x, y):
+    """逻辑坐标（基准分辨率）→ 当前窗口物理坐标（分辨率自适应，2026-08-25）。"""
+    try:
+        from core.resolution import logical_to_client
+        return logical_to_client(x, y)
+    except Exception:
+        return (x, y)
+
 try:
     from config.config import config
 except Exception:
@@ -263,7 +273,10 @@ _G.__out = tostring(ok) .. "|" .. realname"""
                             # 重试成功但对话不对——关掉
                             try:
                                 from core.input_controller import input_controller
-                                input_controller.right_click(500, 310, click_delay=200)
+
+
+
+                                input_controller.right_click(*_logical(500, 310), click_delay=200)
                             except Exception:
                                 pass
                             time.sleep(0.3)
@@ -286,7 +299,7 @@ _G.__out = tostring(ok) .. "|" .. realname"""
                 logger.warning(f"SYBUZ2: {last_err}, opts={opts}")
             try:
                 from core.input_controller import input_controller
-                input_controller.right_click(500, 310, click_delay=200)
+                input_controller.right_click(*_logical(500, 310), click_delay=200)
             except Exception:
                 pass
             time.sleep(0.3)
@@ -524,7 +537,7 @@ def SYBUZ2(
             time.sleep(1.0)
             try:
                 from core.input_controller import input_controller
-                input_controller.right_click(500, 310, click_delay=200)
+                input_controller.right_click(*_logical(500, 310), click_delay=200)
                 steps["post_battle_right_click"] = {"ok": True, "info": "战斗结束1s后右键(500,310)"}
                 if verbose:
                     logger.info("SYBUZ2: 战斗结束 1s 后右键点击 (500,310)")

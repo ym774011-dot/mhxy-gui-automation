@@ -1007,6 +1007,13 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             y_val = self._resolve_value(str(y_raw)) if isinstance(y_raw, str) and "${" in str(y_raw) else y_raw
             x = int(x_val) if not isinstance(x_val, (list, tuple)) else int(x_val[0])
             y = int(y_val) if not isinstance(y_val, (list, tuple)) else int(y_val[0])
+            # 2026-08-25 分辨率自适应：任务序列坐标按设计基准（1000x600）开发，
+            # 窗口缩放到其他尺寸时换算为当前客户区物理坐标（模板/YOLO 物理路径不受影响）
+            try:
+                from core.resolution import logical_to_client
+                x, y = logical_to_client(x, y)
+            except Exception:
+                pass
             button = str(params.get("button", "left")).lower()
             # 点击后等待：默认 0，由用户在事件自身的 post_delay 控制。
             # 之前默认 1.0 干扰了用户已有的 pre/post delay 配置（已撤回）。
@@ -1025,6 +1032,9 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                 probe_xy = None
                 try:
                     probe_xy = (int(params.get("probe_x", 0)), int(params.get("probe_y", 0)))
+                    if probe_xy and probe_xy != (0, 0):
+                        from core.resolution import logical_to_client
+                        probe_xy = logical_to_client(*probe_xy)
                 except (TypeError, ValueError):
                     probe_xy = None
                 ok = input_controller.click_verified(
