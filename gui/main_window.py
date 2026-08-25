@@ -928,18 +928,39 @@ class MainWindow(QMainWindow):
     # 自动保存文件路径（相对项目根目录）
     _AUTOSAVE_PATH = "data/task_sequence_autosave.json"
 
+    def _autosave_path(self) -> str:
+        """任务序列自动保存路径（多组隔离，2026-08-25）。
+
+        组1（默认）：data/task_sequence_autosave.json（历史兼容）
+        组2+：优先组配置 task_sequence（如 data/task_sequence_group2.json），
+              缺失则回退 data/task_sequence_autosave_g{N}.json
+        """
+        try:
+            from core.group_config import current_group, load_group_config
+            g = current_group()
+            if g > 1:
+                cfg = load_group_config(g)
+                p = cfg.get("task_sequence")
+                if p:
+                    return str(p)
+                return f"data/task_sequence_autosave_g{g}.json"
+        except Exception:
+            pass
+        return self._AUTOSAVE_PATH
+
     def _load_autosave_or_create(self) -> TaskSequence:
         """
         启动时从自动保存文件加载任务序列；文件不存在或加载失败时
         创建一个新的空任务序列。
         """
-        ts = TaskSequence.load(self._AUTOSAVE_PATH)
+        path = self._autosave_path()
+        ts = TaskSequence.load(path)
         if ts is not None:
             task_count = len(ts.tasks)
             event_count = sum(len(t.events) for t in ts.tasks)
             logger.info(
                 f"已从自动保存加载任务序列: name={ts.name!r}, "
-                f"任务数={task_count}, 事件数={event_count}"
+                f"任务数={task_count}, 事件数={event_count} (path={path})"
             )
             return ts
         # 加载失败，创建空序列
@@ -956,7 +977,7 @@ class MainWindow(QMainWindow):
         if ts is None:
             return
         try:
-            success = ts.save(self._AUTOSAVE_PATH)
+            success = ts.save(self._autosave_path())
             if success:
                 logger.debug(
                     f"任务序列已自动保存: name={ts.name!r}, "
