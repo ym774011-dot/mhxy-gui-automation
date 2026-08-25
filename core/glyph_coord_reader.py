@@ -59,8 +59,9 @@ _JHRW_ROI_DEFAULT = (840, 130, 150, 103)  # (x, y, w, h) — 多色文字
 def get_jhrw_roi() -> Tuple[int, int, int, int]:
     """返回 JHRW 任务面板 ROI（优先读取 settings 配置，缺失时用默认值）。
 
-    2026-08-25 分辨率自适应：ROI 按设计基准（1000x600）配置，
-    窗口缩放到其他尺寸时换算为当前客户区物理坐标。
+    2026-08-25 分辨率适配：游戏渲染=窗口尺寸（自适应），点击坐标直接用
+    窗口像素无需缩放；但 ROI 按 1000x600 设计，窗口变窄(如 800)时
+    x=840 超界——仅超界时按比例收缩，未超界不动。
     """
     try:
         from config.config import config
@@ -71,11 +72,19 @@ def get_jhrw_roi() -> Tuple[int, int, int, int]:
             x, y, w, h = _JHRW_ROI_DEFAULT
     except Exception:
         x, y, w, h = _JHRW_ROI_DEFAULT
+    # 超界收缩：ROI 右边界超过客户区宽 → 按比例左移/缩窄
     try:
-        from core.resolution import logical_rect
-        return logical_rect(x, y, w, h)
+        from core.window_manager import window_manager
+        cw, ch = window_manager.get_client_size()
+        if cw and ch:
+            # 缩窄以适配窄窗口（保持 ROI 宽度/高度相对位置）
+            if x + w > cw:
+                scale = cw / (x + w)
+                x, y, w, h = (int(x * scale), int(y * scale),
+                              int(w * scale), int(h * scale))
     except Exception:
-        return (x, y, w, h)
+        pass
+    return (x, y, w, h)
 
 
 # 兼容旧引用：模块级常量（写死旧值会与 settings 冲突，故也跟随配置）
