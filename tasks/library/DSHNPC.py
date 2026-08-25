@@ -119,14 +119,23 @@ _G.__out = "open|" .. tl .. "|" .. ol"""
 
 
 def _find_accept_option(gateway: str) -> dict:
-    """读对话栏选项，找含"接任务"关键词的选项坐标。
+    """读对话栏选项，找含"接任务"关键词的选项坐标（委托给通用 _find_option_by_keyword）。"""
+    return _find_option_by_keyword(gateway, ("怎么", "接取", "接受"))
 
-    选项对象结构：{基本内容, 跳转链接, 选中判断={x,y,w,h}}——
-    选中判断 表的 x/y 就是该选项的**客户区坐标**，**左键点击即选中**
-    （2026-08-25 实测：选项.选中判断={x=119,y=386,w=126,h=14}）。
-    事件解析(跳转链接) 对接任务选项是假成功（日志 ok=True 但任务没接），
-    必须用左键点击坐标。
-    """
+
+def _left_click_accept(x: int, y: int) -> bool:
+    """左键点击接任务选项（窗口像素坐标，不缩放——渲染=窗口尺寸）。"""
+    try:
+        from core.input_controller import input_controller
+        input_controller.click(x, y, button="left", press_delay=0.1)
+        return True
+    except Exception as e:
+        logger.warning(f"DSHNPC: 左键点击接受选项失败: {e}")
+        return False
+
+
+def _find_option_by_keyword(gateway: str, keywords) -> dict:
+    """按关键词元组找对话栏选项坐标（与 _find_accept_option 通用版）。"""
     code = """
 local out = {}
 local t = tp.窗口.对话栏.选项 or {}
@@ -144,7 +153,7 @@ _G.__out = table.concat(out, ";")"""
         raw = _lua(gateway, code)
     except Exception:
         return {}
-    accept_kw = ("怎么", "接取", "接受")
+    kws = keywords if isinstance(keywords, (tuple, list)) else (keywords,)
     for entry in (raw or "").split(";"):
         if "|" not in entry:
             continue
@@ -157,20 +166,9 @@ _G.__out = table.concat(out, ";")"""
             pass
         if x <= 0 or y <= 0:
             continue
-        if any(kw in text for kw in accept_kw):
+        if any(kw in text for kw in kws):
             return {"text": text, "x": x, "y": y}
     return {}
-
-
-def _left_click_accept(x: int, y: int) -> bool:
-    """左键点击接任务选项（窗口像素坐标，不缩放——渲染=窗口尺寸）。"""
-    try:
-        from core.input_controller import input_controller
-        input_controller.click(x, y, button="left", press_delay=0.1)
-        return True
-    except Exception as e:
-        logger.warning(f"DSHNPC: 左键点击接受选项失败: {e}")
-        return False
 
 
 def _right_click_close():
@@ -290,20 +288,45 @@ _G.__out = tostring(ok) .. "|" .. tostring(v.名称 or "")"""
                 "elapsed_ms": round((time.time() - t0) * 1000, 1),
             }
 
-        # ---- 4) 接任务后可能再弹"少侠再见"告别对话 → 右键关闭 ----
-        time.sleep(0.4)
-        dialog2 = _check_dialog(gateway)
-        steps["dialog2"] = dialog2
-        if dialog2["open"]:
+        # ---- 4) 接任务后可能再弹告别对话 → 等+检测 → 左键点"少海再见"或兜底右键关 ----
+        # 告别对话框可能延迟弹出（游戏渲染），等 0.4s 检测一次；最多轮询 3 次
+        closed = False
+        goodbye_text = None
+        for attempt in range(3):
+            time.sleep(0.4)
+            dialog2 = _check_dialog(gateway)
+            if not dialog2.get("open"):
+                steps.setdefault("dialog2_history", []).append({"attempt": attempt, **dialog2})
+                continue
+            # 有弹窗 → 找"再见"选项坐标 → 左键点
+            opt = _find_option_by_keyword(gateway, ("再见", "关闭", "告辞"))
+            steps.setdefault("dialog2_history", []).append(
+                {"attempt": attempt, "dialog": dialog2, "option": opt})
+            if opt:
+                _left_click_accept(opt["x"], opt["y"])
+                goodbye_text = opt["text"]
+                closed = True
+                time.sleep(0.3)  # 等告别关闭动画
+                # 再确认一次：是否还有弹窗（如果选项没关干净）
+                if _check_dialog(gateway).get("open"):
+                    _right_click_close()  # 兜底
+                break
+            # 没找到选项 → 兜底右键关
             closed = _right_click_close()
-            steps["close"] = {"ok": closed, "pos": list(CLOSE_DIALOG_POS),
-                              "reason": "接任务后仍有弹窗，右键关闭"}
-        else:
-            steps["close"] = {"ok": True, "skipped": "接任务后无弹窗"}
+            break
+
+        steps["close"] = {
+            "ok": closed,
+            "method": "left_click_goodbye" if goodbye_text else "right_click_fallback",
+            "goodbye_text": goodbye_text,
+            "pos": list(CLOSE_DIALOG_POS) if not goodbye_text else None,
+        }
 
         return {
             "ok": True,
-            "message": f"杜少海 CALL+左键接任务成功（{opt['text']} @ {opt['x']},{opt['y']}）",
+            "message": f"杜少海 CALL+左键接任务成功（{opt['text']}）"
+                       + (f" + 左键告别 ({goodbye_text})" if goodbye_text
+                          else (" + 兜底右键关闭" if closed else " + 告别未关(可能已关)")),
             "steps": steps,
             "target": {"npc": realname, "id": nid},
             "elapsed_ms": round((time.time() - t0) * 1000, 1),
