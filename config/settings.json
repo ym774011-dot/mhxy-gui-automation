@@ -111,6 +111,12 @@
         "path": "E:/DS/mhxy-gui-automation/tasks/library/SYBUZ2.py",
         "enabled": true,
         "category": "custom"
+      },
+      {
+        "name": "DSHNPC",
+        "path": "E:////DS////mhxy-gui-automation////tasks////library////DSHNPC.py",
+        "enabled": true,
+        "category": "custom"
       }
     ]
   },
