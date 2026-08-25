@@ -416,7 +416,7 @@ def SYBUZ2(
     x: Union[int, str, None] = None,
     y: Union[int, str, None] = None,
     random_offset: bool = True,
-    offset_x: tuple = (10, 400),
+    offset_x: tuple = (10, 100),
     offset_y: tuple = (10, 40),
 ):
     """
@@ -432,8 +432,10 @@ def SYBUZ2(
     :param gateway: 网关地址
     :param x/y: 独立坐标分量（GUI 事件拆传兼容）
     :param random_offset: ★2026-08-25 仿人化——瞬移落点随机偏移，
-        避免每次精确命中任务坐标暴露脚本规律（x±10~400, y±10~40，
-        带随机符号）。CALL 同图任意距离有效，偏移不影响 CALL。
+        避免每次精确命中任务坐标暴露脚本规律（默认 x±10~100, y±10~40，
+        随机符号）。实测 x 偏移 >100 易触发 PC 端"距离太远"对话框
+        （客户端距离校验 ~50~100 格），y 保留 40 / x 保守 100。
+        仍能在 ±100 格内随机，避免每次精确命中。
         任务序列如需关闭传 random_offset=false。
     :param offset_x/offset_y: 偏移范围 (min, max)
     :return: dict {ok, message, steps, target_coord, target_location, elapsed_ms}
