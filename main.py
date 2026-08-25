@@ -58,6 +58,16 @@ def main():
     args, _ = ap.parse_known_args()
     os.environ["MHXY_GROUP"] = str(args.group)
 
+    # 验证码监控 watchdog 双保险（2026-08-25 闭环）：
+    # 开机自启（注册表 Run 键）之外，GUI 启动时再检查一次——
+    # watchdog 没运行就拉起（幂等），watchdog 会再拉起 captcha_monitor。
+    try:
+        from core.captcha_link import ensure_watchdog
+        _ok, _info = ensure_watchdog(group=args.group)
+        print(f"[main] 验证码 watchdog: {_info}")
+    except Exception as e:
+        print(f"[main] 验证码 watchdog 检查异常（不影响启动）: {e}")
+
     # 日志自动清理（启动时一次性执行，按 settings.json 的 auto_clean_days）
     try:
         from config.config import config

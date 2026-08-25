@@ -57,9 +57,77 @@ def wait_captcha_clear(timeout: float = 120.0, poll: float = 0.5) -> bool:
     return not captcha_active()
 
 
+# ---------------------------------------------------------------------------
+# 开机自启双保险（2026-08-25 用户要求"检查开机自启，没自启就脚本拉起，闭环"）
+# ---------------------------------------------------------------------------
+GATEWAY_DIR = r"E:\DS\mhxy-mcp-gateway"
+WATCHDOG_PY = os.path.join(GATEWAY_DIR, "captcha_watchdog.py")
+PYW = r"E:\py\pythonw.exe"
+
+
+def watchdog_running(group: int = None) -> bool:
+    """当前组（或任意组）的 captcha_watchdog 是否在运行。
+
+    :param group: 组号；None = 当前组（MHXY_GROUP）。组1 watchdog 可能
+        不带 --group 参数（默认 1），组 N>1 必须带 --group N。
+    """
+    if group is None:
+        try:
+            from core.group_config import current_group
+            group = current_group()
+        except Exception:
+            group = 1
+    try:
+        import psutil
+    except Exception:
+        return False
+    for p in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmd = " ".join(p.info["cmdline"] or [])
+        except Exception:
+            continue
+        if "captcha_watchdog" not in cmd:
+            continue
+        if group <= 1:
+            # 组1：不带 --group 或 --group 1 都算
+            if "--group" not in cmd or "--group 1" in cmd:
+                return True
+        else:
+            if f"--group {group}" in cmd:
+                return True
+    return False
+
+
+def ensure_watchdog(group: int = None) -> tuple:
+    """检查 watchdog 是否运行，没运行则拉起（幂等）。
+
+    :return: (ok, info) — ok=True 表示 watchdog 在运行（含本次拉起成功）
+    """
+    if watchdog_running(group):
+        return True, "watchdog 已在运行"
+    if group is None:
+        try:
+            from core.group_config import current_group
+            group = current_group()
+        except Exception:
+            group = 1
+    try:
+        import subprocess
+        args = [PYW, WATCHDOG_PY, "--group", str(group)]
+        subprocess.Popen(args, cwd=GATEWAY_DIR,
+                         creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)
+                         or 0x08000000)
+        return True, f"watchdog 未运行，已拉起 (group={group})"
+    except Exception as e:
+        return False, f"watchdog 拉起失败: {e}"
+
+
 if __name__ == "__main__":
     import sys
     print("captcha_active:", captcha_active())
+    if "--ensure" in sys.argv:
+        ok, info = ensure_watchdog()
+        print("ensure_watchdog:", ok, info)
     if "--wait" in sys.argv:
         ok = wait_captcha_clear(timeout=60)
         print("wait_captcha_clear:", ok)
