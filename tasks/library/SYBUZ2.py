@@ -24,6 +24,7 @@ SYBUZ2 - 站桩瞬移任务函数包（Lua 直接 CALL 版）。
 """
 import json
 import time
+import random
 from typing import Optional, Tuple, Union, List
 from utils.logger import logger
 
@@ -414,6 +415,9 @@ def SYBUZ2(
     verbose: bool = False,
     x: Union[int, str, None] = None,
     y: Union[int, str, None] = None,
+    random_offset: bool = True,
+    offset_x: tuple = (10, 400),
+    offset_y: tuple = (10, 40),
 ):
     """
     站桩瞬移任务完整流程（Lua 直接 CALL 版，2026-08-23 突破）。
@@ -427,6 +431,11 @@ def SYBUZ2(
     :param battle_timeout: 战斗等待超时秒数
     :param gateway: 网关地址
     :param x/y: 独立坐标分量（GUI 事件拆传兼容）
+    :param random_offset: ★2026-08-25 仿人化——瞬移落点随机偏移，
+        避免每次精确命中任务坐标暴露脚本规律（x±10~400, y±10~40，
+        带随机符号）。CALL 同图任意距离有效，偏移不影响 CALL。
+        任务序列如需关闭传 random_offset=false。
+    :param offset_x/offset_y: 偏移范围 (min, max)
     :return: dict {ok, message, steps, target_coord, target_location, elapsed_ms}
     """
     t0 = time.time()
@@ -464,12 +473,29 @@ def SYBUZ2(
     # ★2026-08-24 提速：wait_stable=False——CALL 事件开始是纯 Lua 数据层操作，
     #   不依赖画面定格；等画面定格(4-5s)纯属浪费。场景人物表在瞬移后 Lua 层即
     #   已就绪。若 find NPC 为空由 call_npc_event_start 内部 retry 兜底。
+    # ★2026-08-25 仿人化随机偏移：瞬移落点 = 任务坐标 ± 随机偏移
+    #   （x 10~400, y 10~40，随机符号），避免每次精确落点暴露脚本规律。
+    #   偏移后 CALL 仍用任务点 (gx,gy) 做候选距离排序（NPC 刷在任务点附近），
+    #   CALL 本身同图任意距离有效，偏移不影响。
+    gx_tele, gy_tele = gx, gy
+    if random_offset:
+        try:
+            dx = random.randint(offset_x[0], offset_x[1])
+            dy = random.randint(offset_y[0], offset_y[1])
+            dx = dx if random.random() < 0.5 else -dx
+            dy = dy if random.random() < 0.5 else -dy
+            gx_tele, gy_tele = gx + dx, gy + dy
+            steps["teleport_offset"] = (dx, dy)
+            if verbose:
+                logger.info(f"SYBUZ2: 瞬移随机偏移 ({dx:+d},{dy:+d}) → ({gx_tele},{gy_tele})")
+        except (ValueError, TypeError):
+            gx_tele, gy_tele = gx, gy
     try:
         from tasks.library.SYHS import SYHS
-        r = SYHS((gx, gy), target_location=target_location, gateway=gateway,
+        r = SYHS((gx_tele, gy_tele), target_location=target_location, gateway=gateway,
                  verbose=verbose, wait_stable=False)
         steps["teleport_to_target"] = {
-            "ok": r.get("ok"), "coord": (gx, gy),
+            "ok": r.get("ok"), "coord": (gx_tele, gy_tele),
             "map_switch": (r.get("map_switch") or {}).get("mode"),
             "server_sync": r.get("server_sync"),
         }
