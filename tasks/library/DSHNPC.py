@@ -118,39 +118,59 @@ _G.__out = "open|" .. tl .. "|" .. ol"""
     }
 
 
-def _pick_dialog_option(gateway: str, keyword: str) -> dict:
-    """按关键词选对话栏选项（复用 SYBUZ2 call_dialog_option 模式）。
+def _find_accept_option(gateway: str) -> dict:
+    """读对话栏选项，找含"接任务"关键词的选项坐标。
 
-    同时匹配「基本内容」与「跳转链接」；找不到返回 {"ok": False, ...}。
+    选项对象结构：{基本内容, 跳转链接, 选中判断={x,y,w,h}}——
+    选中判断 表的 x/y 就是该选项的**客户区坐标**，**左键点击即选中**
+    （2026-08-25 实测：选项.选中判断={x=119,y=386,w=126,h=14}）。
+    事件解析(跳转链接) 对接任务选项是假成功（日志 ok=True 但任务没接），
+    必须用左键点击坐标。
     """
-    code = f"""
-local t = tp.窗口.对话栏.选项 or {{}}
-local target = nil
-local label = nil
+    code = """
+local out = {}
+local t = tp.窗口.对话栏.选项 or {}
 for k,v in pairs(t) do
-  if type(v)=="table" and v.跳转链接 then
-    local text = tostring(v.基本内容 or "") .. "|" .. tostring(v.跳转链接 or "")
-    if text:find("{keyword}") then target = v.跳转链接; label = tostring(v.基本内容 or v.跳转链接); break end
+  if type(v)=="table" then
+    local text = tostring(v.基本内容 or "")
+    local sj = v.选中判断
+    local x, y = -1, -1
+    if type(sj)=="table" then x = tonumber(sj.x); y = tonumber(sj.y) end
+    out[#out+1] = text .. "|" .. tostring(x) .. "|" .. tostring(y)
   end
 end
-if not target then _G.__out = "NOOPTION"; return end
-local ok, ret = pcall(function() return tp.窗口.对话栏:事件解析(target) end)
-_G.__out = tostring(ok) .. "|" .. tostring(label)"""
+_G.__out = table.concat(out, ";")"""
     try:
         raw = _lua(gateway, code)
+    except Exception:
+        return {}
+    accept_kw = ("怎么", "接取", "接受")
+    for entry in (raw or "").split(";"):
+        if "|" not in entry:
+            continue
+        parts = entry.split("|")
+        text = parts[0] if parts else ""
+        x, y = -1, -1
+        try:
+            x, y = int(parts[1]), int(parts[2])
+        except (ValueError, IndexError, TypeError):
+            pass
+        if x <= 0 or y <= 0:
+            continue
+        if any(kw in text for kw in accept_kw):
+            return {"text": text, "x": x, "y": y}
+    return {}
+
+
+def _left_click_accept(x: int, y: int) -> bool:
+    """左键点击接任务选项（窗口像素坐标，不缩放——渲染=窗口尺寸）。"""
+    try:
+        from core.input_controller import input_controller
+        input_controller.click(x, y, button="left", press_delay=0.1)
+        return True
     except Exception as e:
-        return {"ok": False, "info": f"CALL 异常: {e}"}
-    if not raw or raw == "NOTFOUND":
-        return {"ok": False, "info": "NPC 消失"}
-    if raw == "NOOPTION":
-        return {"ok": False, "info": f"无含'{keyword}'的选项"}
-    parts = raw.split("|")
-    ok = parts[0] == "true"
-    return {
-        "ok": ok,
-        "info": f"选项[{parts[1] if len(parts) > 1 else ''}] 事件解析 ok={ok}",
-        "label": parts[1] if len(parts) > 1 else "",
-    }
+        logger.warning(f"DSHNPC: 左键点击接受选项失败: {e}")
+        return False
 
 
 def _right_click_close():
@@ -239,48 +259,51 @@ _G.__out = tostring(ok) .. "|" .. tostring(v.名称 or "")"""
                 "elapsed_ms": round((time.time() - t0) * 1000, 1),
             }
 
-        # 有弹窗 → 选"接受任务/告诉我要怎么做吧"选项（不要右键关，否则任务没接）
-        accept_kw = ["接取", "怎么", "接受", "好"]
-        picked = None
-        for kw in accept_kw:
-            r = _pick_dialog_option(gateway, kw)
-            if r["ok"]:
-                picked = r
-                steps["pick_accept"] = {"kw": kw, **r}
-                break
-            if verbose:
-                logger.info(f"DSHNPC: 关键词'{kw}'未命中, {r.get('info')}")
-
-        if not picked:
+        # 有弹窗 → 读"接任务"选项坐标 → 左键点击（事件解析是假成功，必须左键）
+        opt = _find_accept_option(gateway)
+        steps["accept_option"] = opt
+        if not opt:
             # 没找到接受选项 → 兜底右键关（避免卡住）
             closed = _right_click_close()
             steps["close"] = {"ok": closed, "pos": list(CLOSE_DIALOG_POS),
                               "fallback": "未找到接受选项，兜底右键关"}
             return {
                 "ok": False,
-                "message": f"有弹窗但未找到接受选项（{accept_kw}），已兜底右键关",
+                "message": f"有弹窗但未找到接受选项（怎么/接取/接受），已兜底右键关",
                 "steps": steps,
                 "target": {"npc": realname, "id": nid},
                 "elapsed_ms": round((time.time() - t0) * 1000, 1),
             }
 
-        # ---- 4) 选完接受后可能再弹"少侠再见"告别对话 → 选它关掉 ----
+        # 左键点击接受选项（= 接任务）
+        clicked = _left_click_accept(opt["x"], opt["y"])
+        steps["click_accept"] = {"ok": clicked, "pos": (opt["x"], opt["y"]),
+                                 "text": opt["text"]}
+        if not clicked:
+            closed = _right_click_close()
+            steps["close"] = {"ok": closed, "fallback": "左键点击失败，右键关"}
+            return {
+                "ok": False,
+                "message": f"左键点击接受选项失败，已右键关",
+                "steps": steps,
+                "target": {"npc": realname, "id": nid},
+                "elapsed_ms": round((time.time() - t0) * 1000, 1),
+            }
+
+        # ---- 4) 接任务后可能再弹"少侠再见"告别对话 → 右键关闭 ----
         time.sleep(0.4)
         dialog2 = _check_dialog(gateway)
         steps["dialog2"] = dialog2
         if dialog2["open"]:
-            goodbye = _pick_dialog_option(gateway, "再见")
-            if goodbye["ok"]:
-                steps["pick_goodbye"] = goodbye
-            else:
-                # 兜底右键关
-                _right_click_close()
-                steps["close"] = {"ok": True, "pos": list(CLOSE_DIALOG_POS),
-                                  "fallback": "无再见选项，右键关"}
+            closed = _right_click_close()
+            steps["close"] = {"ok": closed, "pos": list(CLOSE_DIALOG_POS),
+                              "reason": "接任务后仍有弹窗，右键关闭"}
+        else:
+            steps["close"] = {"ok": True, "skipped": "接任务后无弹窗"}
 
         return {
             "ok": True,
-            "message": f"杜少海 CALL+接受任务成功（选{picked.get('label', '?')}）",
+            "message": f"杜少海 CALL+左键接任务成功（{opt['text']} @ {opt['x']},{opt['y']}）",
             "steps": steps,
             "target": {"npc": realname, "id": nid},
             "elapsed_ms": round((time.time() - t0) * 1000, 1),
