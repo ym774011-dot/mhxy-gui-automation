@@ -13,11 +13,12 @@ WORLD_BOSS - 世界BOSS/活动怪自动监控与 farming 模块（Lua CALL + 地
      - 有地图包 → **真实走路**（Tab 大地图点击寻路）到 BOSS 附近；
      - 无地图包 / 走路失败（如花果山）→ 用户批准的兜底：**随机瞬移到 BOSS
        周边环带落点**（半径 3~8 格随机角度，绝不与 BOSS 坐标重叠、不贴脸）。
-  4b. **距离门控（2026-08-27 实测）**：距 BOSS 超过 ``APPROACH_GRID_DISTANCE`` 格时
-     直接 CALL 会弹“你距离这个NPC太远了”。故 CALL 前必须先量网格距离并走近。
-  5. **CALL 进战斗**：贴近后调用 NPC 对象 ``事件开始`` → 读对话栏选项 → 用 BOSS 类别
+  4b. **先 CALL 再走近（2026-08-28 用户定案）**：每个 BOSS 先原地 CALL ``事件开始``；
+     只有 CALL 弹超距确认框 / 选项点了没进战斗 / 对象级失败时，才走近一次
+     （走路优先，瞬移兜底）再 CALL。不做 CALL 前的距离预检走近。
+  5. **CALL 进战斗**：调用 NPC 对象 ``事件开始`` → 读对话栏选项 → 用 BOSS 类别
      对应的红色战斗文案（如妖魔/鬼怪“让我来收拾你”，星宿“请星君赐教”）匹配 →
-     CALL ``事件解析(跳转链接)`` 触发战斗。
+     CALL ``事件解析(跳转链接)`` 触发战斗；超距/未进战斗 → 走近一次重 CALL。
   6. **组队/无等级要求**：由服务端校验，代码只负责找到并开战。
 
 与旧版的差异：
@@ -35,6 +36,7 @@ import sys
 import time
 import random
 import os
+from collections import deque
 from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any, Callable
 from urllib.request import Request, urlopen
@@ -58,6 +60,32 @@ except Exception:
 # 显式指定（环境变量优先级最高）。2026-08-27 用户指定：PID 15224 走组2网关 18083。
 if os.environ.get("WORLD_BOSS_GATEWAY"):
     DEFAULT_GATEWAY = os.environ["WORLD_BOSS_GATEWAY"].rstrip("/")
+
+
+def _gui_stop_requested() -> bool:
+    """GUI 任务引擎的停止标志（'停止'按钮置位 core.task_engine.task_engine.should_stop）。
+
+    farming 长循环每轮轮询它，保证 GUI 上点"停止"后几秒内安全退出，
+    不必等 max_runtime 跑满。独立脚本/测试环境 import 失败 → 视为不停止。
+    """
+    try:
+        from core.task_engine import task_engine as _eng
+        return bool(getattr(_eng, "should_stop", None) and _eng.should_stop.is_set())
+    except Exception:
+        return False
+
+
+def _sleep_stoppable(seconds: float) -> bool:
+    """可被 GUI 停止打断的 sleep：0.5s 粒度分段。
+
+    :return: True = 正常睡完；False = 中途收到停止信号（提前返回）。
+    """
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if _gui_stop_requested():
+            return False
+        time.sleep(min(0.5, max(0.05, deadline - time.time())))
+    return not _gui_stop_requested()
 
 
 # ============================================================
@@ -88,10 +116,13 @@ DEFAULT_TARGET_BOSSES = [
     "妖魔",
     "鬼怪",
     "妖魔统领",
+    "妖魔头领",     # 2026-08-27 公告实际用词：“妖魔头领气得正在傲来国寻衅闹事”
     "知了王",
-    "心魔",         # 公告：“师傅的心魔,跑到长安酒店一楼处祸害人间”（2026-08-27 实测）
-    "下凡的星官",    # 公告：“特派星官下凡至宝象国赐福”（2026-08-27 实测）
-    "星官",
+    # “师傅的心魔”已按用户要求移除（2026-08-27 23:28 目前打不过，以后能打过再加回）
+    # “星官/下凡的星官”已移除（2026-08-27 23:39 实测：赐福 NPC，对话选项=
+    #  “请星官赐福/你认错人了”，根本无战斗选项，留着只会导致无限走近+CALL 空转）
+    "地煞星",       # 2026-08-27 传说频道(cw)实锤：随机词缀名（“初出茅庐地煞星”等），按类别子串匹配
+    "天罡星",
 ] + list(_28_STAR_BOSSES) + list(_12_ZODIAC_BOSSES)
 
 # 监控地图列表（顺序 = 无公告时的轮换顺序）。
@@ -105,6 +136,7 @@ DEFAULT_MONITORED_MAPS = [
     "长寿郊外",  # 妖魔刷新图；校准走路（data/map_calibration/长寿郊外.json）
     "大唐国境",  # 妖魔刷新图；校准走路（2026-08-27 用户校准）
     "花果山",   # 知了王/妖魔刷此图；校准走路（2026-08-27 用户校准）
+    "北俱芦洲", # 2026-08-27 链路实测：'花果山传送北俱芦洲' 全局直达；校准走路（2026-08-27 用户校准 像素(627,304)@191,63）
     "傲来国",   # ALG 地图包（2026-08-27 注册）
     "宝象国",   # BXG 地图包（2026-08-27 注册；星官“赐福”刷新图）
     "大唐境外",  # 校准走路（2026-08-27 用户校准）
@@ -184,7 +216,11 @@ MAP_ID_TO_NAME: Dict[str, str] = {
     "1507": "东海海底",
     "1508": "沉船",
     "1509": "沉船内室",
-    "1514": "花果山",   # 2026-08-27 早前实测（知了王公告+现场核实）；今日 BFS 未见入口，链路待补
+    "1514": "花果山",   # 2026-08-27 实测：'北俱芦洲传送花果山' 全局直达
+    "1174": "北俱芦洲", # 2026-08-27 实测
+    "1091": "长寿郊外", # 2026-08-27 实测：'长寿村传送长寿郊外' 直达
+    "1070": "长寿村",   # 2026-08-27 实测：'长寿郊外传送长寿村' 直达
+    "1092": "傲来国",   # 2026-08-28 实测：'花果山传送傲来国' 全局直达
 }
 _MAP_NAME_TO_ID: Dict[str, str] = {v: k for k, v in MAP_ID_TO_NAME.items()}
 
@@ -214,6 +250,15 @@ _HOP_CHAINS: Dict[str, List[str]] = {
     "阴曹地府": ["长安传送大唐国境", "大唐国境传送阴曹地府"],
     "小西天":   ["长安传送大唐国境", "大唐国境传送大唐境外", "大唐境外传送小西天"],
     "墨家村":   ["长安传送大唐国境", "大唐国境传送大唐境外", "大唐境外传送墨家村"],
+    # ★ 2026-08-27 实测新增（花果山链路打通，全部单 token 全局直达）：
+    "花果山":   ["北俱芦洲传送花果山"],
+    "北俱芦洲": ["花果山传送北俱芦洲"],
+    "长寿郊外": ["长寿村传送长寿郊外"],
+    "长寿村":   ["长寿郊外传送长寿村"],
+    # ★ 2026-08-28 实测：东海湾传送表无傲来国、长安表也无，唯一入口在花果山
+    #   （"花果山传送傲来国"）。按 BFS 全局查表铁律，任意位置可直达。
+    "傲来国":   ["花果山传送傲来国"],
+    "方寸山":   ["长寿郊外传送长寿村", "长寿村传送方寸山"],
 }
 
 # 刷新时间表（BOSS名或BOSS类别 -> 每小时内分钟列表）。
@@ -242,6 +287,13 @@ for _s in _28_STAR_BOSSES:
 #   4) "东海湾出现了天降灵猴"
 #   5) "现有十二生肖中的{丑牛、寅虎、未羊}出现在了{江南野外}处捣乱"（多BOSS单图，
 #      解析器按名称命中，无需专用正则；单BOSS命名中 pattern3 已覆盖）
+# 泛化传说公告锚点（2026-08-27 实测，频道标签="cw" 不是 "xt"）：
+#   “神秘的初出茅庐地煞星带着天界的宝物降临在了柳林坡、东海湾、江南野外一带，
+#    只有智勇双全的强者才有机缘获得宝物，少侠敢来挑战么！”
+# BOSS 名词缀随机生成无法穷举 → 锚定句子结构提取，类别取已知后缀（子串匹配实体名）。
+_GENERIC_SPAWN_RE = re.compile(r"([^\s，,。]{2,24}?)带着天界的宝物降临在了([^\s，,。]+)")
+_GENERIC_BOSS_CLASSES = ("地煞星", "天罡星", "星宿", "生肖")
+
 DEFAULT_SPAWN_PATTERNS = [
     # 图2 二十八星宿格式：...之一的{boss}下凡至{map}附近...
     r"(?:之一)?的\s*{boss}\s*下凡至\s*{map}",
@@ -257,6 +309,7 @@ BOSS_BATTLE_KEYWORDS: Dict[str, List[str]] = {
     "妖魔":        ["让我来收拾你"],
     "鬼怪":        ["让我来收拾你"],
     "妖魔统领":    ["让我来收拾你", "收拾你"],
+    "妖魔头领":    ["让我来收拾你", "收拾你"],  # 2026-08-27 公告实际用词是"妖魔头领"（非"统领"）
     "天降灵猴":    ["我来瞧瞧你的啥", "瞧瞧你的啥"],
     "下凡的灵猴":  ["我来瞧瞧你的啥", "瞧瞧你的啥"],
     "知了王":      ["知了还这么嚣张？讨打！", "讨打", "嚣张"],
@@ -274,10 +327,15 @@ for _s in _12_ZODIAC_BOSSES:
     BOSS_BATTLE_KEYWORDS.setdefault(_s, BOSS_BATTLE_KEYWORDS["十二生肖"])
 
 # 通用战斗关键词兜底（当BOSS具体名没匹配到时）。
+# 注意：“是的我要去/我还要逛逛”是超距确认框不是战斗选项，绝不放进关键词
+# （点了会被服务器静默拒绝且对话原样留着），由 _dialog_is_too_far 专门识别。
 DEFAULT_BATTLE_KEYWORDS = [
     "挑战", "战斗", "击杀", "抓捕", "制服", "对付", "消灭", "进入战斗", "讨伐",
     "降服",  # 十二生肖公告用词：“赶紧去降服它们”（2026-08-27 截图）
 ]
+
+# 超距确认框标志：CALL 后弹出的对话含这些字样 = 距离太远，需要走近后重试。
+_FAR_DIALOG_MARKERS = ("是的我要去", "我还要逛逛", "太远")
 
 # 对话选项黑名单：含这些措辞的选项绝不点（星官实测“你认错人了”=拒绝赐福）。
 _BATTLE_DENY_OPTIONS = (
@@ -287,13 +345,14 @@ _BATTLE_DENY_OPTIONS = (
     "离开",
 )
 
-# 距离门控：角色与 BOSS 网格距离 ≤ 此值才允许 CALL 事件开始。
-# 实测超距时游戏弹“你距离这个NPC太远了”，CALL 无效（2026-08-27 用户确认）。
-# 用户定案流程：原地 CALL → 弹“太远”→ 走到 BOSS 周边“随机10~50格”→ 再 CALL；
-# 成功继续，失败再走。上限 QUICK_CALL_MAX_TRIES 次后跳过该只。
-QUICK_CALL_RING_RANGE = (10.0, 50.0)
-QUICK_CALL_MAX_TRIES = 4
+# CALL 优先定案（用户 2026-08-27 20:52 明确）：每只 BOSS 先原地 CALL；
+# 只有弹“太远”确认框/无战斗选项时才走近（走路优先）一次，再 CALL 重试。
+# 绝不“打过一只就先走一段”，也绝不失败后随机散开环带——都太费时间。
+QUICK_CALL_MAX_TRIES = 3
 APPROACH_GRID_DISTANCE = 4.0
+WALK_ARRIVAL_TIMEOUT = 30.0  # 走路贴近后等"离BOSS进范围"的上限（旧 90s 太长，怪在眼前干等）
+WALK_ARRIVAL_BOX = 20        # 2026-08-28 用户定案：落点 ±20 格内就算"走路到位"，
+                             # 不再强制走到 4 格内才认（CALL 不中由后续补瞬移拉近）
 # 无地图包瞬移兜底落点：BOSS 周边随机环带半径范围（格）。绝不落在 BOSS 坐标上。
 TELEPORT_OFFSET_RANGE = (3.0, 8.0)
 # 第一次落点仍超距时，第二次补传用更近的半径。
@@ -303,12 +362,27 @@ TELEPORT_RETRY_RANGE = (2.0, 4.0)
 # 注意：扫描时“天降灵猴”的公告名可能对应场景实体“下凡的灵猴”，需同时注册。
 EXACT_MATCH_BOSSES = ("知了王", "妖魔统领", "天降灵猴", "下凡的灵猴", "三界财神爷")
 
-# 击杀优先级（用户指定 2026-08-27）：数字越小越优先。
-# 三界财神爷 > 知了王 > 其他（其他默认=2）。同优先级按距离近的先打。
+# 击杀优先级（2026-08-28 用户修订）：数字越小越优先。
+# 根因修复：旧表只有财神爷/知了王，星宿/灵猴/生肖全落默认 2 与妖魔鬼怪同级，
+# 妖魔鬼怪数量多+距离近永远赢 → "偏向打妖魔鬼怪"。现在稀有怪全部压过普通怪。
+#   0 三界财神爷（用户指定最高）
+#   1 限时稀有：知了王 / 灵猴 / 二十八星宿 / 天罡地煞 / 十二生肖
+#   2 未登记杂鱼
+#   3 妖魔/鬼怪系（每小时 :10 常刷、数量多，垫底——打不完不用抢）
 BOSS_PRIORITY = {
     "三界财神爷": 0,
     "知了王": 1,
+    "天降灵猴": 1,
+    "下凡的灵猴": 1,
+    "地煞星": 1,
+    "天罡星": 1,
 }
+for _n in _28_STAR_BOSSES:
+    BOSS_PRIORITY[_n] = 1
+for _n in _12_ZODIAC_BOSSES:
+    BOSS_PRIORITY[_n] = 1
+for _n in ("妖魔", "鬼怪", "妖魔统领", "妖魔头领"):
+    BOSS_PRIORITY[_n] = 3
 _BOSS_PRIORITY_DEFAULT = 2
 
 
@@ -350,6 +424,10 @@ FUNCTIONS = {
         "title": "探测聊天框最近含BOSS/地图的公告（调试用，验证聊天字段）",
         "params": {"lines": "读取最近多少条", "gateway": "网关地址"},
     },
+    "WORLD_BOSS_chat_maintenance": {
+        "title": "清理网关 recv/send/hex 大缓存（10分钟一次防膨胀，噪声消息已在解析层过滤）",
+        "params": {"gateway": "网关地址", "verbose": "是否打印日志"},
+    },
     "WORLD_BOSS_confirm_list": {
         "title": "返回需要用户确认的方向/决策清单",
         "params": {},
@@ -362,30 +440,98 @@ FUNCTIONS = {
 # ============================================================
 
 def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0) -> dict:
-    """POST JSON 到 gateway，返回解析后的 JSON。"""
+    """POST JSON 到 gateway，返回解析后的 JSON。
+
+    2026-08-27：网关不在线（WinError 10061 连接拒绝）时不再直接炸任务——
+    先走 _heal_gateway()（gateway_guard.ensure_gateway 按 window_manager.pid
+    重拉并 attach），成功后重试一次；仍失败才抛出。
+    """
     body = json.dumps(data).encode("utf-8") if data is not None else None
-    req = Request(
-        gateway.rstrip("/") + path,
-        data=body,
-        headers={"Content-Type": "application/json"} if body else {},
-    )
-    with urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+
+    def _once():
+        req = Request(
+            gateway.rstrip("/") + path,
+            data=body,
+            headers={"Content-Type": "application/json"} if body else {},
+        )
+        with urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+
+    try:
+        return _once()
+    except Exception as e:
+        refused = isinstance(getattr(e, "reason", None), ConnectionRefusedError)
+        if not (refused or "10061" in str(e)):
+            raise
+        if not _heal_gateway():
+            # 2026-08-27：冷启动 attach 可达 170~200s，ensure_gateway 的
+            # 轮询窗口偶发卡边缘误报 timeout——网关其实马上就绪。
+            # heal "失败"后缓冲 20s 直接重试 HTTP 一次，不放弃。
+            time.sleep(20.0)
+            return _once()
+        return _once()
+
+
+def _heal_gateway() -> bool:
+    """frida script 销毁（游戏重开导致 PID 失联）时自愈网关。
+
+    通过 gateway_guard.ensure_gateway() 杀旧网关并按 window_manager.pid
+    重新拉起。独立运行/导入失败时静默放弃。
+
+    2026-08-27：冷启动 attach 实测 170~200s（ensure_gateway timeout=300s），
+    期间任务引擎日志完全静默，看起来像"卡死"（用户 22:26 报告，实际 5m23s
+    后自愈成功）。这里补上开始/结束日志，让自愈过程可见。
+    """
+    try:
+        from core import gateway_guard
+        _t0 = time.time()
+        logger.info("网关自愈开始（冷启动 attach 可达 170~200s，非卡死，请耐心等待）...")
+        ok, _info = gateway_guard.ensure_gateway(verbose=False)
+        logger.info(f"网关自愈{'成功' if ok else '失败'} 耗时 {time.time() - _t0:.0f}s info={_info}")
+        return bool(ok)
+    except Exception as e:
+        logger.warning(f"网关自愈异常: {e}")
+        return False
+
+
+def _is_bridge_dead(err: str) -> bool:
+    """判断网关错误是否为 frida 会话已失效。"""
+    e = str(err)
+    return ("script has been destroyed" in e
+            or "目标进程" in e and "不存在" in e
+            or "Failed to attach" in e
+            or "process not found" in e.lower())
 
 
 def _lua(gateway: str, code: str, result_var: str = "__out") -> str:
-    """经 /api/lua 执行 Lua 语句块，返回 result_var 值字符串。"""
+    """经 /api/lua 执行 Lua 语句块，返回 result_var 值字符串。
+
+    frida 会话死亡（游戏重开换 PID）时自动自愈网关并重试一次。
+    """
     r = _http_json(gateway, "/api/lua", {"code": code, "result_var": result_var})
     if not r.get("ok"):
-        raise RuntimeError(f"Lua 执行失败: {r.get('error', r)}")
+        err = str(r.get("error", r))
+        if _is_bridge_dead(err) and _heal_gateway():
+            r = _http_json(gateway, "/api/lua",
+                           {"code": code, "result_var": result_var})
+            if not r.get("ok"):
+                raise RuntimeError(f"Lua 执行失败: {r.get('error', r)}")
+        else:
+            raise RuntimeError(f"Lua 执行失败: {r.get('error', r)}")
     return (r.get("result") or {}).get("value") or ""
 
 
 def _lua_expr(gateway: str, expr: str) -> str:
-    """经 /api/lua/expr 执行单个表达式。"""
+    """经 /api/lua/expr 执行单个表达式，会话死亡时自动自愈重试一次。"""
     r = _http_json(gateway, "/api/lua/expr", {"expr": expr})
     if not r.get("ok"):
-        raise RuntimeError(f"expr 失败: {r.get('error', r)}")
+        err = str(r.get("error", r))
+        if _is_bridge_dead(err) and _heal_gateway():
+            r = _http_json(gateway, "/api/lua/expr", {"expr": expr})
+            if not r.get("ok"):
+                raise RuntimeError(f"expr 失败: {r.get('error', r)}")
+        else:
+            raise RuntimeError(f"expr 失败: {r.get('error', r)}")
     return (r.get("result") or {}).get("value") or ""
 
 
@@ -702,6 +848,14 @@ def _walk_to(map_name: str, gx: int, gy: int, pid: int = None,
 # 公告颜色码（#R/#G/#Y/#W/#S(频道名)/#数字）剥离用
 _COLOR_CODE_RE = re.compile(r"#(?:[RGYWBS]/?|[0-9]{1,3}|\([^\)]*\))")
 
+# 聊天噪声过滤（用户 2026-08-27 定案）：系统频道里这些内容不看——
+# 活跃度奖励提示、鲜衣怒马会员卡广告等，纯浪费解析时间。
+_CHAT_NOISE_MARKERS = ("活跃度奖励", "活跃度", "鲜衣怒马", "会员卡", "会员")
+
+
+def _is_chat_noise(text: str) -> bool:
+    return any(m in (text or "") for m in _CHAT_NOISE_MARKERS)
+
 # BOSS 别名：公告关键词 → 场景实体名列表
 _BOSS_ALIASES: Dict[str, List[str]] = {
     "妖魔鬼怪": ["妖魔", "鬼怪"],
@@ -722,16 +876,26 @@ def _strip_colors(text: str) -> str:
     return _COLOR_CODE_RE.sub("", text or "")
 
 
-def fetch_recv_announcements(gateway: str, channel: str = "xt") -> List[Dict[str, Any]]:
+def fetch_recv_announcements(gateway: str, channel=("xt", "cw")) -> List[Dict[str, Any]]:
     """从网关 /api/net/recvall 缓存提取系统公告（proto38），按缓存顺序去重。
+
+    channel 默认收 "xt"(系统) + "cw"(传说) 两种频道 —— 2026-08-27 实测
+    世界BOSS（地煞星/天罡星）公告走的是 cw 频道，只收 xt 会整条漏掉。
 
     返回 [{channel, text}]，text 已剥离颜色码。缓存 2000 条约覆盖几十分钟，
     足够覆盖 20~30 分钟粒度的刷新周期。
     """
-    r = _http_json(gateway, "/api/net/recvall", timeout=30.0)
-    pkts = r.get("result", r)
+    # 注意：第3个位置参数是 data，timeout 必须用关键字传参
+    #（曾因 timeout=30.0 被当成 body POST 导致网关 404）
+    r = _http_json(gateway, "/api/net/recvall", None, timeout=30.0)
+    # 网关异常时 result 为 null（如 frida 脚本销毁），安全降级为空列表
+    if not isinstance(r, dict):
+        return []
+    pkts = r.get("result")
+    if not isinstance(pkts, list) and isinstance(pkts, dict):
+        pkts = pkts.get("packets") or pkts.get("value")
     if not isinstance(pkts, list):
-        pkts = pkts.get("packets") or pkts.get("value") or []
+        return []
     seen = set()
     out: List[Dict[str, Any]] = []
     for p in pkts:
@@ -752,10 +916,12 @@ def fetch_recv_announcements(gateway: str, channel: str = "xt") -> List[Dict[str
             if not m:
                 continue
             ch = m.group(1) or ""
-            if channel and ch != channel:
+            if channel and ch not in channel:
                 continue
             txt = _strip_colors(m.group(2))
             if not txt:
+                continue
+            if _is_chat_noise(txt):
                 continue
             key = txt[:120]
             if key in seen:
@@ -786,8 +952,18 @@ def parse_spawn_notification(
          上层轮换扫描时会把其余图也扫一遍）。
     """
     t = text or ""
-    # 1) 展开公告中的 BOSS 关键词为实体名集合
+    # 0) 泛化锚点（2026-08-27 传说频道实锤格式，BOSS 名随机词缀）：
+    #    “神秘的初出茅庐地煞星带着天界的宝物降临在了柳林坡、东海湾、江南野外一带…”
+    #    提取已知类别后缀（地煞星/天罡星…）作为目标名；多张地图整句保留，
+    #    下方地图名检测会在整句里逐个命中监控图。
+    m_gen = _GENERIC_SPAWN_RE.search(t)
     boss_names = set()
+    if m_gen:
+        for cls in _GENERIC_BOSS_CLASSES:
+            if cls in m_gen.group(1):
+                boss_names.add(cls)
+                break
+    # 1) 展开公告中的 BOSS 关键词为实体名集合
     for kw, aliases in _BOSS_ALIASES.items():
         if kw in t:
             boss_names.update(aliases)
@@ -1019,6 +1195,12 @@ def _boss_battle_keywords(boss_name: str, fallback: List[str]) -> List[str]:
     kws: List[str] = []
     for n in names:
         kws.extend(BOSS_BATTLE_KEYWORDS.get(n, []))
+    # 2026-08-28 实测：下凡的灵猴弹的战斗选项是"让我来收拾你"（与妖魔/鬼怪同款），
+    # 并非截图里的"我来瞧瞧你的啥"——类别映射对不上实际文案变体会导致整只跳过。
+    # 兜底：把所有类别的关键词并集排在专用词之后（这些文案都是战斗选项专属，
+    # 只点已扫描 BOSS 实体，误点风险为零）。
+    for _all in BOSS_BATTLE_KEYWORDS.values():
+        kws.extend(_all)
     # 去重并保持顺序
     seen = set()
     unique = []
@@ -1027,6 +1209,37 @@ def _boss_battle_keywords(boss_name: str, fallback: List[str]) -> List[str]:
             seen.add(k)
             unique.append(k)
     return unique + [k for k in fallback if k not in seen]
+
+
+def _wait_battle_start(gateway: str, timeout: float = 4.0, poll: float = 0.4) -> bool:
+    """点了战斗选项后，等待 tp.战斗中 变 true（真进战斗的权威验证）。
+
+    pcall(事件解析) 返回 ok 不代表进战斗（2026-08-27 实测假击杀 14 连：
+    pcall ok=true 但战斗根本没触发）。必须以 tp.战斗中 为准。
+    2026-08-28：15s→4s、poll 1.0→0.4（用户要求延迟最小化）。真触发时
+    战斗态 1~2s 内就会出现；没触发就是超距，早失败早走近重试，不值
+    干等 15s。误判成超距的代价只是一次廉价走近重试。"""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if _in_battle(gateway):
+            return True
+        time.sleep(poll)
+    return False
+
+
+def _wait_dialog_ready(gateway: str, timeout: float = 1.5, poll: float = 0.3):
+    """CALL 后轮询等对话栏弹出（替代固定 sleep 1.5s），返回选项列表。"""
+    t0 = time.time()
+    opts = []
+    while time.time() - t0 < timeout:
+        try:
+            opts = get_dialog_options(gateway)
+        except Exception:
+            opts = []
+        if opts:
+            return opts
+        time.sleep(poll)
+    return opts
 
 
 def _wait_battle_end(gateway: str, timeout: float = 180.0, poll: float = 2.0) -> bool:
@@ -1044,19 +1257,25 @@ def _wait_battle_end(gateway: str, timeout: float = 180.0, poll: float = 2.0) ->
 
 
 def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) -> bool:
-    """确保角色在 target_map；不在则跨图，在则落地图中心/指定坐标。返回是否到位。"""
+    """确保角色在 target_map；不在则跨图，在则落地图中心/指定坐标。返回是否到位。
+
+    2026-08-28 修复：cross_map 返回 ok ≠ 真到了（hop 链分支发完请求就 ok:True），
+    曾出现"人在长寿郊外、日志标花果山、拿花果山校准数据点错屏幕"。
+    现在跨图后实读地图名复核，不匹配重试一次，仍不匹配返回 False。"""
     cur = _cur_map_name(gateway)
     if cur == target_map:
         cx, cy = (x, y) if (x is not None and y is not None) else DEFAULT_MAP_CENTER.get(target_map, (80, 80))
         _gw_teleport(gateway, cx, cy)
         return True
-    try:
-        r = _gw_cross_map(gateway, target_map, x, y)
-        time.sleep(1.0)
-        return bool(r.get("ok"))
-    except Exception as e:
-        logger.warning(f"_ensure_on_map 跨图失败: {e}")
-        return False
+    for _ in range(2):   # ok≠到达：实读复核，最多重试一次
+        try:
+            _gw_cross_map(gateway, target_map, x, y)
+        except Exception as e:
+            logger.warning(f"_ensure_on_map 跨图失败: {e}")
+        time.sleep(1.5)  # 等切图落地，地图名才刷新
+        if _cur_map_name(gateway) == target_map:
+            return True
+    return False
 
 
 # ============================================================
@@ -1118,8 +1337,27 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
         if verbose:
             print(f"  → 走路贴近 {cur_map} ({jx},{jy})", flush=True)
         walk_res = _walk_to(cur_map, jx, jy, background=walk_background, verbose=verbose)
-        if walk_res.get("ok") and _wait_arrival_grid(gateway, jx, jy):
-            return "walked"
+        # 2026-08-28 用户定案"有怪就 CALL"：落点只是手段，CALL 是目的。
+        # 轮询中只要离 **BOSS** ≤ APPROACH_GRID_DISTANCE 就立即返回开 CALL，
+        # 不等走到抖动落点（旧版 _wait_arrival_grid 90s 干等，怪在眼前也不打）。
+        if walk_res.get("ok"):
+            t0w = time.time()
+            while time.time() - t0w < WALK_ARRIVAL_TIMEOUT:
+                rg = _role_grid(gateway)
+                if rg is not None:
+                    # ① 离 BOSS ≤4 格：进 CALL 范围，直接返回开打（最理想）
+                    if _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
+                        return "walked"
+                    # ② 落点 ±20 格：用户定案算"到位"，先 CALL 试试（服务器远距离有时认），
+                    #    CALL 不中走 _farm_one_boss 的第二次移动补瞬移拉近
+                    if (abs(rg[0] - jx) <= WALK_ARRIVAL_BOX
+                            and abs(rg[1] - jy) <= WALK_ARRIVAL_BOX):
+                        if verbose:
+                            print(f"  ✓ 走路到位（±{WALK_ARRIVAL_BOX} 格内，"
+                                  f"当前 ({rg[0]},{rg[1]})，距BOSS "
+                                  f"{_grid_dist(rg, boss_gx, boss_gy):.1f} 格）", flush=True)
+                        return "walked"
+                time.sleep(0.8)
         if verbose:
             print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
 
@@ -1146,37 +1384,12 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
     return "far"
 
 
-def _move_to_ring(gateway: str, cur_map: str, boss_gx: float, boss_gy: float,
-                  walk_background: bool, verbose: bool,
-                  ring_range=QUICK_CALL_RING_RANGE) -> bool:
-    """移动到 BOSS 周边“随机环带”落点（默认10~50格，用户定案 2026-08-27）。
-
-    有地图包 → 真实走路；无地图包/走路失败 → 随机环带点瞬移兜底。
-    返回是否成功靠近目标环带点。
-    """
-    ang = random.uniform(0.0, _math.tau)
-    d = random.uniform(*ring_range)
-    tx = max(0, int(round(boss_gx + _math.cos(ang) * d)))
-    ty = max(0, int(round(boss_gy + _math.sin(ang) * d)))
-
-    if _get_map_walker(cur_map) or _load_calibration(cur_map):
-        if verbose:
-            print(f"  → 太远提示：走到 {cur_map} 周边环带 ({tx},{ty})（距BOSS≈{d:.0f}格）", flush=True)
-        walk_res = _walk_to(cur_map, tx, ty, background=walk_background, verbose=verbose)
-        if walk_res.get("ok") and _wait_arrival_grid(gateway, tx, ty):
-            return True
-        if verbose:
-            print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
-
+def _dialog_is_too_far(gateway: str) -> bool:
+    """当前对话栏是否为超距确认框（['是的我要去','我还要逛逛'] 或含"太远"）。"""
     try:
-        if verbose:
-            print(f"  → 瞬移到环带落点 ({tx},{ty})（距BOSS≈{d:.0f}格）", flush=True)
-        _gw_teleport(gateway, tx, ty)
-        time.sleep(1.0)
-        rg = _role_grid(gateway)
-        return rg is not None and _grid_dist(rg, tx, ty) <= 4
-    except Exception as e:
-        logger.warning(f"环带瞬移失败: {e}")
+        texts = " ".join(o["text"] + o["label"] for o in get_dialog_options(gateway))
+        return any(m in texts for m in _FAR_DIALOG_MARKERS)
+    except Exception:
         return False
 
 
@@ -1189,45 +1402,146 @@ def _farm_one_boss(
     verbose: bool,
     cur_map: str,
 ) -> dict:
-    """对单个 BOSS 实体。
+    """对单个 BOSS 实体 —— CALL 优先（用户 2026-08-28 定案：先 CALL 再走近）。
 
-    用户定案流程（2026-08-27）：原地 CALL → 若弹“距离太远”（表现为对话无战斗
-    选项）→ 移动到 BOSS 周边随机 10~50 格 → 再 CALL；成功继续，失败再走。
-    循环 QUICK_CALL_MAX_TRIES 次仍不中才跳过该只。"""
+    流程：原地 CALL 事件开始 → 命中战斗选项直接打；
+    弹超距确认框 / 选项点了没进战斗 / 对象级 CALL 失败 → 才走近一次
+    （走路优先，瞬移兜底）→ 再 CALL；
+    走近后仍不成 = 该只已被占/尸体 → 放弃换下一只。全程最多一次移动。
+    绝不做"距离预检先走近"——服务器远距离 CALL 有时也认，先试最便宜的。
+    2026-08-28：移动上限 1 次 → 2 次（走路 ±20 到位后 CALL 不中 → 补一次瞬移环带拉近）。"""
+    moves = 0
     for attempt in range(1, QUICK_CALL_MAX_TRIES + 1):
+        # 2026-08-28 新增：上次 CALL 可能已触发战斗但 4s 窗口没探到（tp.战斗中
+        # 有延迟），重试前先查战斗态——已进战斗直接进入等结束，绝不白 CALL。
+        if _in_battle(gateway):
+            if verbose:
+                print(f"  [尝试{attempt}] 检测到已在战斗（上次CALL已生效），直接等战斗结束",
+                      flush=True)
+            ended = _wait_battle_end(gateway, timeout=battle_timeout)
+            close_dialog(gateway)
+            return {"ok": True, "battle_ended": ended, "msg": "prev_call_triggered",
+                    "attempts": attempt, "approached": moves > 0}
         ok, msg = call_npc_event_start(gateway, boss.get("id"), boss.get("bsid"))
         if not ok:
             if "消失" in msg or "NOTFOUND" in msg:
                 return {"ok": False, "reason": "gone", "msg": msg}
-            # CALL 直接失败（对象找不到/无函数）→ 移动后重试
+            # CALL 对象级失败（NOFN 等）：走近一次再看
+            far = True
         else:
-            time.sleep(1.5)
+            # 2026-08-28：固定 sleep 1.5 → 轮询等对话弹出（0.3s 步进，最快 0.3s 就绪）
+            _wait_dialog_ready(gateway)
             bok, bmsg = call_dialog_battle(gateway, battle_keywords)
             if bok:
-                ended = _wait_battle_end(gateway, timeout=battle_timeout)
+                # pcall ok ≠ 进战斗：必须等 tp.战斗中 变 true 才算真触发
+                # （2026-08-27 实测：远处 pcall 全部 ok=true 但战斗没发生 → 假击杀 14 连）
+                if _wait_battle_start(gateway, timeout=4.0):
+                    ended = _wait_battle_end(gateway, timeout=battle_timeout)
+                    close_dialog(gateway)
+                    return {"ok": True, "battle_ended": ended, "msg": bmsg,
+                            "attempts": attempt, "approached": moves > 0}
+                # 没真进战斗：八成是距离不够（选项能弹但服务器不认），按超距处理走近重试
                 close_dialog(gateway)
-                return {"ok": True, "battle_ended": ended, "msg": bmsg,
-                        "approach": f"CALL×{attempt}"}
-            # 开了对话但无战斗选项 ≈ 弹“你距离这个NPC太远了”→ 走环带重试
-            close_dialog(gateway)
-            if verbose:
-                print(f"  [尝试{attempt}] 太远提示（{bmsg}），移动到随机环带再CALL", flush=True)
+                far = True
+                if verbose:
+                    print(f"  [尝试{attempt}] 选项已点但 4s 内未进战斗（{bmsg}），判超距走近重试",
+                          flush=True)
+            else:
+                # 没命中战斗选项：判断是不是超距确认框
+                far = _dialog_is_too_far(gateway)
+                close_dialog(gateway)
+                if verbose:
+                    why = "超距确认框" if far else f"无战斗选项（{bmsg}）"
+                    print(f"  [尝试{attempt}] {why}", flush=True)
+                # 2026-08-28 修复：对话栏无选项 ≠ 直接放弃——瞬移落点离 BOSS 太远时
+                # 服务器弹的对话栏根本没有战斗选项（翼火蛇@建邺城 实测：尝试1 空对话栏
+                # 就被判死，一次都没走近）。还没移动过 → 一律判可能超距，走近再试一次。
+                if not far and moves == 0:
+                    far = True
+                    if verbose:
+                        print(f"  [尝试{attempt}] 还没移动过，判可能距离太远 → 走近重试",
+                              flush=True)
 
-        if attempt == QUICK_CALL_MAX_TRIES:
+        # 需要移动且还有移动额度（≤2 次）→ 走路优先，瞬移兜底
+        if far and moves < 2:
+            mode = _approach_boss(gateway, cur_map, boss["gx"], boss["gy"],
+                                  walk_background, verbose)
+            moves += 1
+            if mode == "far":
+                return {"ok": False, "reason": "unreachable", "msg": "走近失败仍超距"}
+            continue
+
+        # 已走近过仍不成 / 无需移动的失败：不打转不散开，直接放弃这只
+        if attempt >= QUICK_CALL_MAX_TRIES or not far:
             break
-        time.sleep(random.uniform(0.5, 1.2))
-        if not _move_to_ring(gateway, cur_map, boss["gx"], boss["gy"],
-                             walk_background, verbose):
-            break
+        time.sleep(0.1)  # 2026-08-28：重试间隔 0.5~1.0 → 0.1（延迟最小化）
 
     return {"ok": False, "reason": "no_battle_option",
-            "msg": f"{QUICK_CALL_MAX_TRIES}次环带CALL均未命中战斗选项"}
+            "msg": f"CALL×{attempt}+贴近重试后仍未命中战斗选项（可能已被他人锁定）"}
 
 
-def _pick_random_map(cur_map: Optional[str], monitored_maps: List[str]) -> str:
-    """从监控地图里随机挑一张（排除当前地图）。全部排除时兜底当前图以外任意一张。"""
-    pool = [m for m in monitored_maps if m != cur_map] or list(monitored_maps)
+def _pick_random_map(cur_map: Optional[str], monitored_maps: List[str],
+                     recent: tuple = ()) -> str:
+    """从监控地图里挑一张（排除当前图 + 近期去过的图）。
+
+    2026-08-28 用户定案：实扫权威——瞬移到图后 Lua 扫白名单怪，没有就换图。
+    配套改进：换图时优先排除 recent（最近去过的图，函数内 deque 维护），
+    避免在刚清过的图之间来回打转；排除后为空才放宽。
+    """
+    pool = [m for m in monitored_maps if m != cur_map and m not in recent]
+    if not pool:
+        pool = [m for m in monitored_maps if m != cur_map] or list(monitored_maps)
     return random.choice(pool)
+
+
+def _ensure_walker_bound(gateway: str, verbose: bool = True) -> Optional[int]:
+    """farming 启动前自动绑定 window_manager（2026-08-27 23:39 新增）。
+
+    绑不上 → 走路全部失败 → 每只 BOSS 退化成瞬移环带（违反防举报原则）。
+    来源优先级：网关 /api/status 的 result.pid（与 Lua 通道同进程，最权威）
+    → settings.json 的 window.pid 兜底。
+    :return: 绑定的 pid；None = 绑定失败（调用方自行决定是否继续）。
+    """
+    pid = None
+    try:
+        with urlopen(Request(gateway.rstrip("/") + "/api/status"), timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        pid = ((data.get("result") or {}).get("pid")) or data.get("pid")
+    except Exception:
+        pass
+    if not pid:
+        try:
+            cfg_path = os.path.join(_PROJECT_ROOT, "config", "settings.json")
+            with open(cfg_path, encoding="utf-8") as f:
+                pid = (json.load(f).get("window") or {}).get("pid")
+        except Exception:
+            pass
+    if pid:
+        try:
+            from core.window_manager import window_manager
+            window_manager.bind(pid=int(pid))
+            if verbose:
+                print(f"[bind] window_manager 已绑定 pid={pid}（走路通道可用）", flush=True)
+            return int(pid)
+        except Exception as e:
+            if verbose:
+                print(f"[bind] 绑定 pid={pid} 失败: {e}", flush=True)
+    if verbose:
+        print("[bind] 未能绑定 PID，走路将退化为瞬移兜底（违反防举报原则，请检查网关）",
+              flush=True)
+    return None
+
+
+def WORLD_BOSS_captcha_gate(gateway: str = None, verbose: bool = True) -> dict:
+    """防挂机验证码门：GUI 任务链首事件。
+
+    有弹窗 → V7 直解自动点掉；无弹窗 → 直接放行。
+    :param verbose: 是否打印细节。
+    :return: {"ok": True, "captcha_resolved": bool}
+    """
+    gateway = gateway or DEFAULT_GATEWAY
+    resolved = _captcha_solve(gateway, verbose=verbose)
+    return {"ok": True, "captcha_resolved": bool(resolved)}
 
 
 def WORLD_BOSS_auto_farm(
@@ -1247,52 +1561,111 @@ def WORLD_BOSS_auto_farm(
 ) -> dict:
     """世界BOSS自动监控 farming 主入口。
 
-    优先级：聊天公告 > 随机轮换地图。
-      1) 每轮循环先查聊天窗口公告（约 boss_scan_interval 一次），有公告立刻去公告图；
-      2) 无公告时：当前图 Lua 扫描无目标 → clear_timeout 内仍无 → 随机换一张
-         非当前图的监控地图继续 Lua 扫描（等 clear_timeout 的间隙同样在轮询公告）。
+    优先级：聊天公告（入口信号） > 到图 Lua 实扫白名单怪（权威，2026-08-28 用户定案）。
+      1) 每轮循环先查聊天窗口公告，有公告立刻去公告图；
+      2) 瞬移到任一地图后立即 Lua 扫描白名单怪：场景加载 1.5s 复扫一次，
+         仍没有 → **立即瞬移去别的地图**（不干等 clear_timeout）；
+      3) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
     """
     monitored_maps = monitored_maps or list(DEFAULT_MONITORED_MAPS)
     target_bosses = target_bosses or list(DEFAULT_TARGET_BOSSES)
     spawn_patterns = spawn_patterns or list(DEFAULT_SPAWN_PATTERNS)
     battle_keywords = battle_keywords or list(DEFAULT_BATTLE_KEYWORDS)
 
+    # 0) 启动自绑：走路通道必须先于任何 BOSS 交互就绪
+    _ensure_walker_bound(gateway, verbose)
+
     t0 = time.time()
     cur_map = None           # 当前正在 farming 的地图
     no_boss_since = None     # 最近一次在 cur_map 扫到 BOSS 的时刻
     farmed_total = 0
+    excluded = set()         # 函数级黑名单：确认无战斗选项/已消失的实体跨轮排除
+                             # （2026-08-27 23:39 修复：原来每轮重置导致对 10 只
+                             #   赐福星官无限走近+CALL 空转刷瞬移）
+    last_cache_clear = time.time()   # 聊天/网络缓存 10 分钟一清（用户定案）
+    last_ann_text = None    # 已执行过的公告原文（过期公告拉扯修复 2026-08-28）
+    ann_cleared = False     # 该公告对应的图是否已被判清图
+    unreachable = {}        # 跨图失败的图 -> 冷却截止时间戳（2026-08-28）
+    recent_maps = deque(maxlen=3)  # 近期去过的图（换图避让，2026-08-28 实扫定案配套）
     print("=== WORLD_BOSS_auto_farm 开始 ===", flush=True)
     print(f"  监控地图={monitored_maps}", flush=True)
     print(f"  目标BOSS={target_bosses[:10]}{'...' if len(target_bosses)>10 else ''}", flush=True)
 
+    stopped = False
     while time.time() - t0 < max_runtime:
+        # -1) GUI 停止按钮：任何时刻置位都立即退出（可随时停止要求）
+        if _gui_stop_requested():
+            stopped = True
+            break
+
         # 0) 验证码避让：弹窗时先 V7 直解（Lua 读答案+按钮坐标自动点掉），解不掉才暂停等待
         if not _captcha_solve(gateway, verbose):
             if verbose:
                 print(f"[{int(time.time()-t0)}s] 验证码窗口弹出且未解除，暂停等待...", flush=True)
-            time.sleep(5)
+            if not _sleep_stoppable(5):
+                stopped = True
+                break
             continue
 
         # 1) 聊天公告 → 目标地图
+        # 2026-08-28 修复"过期公告拉扯"：recv 缓存里的老公告没有时间戳，
+        # find_latest_spawn 永远返回它 → 跨图去打→12s 清图→又被拉回，无限打转。
+        # 记忆机制：同一条公告对应的图已被判清图（ann_cleared=True）后，
+        # 这条公告作废，直到缓存里出现新文本才重新生效。
         spawn = find_latest_spawn(gateway, target_bosses, monitored_maps, spawn_patterns)
+        if spawn and spawn.get("text") == last_ann_text and ann_cleared:
+            spawn = None  # 过期公告：对应图已清过，不再拉回
+        elif spawn:
+            if spawn.get("text") != last_ann_text:
+                last_ann_text = spawn.get("text")
+                ann_cleared = False
         if spawn:
             if cur_map != spawn["map"]:
                 if verbose:
                     extra = f"（公告图: {'、'.join(spawn.get('maps', []))}）" if len(spawn.get("maps", [])) > 1 else ""
                     print(f"[{int(time.time()-t0)}s] 公告: {spawn['boss']} @ {spawn['map']}{extra}", flush=True)
-                cur_map = spawn["map"]
-                no_boss_since = None
-            _ensure_on_map(gateway, spawn["map"], None, None)
+            # 2026-08-28 修复：跨图失败（无 hop 链/传送失败）时不能装作已到位，
+            # 否则 cur_map 标签说谎、场景还是旧图、清图判定全乱。
+            # 失败的图记入 unreachable（10 分钟冷却），本轮当无公告处理。
+            if spawn["map"] in unreachable and time.time() < unreachable[spawn["map"]]:
+                if verbose:
+                    print(f"[{int(time.time()-t0)}s] 公告图 {spawn['map']} 跨图失败冷却中，跳过",
+                          flush=True)
+                spawn = None
+            else:
+                if not _ensure_on_map(gateway, spawn["map"], None, None):
+                    unreachable[spawn["map"]] = time.time() + 600
+                    if verbose:
+                        print(f"[{int(time.time()-t0)}s] 跨图到 {spawn['map']} 失败，"
+                              f"10分钟内不再尝试该图", flush=True)
+                    spawn = None
+                else:
+                    cur_map = spawn["map"]
+                    recent_maps.append(cur_map)
+                    no_boss_since = None
         elif cur_map is None:
             # 暂无公告：随机切一张监控地图扫描（保持在线待命）
-            cur_map = _pick_random_map(None, monitored_maps)
+            cur_map = _pick_random_map(None, monitored_maps, tuple(recent_maps))
             no_boss_since = None
-            if verbose:
-                print(f"[{int(time.time()-t0)}s] 暂无公告，随机扫描 {cur_map}", flush=True)
-            _ensure_on_map(gateway, cur_map, None, None)
+            # 2026-08-28：初始切图也要核实——失败则以真实地图名为准（防标签说谎）
+            if not _ensure_on_map(gateway, cur_map, None, None):
+                unreachable[cur_map] = time.time() + 600
+                cur_map = _cur_map_name(gateway) or cur_map
+            recent_maps.append(cur_map)
+
+        # 1.5) 每 10 分钟清理一次网关 recv 缓存（防膨胀拖慢 dumpRecvAll，
+        #      用户 2026-08-27 定案）；失败静默跳过，不影响主流程。
+        #      （2026-08-27 修复：原"暂无公告，随机扫描"日志错放在此分支，
+        #        有公告时也会打印误导排查，已删除）
+        if time.time() - last_cache_clear >= WORLD_BOSS_CACHE_CLEAR_INTERVAL:
+            last_cache_clear = time.time()
+            WORLD_BOSS_chat_maintenance(gateway, verbose=verbose)
 
         # 2) 扫描当前地图 BOSS
-        bosses = scan_scene_bosses(gateway, target_bosses)
+        # 2026-08-28 修复：外层判定必须剔除 excluded（尸体/被锁实体），
+        # 否则"34个BOSS全是尸体"的图永远不清图、不轮换，干转死循环。
+        bosses = [x for x in scan_scene_bosses(gateway, target_bosses)
+                  if (x["name"], x["gx"], x["gy"]) not in excluded]
         if bosses:
             no_boss_since = None
             if verbose:
@@ -1300,8 +1673,11 @@ def WORLD_BOSS_auto_farm(
                       + ", ".join(f"{b['name']}@{b['gx']},{b['gy']}" for b in bosses), flush=True)
             # 每击杀一只后重扫：战斗后场景人物槽位/实例会重排（SYBUZ2 同款坑），
             # 静态列表的 id/bsid 会错位导致 CALL 错实体（2026-08-27 实测）。
-            excluded = set()  # 本轮已失败的 (name,gx,gy)，防止对同一尸体反复尝试
+            # excluded 为函数级黑名单，跨轮生效：无战斗选项/已消失的实体不再重试。
             while time.time() - t0 < max_runtime:
+                if _gui_stop_requested():
+                    stopped = True
+                    break
                 if not _captcha_solve(gateway, verbose):
                     break
                 live = [x for x in scan_scene_bosses(gateway, target_bosses)
@@ -1314,39 +1690,90 @@ def WORLD_BOSS_auto_farm(
                     gx0, gy0 = px / 20.0, py / 20.0
                 except Exception:
                     gx0, gy0 = 0.0, 0.0
-                # 优先级（三界财神爷>知了王>其他）为主键，同优先级按距离近先打
+                # 优先级（稀有>普通）为主键；同优先级时公告指定的 BOSS 先打，
+                # 最后按距离近先打（2026-08-28 修订）
+                ann = (spawn or {}).get("boss")
                 b = min(live, key=lambda x: (_boss_priority(x["name"]),
+                                             0 if ann and ann in x["name"] else 1,
                                              (x["gx"] - gx0) ** 2 + (x["gy"] - gy0) ** 2))
                 this_keywords = _boss_battle_keywords(b["name"], list(battle_keywords))
+                # 2026-08-28：走路/校准一律用实读地图名——cur_map 标签万一错了
+                # （跨图未到达），拿错图的校准数据点屏幕会全错（长寿郊外点花果山像素事故）
+                real_map = _cur_map_name(gateway) or cur_map
                 res = _farm_one_boss(gateway, b, this_keywords, battle_timeout,
-                                     walk_background, verbose, cur_map)
-                if res.get("ok"):
+                                     walk_background, verbose, real_map)
+                if res.get("ok") and res.get("battle_ended"):
                     farmed_total += 1
                     print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）", flush=True)
                 else:
-                    print(f"  ✗ {b['name']} 跳过: {res.get('reason')} {res.get('msg')}", flush=True)
+                    # battle_ended=False = 根本没进战斗（假触发），同样按失败处理
+                    reason = res.get("reason") or ("no_battle_start" if res.get("ok") else "failed")
+                    print(f"  ✗ {b['name']} 跳过: {reason} {res.get('msg')}", flush=True)
                     excluded.add((b["name"], b["gx"], b["gy"]))
-                time.sleep(1.0)
+                if not _sleep_stoppable(1.0):
+                    stopped = True
+                    break
         else:
-            # 3) 当前地图无 BOSS
+            # 3) 当前地图无 BOSS —— 2026-08-28 用户定案：**到图实扫白名单怪为准**，
+            #    没有 → 立即换下一张图，不再干等满 clear_timeout。
+            #    公告只是入口信号；图上有没有怪以 Lua 扫场景人物/临时Npc 为权威。
             if no_boss_since is None:
                 no_boss_since = time.time()
+                # 场景加载 1.5s 后复扫一次：命中 → 回主循环直接进 farm 分支
+                if not _sleep_stoppable(1.5):
+                    stopped = True
+                    break
+                re = [x for x in scan_scene_bosses(gateway, target_bosses)
+                      if (x["name"], x["gx"], x["gy"]) not in excluded]
+                if re:
+                    continue
+                # 复扫仍空 → 立即轮换（公告记忆同步作废，防老公告拉回）
+                ann_cleared = True
+                nxt = _pick_random_map(cur_map, monitored_maps, tuple(recent_maps))
+                if verbose:
+                    print(f"[{int(time.time()-t0)}s] {cur_map} 实扫无白名单怪，立即换图 → {nxt}",
+                          flush=True)
+                no_boss_since = None
+                if _ensure_on_map(gateway, nxt, None, None):
+                    cur_map = nxt
+                    recent_maps.append(nxt)
+                else:
+                    # 2026-08-28：跨图没真到 → 该图冷却，cur_map 落回真实地图名
+                    unreachable[nxt] = time.time() + 600
+                    cur_map = _cur_map_name(gateway) or cur_map
+                    if verbose:
+                        print(f"  ! 跨图到 {nxt} 未到达（实读={cur_map}），10分钟冷却", flush=True)
             elif time.time() - no_boss_since >= clear_timeout:
-                # 清图：随机换一张非当前地图（聊天公告优先级更高，下一轮循环即会被打断）
-                nxt = _pick_random_map(cur_map, monitored_maps)
+                # 兜底：复扫曾有怪但全被锁/清掉后持续无 BOSS，走老路径轮换
+                ann_cleared = True
+                nxt = _pick_random_map(cur_map, monitored_maps, tuple(recent_maps))
                 if verbose:
                     print(f"[{int(time.time()-t0)}s] {cur_map} 已清图（{clear_timeout}s无BOSS），"
-                          f"随机轮换 → {nxt}", flush=True)
-                cur_map = nxt
+                          f"轮换 → {nxt}", flush=True)
                 no_boss_since = None
-                _ensure_on_map(gateway, cur_map, None, None)
-            time.sleep(boss_scan_interval)
+                if _ensure_on_map(gateway, nxt, None, None):
+                    cur_map = nxt
+                    recent_maps.append(nxt)
+                else:
+                    unreachable[nxt] = time.time() + 600
+                    cur_map = _cur_map_name(gateway) or cur_map
+                    if verbose:
+                        print(f"  ! 跨图到 {nxt} 未到达（实读={cur_map}），10分钟冷却", flush=True)
+            if not _sleep_stoppable(boss_scan_interval):
+                stopped = True
+                break
             continue
 
-        time.sleep(boss_scan_interval)
+        if not _sleep_stoppable(boss_scan_interval):
+            stopped = True
+            break
 
-    print(f"=== WORLD_BOSS_auto_farm 结束：累计击杀 {farmed_total}，耗时 {int(time.time()-t0)}s ===", flush=True)
-    return {"ok": True, "farmed_total": farmed_total, "elapsed": int(time.time() - t0)}
+    result = {"ok": True, "farmed_total": farmed_total, "elapsed": int(time.time() - t0)}
+    if stopped:
+        result["stopped"] = True
+    print(f"=== WORLD_BOSS_auto_farm 结束：累计击杀 {farmed_total}，耗时 {int(time.time()-t0)}s"
+          f"{'（GUI 停止）' if stopped else ''} ===", flush=True)
+    return result
 
 
 def _next_schedule_time(minutes_list: List[int], pre_minutes: int = 0) -> Optional[datetime]:
@@ -1439,6 +1866,31 @@ def WORLD_BOSS_probe_chat(lines: int = 120, gateway: str = DEFAULT_GATEWAY) -> d
         if any(b in ln for b in DEFAULT_TARGET_BOSSES) or any(m in ln for m in DEFAULT_MONITORED_MAPS):
             hits.append(ln)
     return {"total_lines": len(msgs), "boss_or_map_lines": hits, "recent": msgs[-20:]}
+
+
+# 缓存清理周期：10 分钟（用户 2026-08-27 定案，防 recv 缓存膨胀拖慢嗅探）
+WORLD_BOSS_CACHE_CLEAR_INTERVAL = 600.0
+
+
+def WORLD_BOSS_chat_maintenance(gateway: str = DEFAULT_GATEWAY, verbose: bool = True) -> dict:
+    """聊天通道例行维护：
+      1) 调 gateway /api/net/clear 清空 JS 侧 recvAll/sendAll/hexAll 大缓存
+         （keyPackets/关键协议保留，验证码溯源不受影响）；
+      2) 返回清理结果。需要 net_sniff.js 含 clearCaches 导出——
+         网关重启重新注入后才生效；老脚本会返回 ok=False，调用方安全降级。
+    """
+    try:
+        r = _http_json(gateway, "/api/net/clear", None, timeout=15.0)
+        if verbose:
+            cleared = (r.get("result") or {}).get("cleared")
+            print(f"[WORLD_BOSS] 聊天缓存清理: ok={r.get('ok')}"
+                  + (f", 共{cleared}条" if cleared is not None else f", {r.get('error','')}"),
+                  flush=True)
+        return r
+    except Exception as e:
+        if verbose:
+            print(f"[WORLD_BOSS] 聊天缓存清理失败(忽略): {e}", flush=True)
+        return {"ok": False, "error": str(e)}
 
 
 def WORLD_BOSS_confirm_list() -> List[dict]:

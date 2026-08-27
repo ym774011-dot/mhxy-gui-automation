@@ -1,78 +1,57 @@
 {
-  "name": "门派闯关专用识别任务（v2 · 对应 GUI 配置）",
-  "description": "对应截图1/2：MPCG_recognize 识别门派闯关任务，返回 target_location 字段；图像识别事件用动态模板路径找对应 NPC；点击传送。需玩家已接门派闯关任务并打开任务栏。",
+  "name": "门派闯关专用识别任务（v3 · 整轮自动聚合）",
+  "description": "单个 MPCG_auto_round 函数调用即可完成整轮门派闯关：状态轮询→验证码优先暂停避让→三态分发→识别下一门派→瞬移→CALL护法→请出招吧开战→循环至完成弹窗→回城长安(193,125)→(rounds>1)自动接下一轮。无需逐个配置 recognize / teleport_sect / call_guard / goto_city / accept_round。需玩家已从门派闯关使者接取任务（否则脚本等待/提示）。",
   "events": [
     {
-      "id": "evt_recognize",
+      "id": "evt_auto_round",
       "name": "函数调用3",
       "event_type": "function",
       "enabled": true,
       "pre_delay": 0,
       "post_delay": 0.5,
       "on_error": "retry",
-      "max_retries": 3,
-      "retry_interval": 1.0,
+      "max_retries": 1,
+      "retry_interval": 2.0,
       "params": {
         "module": "MPCG",
-        "function": "MPCG_recognize",
-        "kwargs": {}
+        "function": "MPCG_auto_round",
+        "kwargs": {
+          "timeout": 900,
+          "max_steps": 15,
+          "rounds": 1,
+          "verbose": true
+        }
       }
     },
     {
-      "id": "evt_click_npc",
-      "name": "点击门派NPC",
-      "event_type": "image",
-      "enabled": true,
-      "pre_delay": 0,
-      "post_delay": 0.3,
-      "on_error": "retry",
-      "max_retries": 2,
-      "retry_interval": 1.0,
-      "params": {
-        "template_source": "dynamic",
-        "source_event": "函数调用3",
-        "source_field": "target_location",
-        "template_prefix": "会员传送3(",
-        "template_suffix": ").bmp",
-        "template_dir": "E:/DS/梦幻西游脚本函数包/图片数据",
-        "action": "click",
-        "threshold": 0.8,
-        "region": null,
-        "_comment_dynamic_path": "完整模板路径 = 模板目录 + 前缀 + 字段值 + 后缀 → E:/DS/梦幻西游脚本函数包/图片数据/会员传送3(天宫).bmp（target_location=天宫 时）",
-        "_comment_missing": "⚠️ 这种按地图拆分的 NPC 模板当前未在图片数据目录存在，需先用截图工具采集每个门派地图的 NPC 图标并命名为 会员传送3(天宫).bmp 等"
-      }
-    },
-    {
-      "id": "evt_branch",
-      "name": "验证识别结果",
+      "id": "evt_check_result",
+      "name": "校验本轮结果",
       "event_type": "condition",
       "enabled": true,
       "pre_delay": 0,
       "post_delay": 0,
       "on_error": "skip",
       "params": {
-        "variable": "${函数调用3.target_location}",
-        "operator": "!=",
-        "value": "",
+        "variable": "${函数调用3.ok}",
+        "operator": "==",
+        "value": "true",
         "true_branch": [
           {
-            "id": "log_success",
-            "name": "识别成功-打日志",
-            "event_type": "key",
+            "id": "log_done",
+            "name": "完成-打日志",
+            "event_type": "log",
             "params": {
-              "keys": "ALT+E",
-              "text": ""
+              "text": "本轮门派闯关完成：${函数调用3.rounds_done}轮 / 最后${函数调用3.steps}关 / 共${函数调用3.message}"
             }
           }
         ],
         "false_branch": [
           {
-            "id": "log_fail",
-            "name": "识别失败-停止",
-            "event_type": "key",
+            "id": "log_wait",
+            "name": "未完成-提示",
+            "event_type": "log",
             "params": {
-              "keys": "ESC",
-              "text": ""
+              "text": "本轮未完成：${函数调用3.message}"
             }
           }
         ]

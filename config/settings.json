@@ -1,7 +1,7 @@
 {
   "window": {
     "title": "鲜衣怒马 - 怀旧江南版 - (鲜衣怒马 - 然学[701529]) - 2026年08月10日 19:50:18",
-    "pid": 10204,
+    "pid": 14956,
     "input_mode": "background"
   },
   "recognition": {
@@ -115,6 +115,12 @@
       {
         "name": "DSHNPC",
         "path": "E:////DS////mhxy-gui-automation////tasks////library////DSHNPC.py",
+        "enabled": true,
+        "category": "custom"
+      },
+      {
+        "name": "WORLD_BOSS",
+        "path": "E:/DS/mhxy-gui-automation/tasks/library/WORLD_BOSS.py",
         "enabled": true,
         "category": "custom"
       }

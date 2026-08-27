@@ -1,0 +1,132 @@
+[
+ {
+  "target": "宝象国",
+  "before": "1501",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1501",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_宝象国.png",
+  "moved": false
+ },
+ {
+  "target": "东海湾",
+  "before": "1501",
+  "gw": {
+   "ok": true,
+   "error": null
+  },
+  "after": "1506",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_东海湾.png",
+  "moved": true
+ },
+ {
+  "target": "长寿村",
+  "before": "1506",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1506",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_长寿村.png",
+  "moved": false
+ },
+ {
+  "target": "朱紫国",
+  "before": "1506",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1506",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_朱紫国.png",
+  "moved": false
+ },
+ {
+  "target": "长寿郊外",
+  "before": "1506",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1506",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_长寿郊外.png",
+  "moved": false
+ },
+ {
+  "target": "江南野外",
+  "before": "1506",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1506",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_江南野外.png",
+  "moved": false
+ },
+ {
+  "target": "建邺城",
+  "before": "1506",
+  "gw": {
+   "ok": true,
+   "error": null
+  },
+  "after": "1501",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_建邺城.png",
+  "moved": true
+ },
+ {
+  "target": "大唐国境",
+  "before": "1501",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1501",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_大唐国境.png",
+  "moved": false
+ },
+ {
+  "target": "大唐境外",
+  "before": "1501",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1501",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_大唐境外.png",
+  "moved": false
+ },
+ {
+  "target": "花果山",
+  "before": "1501",
+  "gw": {
+   "ok": false,
+   "error": "当前图传送表无到目标/长安的路线"
+  },
+  "after": "1501",
+  "battle": false,
+  "captcha": false,
+  "corner_png": "corner_花果山.png",
+  "moved": false
+ }
+]

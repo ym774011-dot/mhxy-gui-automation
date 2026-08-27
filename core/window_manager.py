@@ -75,6 +75,82 @@ class WindowManager:
     # ------------------------------------------------------------------
     # 查找与绑定
     # ------------------------------------------------------------------
+    def _find_pid_windows(self, pid, matched):
+        """
+        内部：按 PID 收集所有候选窗口到 matched 列表。
+
+        两轮扫描：
+          1. 顶层可见且有标题的窗口（传统独立客户端结构）。
+          2. 若第 1 轮无命中，遍历所有顶层窗口的**子窗口**（含隐藏）。
+             ★ 多开器结构（如 十年一梦多开器.exe）：游戏主窗口
+             ``Galaxy2DEngine`` 是多开器空标题 ``WTWindow`` 容器的子窗口，
+             但归属游戏进程自己的 PID，只有靠子窗口枚举才能找到。
+
+        :param pid: 进程 ID
+        :param matched: 输出列表 [(hwnd, title, client_area), ...]
+        """
+        def _match_one(hwnd, allow_child=False):
+            """匹配单个窗口，命中返回 (hwnd, title, area)，否则 None。"""
+            try:
+                _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
+            except Exception:
+                return None
+            if win_pid != pid:
+                return None
+            try:
+                win_title = win32gui.GetWindowText(hwnd)
+            except Exception:
+                win_title = ""
+            # 顶层窗口要求非空标题；子窗口（多开器内嵌）不要求
+            if not allow_child and not win_title:
+                return None
+            if not allow_child and not win32gui.IsWindowVisible(hwnd):
+                return None
+            try:
+                rect = win32gui.GetClientRect(hwnd)
+                w = rect[2] - rect[0]
+                h = rect[3] - rect[1]
+                area = w * h
+            except Exception:
+                area = 0
+            return (int(hwnd), win_title, int(area))
+
+        # 第 1 轮：顶层窗口
+        top_hwnds = []
+
+        def _enum_top(hwnd, _):
+            top_hwnds.append(hwnd)
+            return True
+
+        try:
+            win32gui.EnumWindows(WNDENUMPROC(_enum_top), 0)
+        except Exception as e:
+            logger.error(f"EnumWindows 枚举顶层窗口失败: {e}")
+            return
+
+        for hwnd in top_hwnds:
+            m = _match_one(hwnd, allow_child=False)
+            if m:
+                matched.append(m)
+
+        if matched:
+            return
+
+        # 第 2 轮：子窗口回退（多开器容器结构）
+        for parent in top_hwnds:
+            def _enum_child(child, _lp):
+                m = _match_one(child, allow_child=True)
+                if m:
+                    matched.append(m)
+                return True
+            try:
+                win32gui.EnumChildWindows(parent, WNDENUMPROC(_enum_child), 0)
+            except Exception:
+                continue
+            if matched:
+                # 同一容器的子树已找到目标，无需继续扫描其余容器
+                break
+
     def find_by_title(self, title):
         """
         按标题子串查找窗口并绑定。
@@ -141,38 +217,7 @@ class WindowManager:
             return False
 
         matched = []
-
-        def _enum_cb(hwnd, _):
-            if not win32gui.IsWindowVisible(hwnd):
-                return True
-            try:
-                win_title = win32gui.GetWindowText(hwnd)
-            except Exception:
-                win_title = ""
-            # 无标题窗口通常不是目标游戏窗口，跳过
-            if not win_title:
-                return True
-            try:
-                _, win_pid = win32process.GetWindowThreadProcessId(hwnd)
-            except Exception:
-                return True
-            if win_pid == pid:
-                # 计算客户区面积，用于多窗口时选择主窗口
-                try:
-                    rect = win32gui.GetClientRect(hwnd)
-                    w = rect[2] - rect[0]
-                    h = rect[3] - rect[1]
-                    area = w * h
-                except Exception:
-                    area = 0
-                matched.append((hwnd, win_title, area))
-            return True
-
-        try:
-            win32gui.EnumWindows(_enum_cb, None)
-        except Exception as e:
-            logger.error(f"EnumWindows 枚举窗口失败: {e}")
-            return False
+        self._find_pid_windows(pid, matched)
 
         if not matched:
             logger.error(f"未找到 PID={pid} 的窗口")
@@ -341,6 +386,11 @@ class WindowManager:
 
         multi_opener_hwnds: list = []
 
+        # ★ 多开器容器类名（如 十年一梦多开器.exe 的 WTWindow/Comet.Shadow）：
+        #   每个游戏实例是一个空标题 WTWindow 顶层容器，
+        #   内嵌归属游戏进程的 Galaxy2DEngine 子窗口。
+        MULTI_OPENER_CLASSES = ("WTWindow", "Comet.Shadow")
+
         def _enum_top(hwnd, _lp):
             # ctypes 回调必须返回整数（True=继续枚举，False=停止）。
             # 若某分支返回 None，ctypes 转换 BOOL 失败抛
@@ -350,11 +400,19 @@ class WindowManager:
             try:
                 title = win32gui.GetWindowText(hwnd)
             except Exception:
-                return True
-            if not title:
-                return True
+                title = ""
+            try:
+                cls = win32gui.GetClassName(hwnd)
+            except Exception:
+                cls = ""
             if _is_game_window(hwnd, title):
                 _add_if_game(hwnd, allow_hidden=False)
+                return True
+            # 空标题的 WTWindow 容器（十年一梦多开器实例窗口）也纳入子窗口枚举
+            if cls in MULTI_OPENER_CLASSES:
+                multi_opener_hwnds.append(hwnd)
+                return True
+            if not title:
                 return True
             if "多开" in title or "multi" in title.lower() or "十年" in title:
                 multi_opener_hwnds.append(hwnd)
@@ -522,9 +580,19 @@ class WindowManager:
             logger.error("set_foreground 未绑定窗口")
             return False
         try:
+            # ★ 多开器内嵌子窗口：SetForegroundWindow 只对顶层窗口有效，
+            #   取 GA_ROOT 根窗口（如 多开器 WTWindow 容器）执行置前。
+            fg_target = self.hwnd
+            try:
+                root = win32gui.GetAncestor(self.hwnd, win32con.GA_ROOT)
+                if root:
+                    fg_target = root
+            except Exception:
+                pass
+
             # 先恢复（如果窗口被最小化）
             try:
-                win32gui.ShowWindow(self.hwnd, win32con.SW_RESTORE)
+                win32gui.ShowWindow(fg_target, win32con.SW_RESTORE)
             except Exception:
                 pass
 
@@ -533,7 +601,7 @@ class WindowManager:
             try:
                 fg_hwnd = win32gui.GetForegroundWindow()
                 fg_tid = win32process.GetWindowThreadProcessId(fg_hwnd)[0]
-                target_tid = win32process.GetWindowThreadProcessId(self.hwnd)[0]
+                target_tid = win32process.GetWindowThreadProcessId(fg_target)[0]
             except Exception:
                 fg_tid, target_tid = 0, 0
 
@@ -543,14 +611,14 @@ class WindowManager:
                 except Exception:
                     pass
                 try:
-                    win32gui.SetForegroundWindow(self.hwnd)
+                    win32gui.SetForegroundWindow(fg_target)
                 finally:
                     try:
                         win32process.AttachThreadInput(fg_tid, target_tid, False)
                     except Exception:
                         pass
             else:
-                win32gui.SetForegroundWindow(self.hwnd)
+                win32gui.SetForegroundWindow(fg_target)
 
             # 置前后重新更新一次矩形，避免位置已变化
             self.update_rect()

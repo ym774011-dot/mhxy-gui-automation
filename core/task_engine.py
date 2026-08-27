@@ -462,15 +462,25 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                 # 停止信号检查
                 if self.should_stop.is_set():
                     return False, "任务被停止"
-                # 验证码弹窗中：事件执行前等待自动解除（引擎联动，2026-08-24）
+                # 验证码弹窗：V7 Lua 直解优先（自足判断，不依赖 monitor 状态文件），
+                # 失败回退等 captcha_monitor（引擎联动，2026-08-25）
                 try:
-                    from core.captcha_link import captcha_active, wait_captcha_clear
-                    if captcha_active():
-                        logger.info("验证码弹窗中，暂停任务等待 captcha_monitor 自动解除...")
-                        self._emit_log("info", "验证码弹窗中，暂停等待自动解除")
-                        wait_captcha_clear(timeout=58)
-                        if self.should_stop.is_set():
-                            return False, "任务被停止"
+                    from core.captcha_v7 import solve_v7
+                    from core.window_manager import window_manager
+                    hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
+                    ok, detail = solve_v7(hwnd)
+                    if ok:
+                        logger.info(f"V7 直解成功: {detail}")
+                        self._emit_log("info", f"验证码 V7 直解成功 答案={detail.get('answer')}")
+                    elif detail.get("reason") != "no_captcha":
+                        # 弹窗中但 V7 失败 → 等 monitor 兜底
+                        from core.captcha_link import captcha_active, wait_captcha_clear
+                        if captcha_active():
+                            logger.info(f"V7 直解未成功({detail}), 等待 captcha_monitor...")
+                            self._emit_log("info", "V7 未解成功，等待自动解除")
+                            wait_captcha_clear(timeout=58)
+                    if self.should_stop.is_set():
+                        return False, "任务被停止"
                 except ImportError:
                     pass
 
@@ -531,10 +541,15 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             if self.is_paused.is_set():
                 time.sleep(0.1)
                 continue
-            # 验证码弹窗中：暂停任务流等待自动解除（引擎联动，2026-08-24）
+            # 验证码弹窗：V7 Lua 直解优先（自足），失败回退等 monitor（引擎联动，2026-08-25）
             try:
-                from core.captcha_link import captcha_active
-                if captcha_active():
+                from core.captcha_v7 import solve_v7
+                from core.window_manager import window_manager
+                hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
+                ok, detail = solve_v7(hwnd, verify_wait=0)
+                if ok:
+                    logger.info(f"V7 直解成功(轮询): {detail}")
+                elif detail.get("reason") != "no_captcha":
                     try:
                         from core.captcha_link import wait_captcha_clear
                         wait_captcha_clear(timeout=58)

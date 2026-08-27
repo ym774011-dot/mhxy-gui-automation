@@ -55,7 +55,8 @@ def _gw_url() -> str:
     return f"http://{GATEWAY_HOST}:{_gw_port()}"
 
 
-def _status(timeout: float = 1.2) -> dict:
+def _status(timeout: float = 3.0) -> dict:
+    """GET /api/status。2026-08-27：timeout 1.2→3.0（游戏加载期 status 偶发慢）。"""
     try:
         req = urllib.request.Request(_gw_url() + "/api/status", timeout=timeout)
         with urllib.request.urlopen(req) as resp:
@@ -90,11 +91,16 @@ def _bound_pid():
 
 
 def _is_game_process(pid: int) -> bool:
-    """校验 PID 是存活的游戏实例（tasklist /FI）。"""
+    """校验 PID 是存活的游戏实例（tasklist /FI）。
+
+    2026-08-27 修复：tasklist（不带 /V）只输出**映像名**，本游戏真实进程名是
+    快乐西游.exe（窗口标题才是"十年一梦…"），旧判定 '十年一梦' in out 永远为假
+    → config fallback 的合法 PID 全被误杀 → ensure_gateway 报 no_pid。
+    """
     try:
         out = subprocess.check_output(
             f"tasklist /FI \"PID eq {pid}\" /FO CSV", shell=True).decode("gbk", "ignore")
-        return ("十年一梦" in out) or ("mhxy" in out.lower())
+        return any(k in out for k in ("十年一梦", "快乐西游")) or ("mhxy" in out.lower())
     except Exception:
         return False
 
@@ -116,12 +122,25 @@ def _listener_pid_on_port(port: int = None):
     return None
 
 
+def _pid_alive(pid: int) -> bool:
+    """进程是否存活（tasklist /FI，杀旧网关轮询用）。"""
+    try:
+        out = subprocess.check_output(
+            f"tasklist /FI \"PID eq {pid}\" /FO CSV", shell=True).decode("gbk", "ignore")
+        return str(pid) in out
+    except Exception:
+        return False
+
+
 def _graceful_kill(pid: int, port: int = None) -> bool:
     """杀旧网关前先优雅 detach（2026-08-24 铁律）。
 
     强杀正在 frida-attach 的网关 → frida session 非正常中断 → 游戏端 agent
     异常 → **游戏闪退**（20:15/20:24 两次实测）。必须先调 /api/admin/shutdown
     让 gateway 先 session.detach() 再退出，taskkill 仅作兜底。
+
+    2026-08-27 提速：固定 sleep(2.5) 改为轮询进程退出（0.3s 步进，上限 2.5s），
+    正常 shutdown 后几百 ms 即可继续。
     """
     if port is None:
         port = _gw_port()
@@ -130,7 +149,11 @@ def _graceful_kill(pid: int, port: int = None) -> bool:
             f"http://{GATEWAY_HOST}:{port}/api/admin/shutdown",
             data=b"{}", headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=3)
-        time.sleep(2.5)  # 等 detach + 退出
+        t0 = time.time()
+        while time.time() - t0 < 2.5:
+            if not _pid_alive(pid):
+                break
+            time.sleep(0.3)
     except Exception:
         pass
     return _kill_pid(pid)
@@ -170,7 +193,7 @@ def _ready(st: dict, pid: int) -> bool:
                 and not st.get("script_status_error"))
 
 
-def ensure_gateway(pid=None, timeout: float = 90.0, verbose: bool = False):
+def ensure_gateway(pid=None, timeout: float = 120.0, verbose: bool = False):
     """幂等自愈：确保网关在线且 attach 到目标游戏 PID。
 
     - 在线且 PID 匹配       → 直接复用（reuse）
@@ -178,8 +201,11 @@ def ensure_gateway(pid=None, timeout: float = 90.0, verbose: bool = False):
     - 不在线               → 若有进程占端口先杀 → 拉起
     - 轮询等待就绪，返回 (ok, info)
 
-    注意：pid 必须显式指定（或 window_manager 已绑定）。多开/守护场景
-    严禁走 --auto，否则会 attach 到任意实例。
+    2026-08-27 提速（已验证）：gateway_run.log 打点显示本机冷启动
+    attach+Lua 捕获+全脚本加载仅 ~1.0s；22:26 的 5m23s 根因不是 attach 慢，
+    而是 /api/status 每次同步做 frida RPC（游戏加载期延迟秒级以上）→
+    就绪轮询整段超时失明 300s。gateway.py 已给 script_status 加 2s TTL
+    缓存（就绪字段零 RPC 即时返回），本模块 timeout 300→120s 兜底。
     """
     with _lock:
         if pid is None:
@@ -203,14 +229,28 @@ def ensure_gateway(pid=None, timeout: float = 90.0, verbose: bool = False):
         _spawn(pid)
 
         t0 = time.time()
+        last_poll_err = None
+        last_poll_st = None
+        next_progress = 10.0
         while time.time() - t0 < timeout:
-            time.sleep(0.8)
+            time.sleep(0.4)   # 2026-08-27: 0.8→0.4，就绪拾取更快
             st = _status()
             if _ready(st, pid):
                 if verbose:
-                    print(f"[gateway_guard] 网关就绪 action=started PID={st.get('pid')}")
-                return True, {"action": "started", "pid": st.get("pid")}
+                    print(f"[gateway_guard] 网关就绪 action=started PID={st.get('pid')}"
+                          f" 耗时 {time.time()-t0:.1f}s")
+                return True, {"action": "started", "pid": st.get("pid"),
+                              "wait": round(time.time() - t0, 1)}
+            if isinstance(st, dict):
+                last_poll_st, last_poll_err = st, None
+            else:
+                last_poll_err = "status 超时/不可达"
+            if verbose and time.time() - t0 >= next_progress:
+                print(f"[gateway_guard] 等待网关就绪 {time.time()-t0:.0f}s..."
+                      f" status={last_poll_st or last_poll_err}")
+                next_progress += 10.0
         return False, {"action": "timeout", "pid": pid,
+                       "last_status": last_poll_st, "last_error": last_poll_err,
                        "error": "网关启动超时（确认游戏已启动、脚本有管理员权限）"}
 
 

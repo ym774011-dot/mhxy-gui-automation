@@ -154,6 +154,21 @@ def locate_game_window(preferred_pid=None, verbose=False, tag=""):
                 print(f"{tag}兜底: 用枚举到的 PID={pid} 定位窗口 "
                       f"(原 PID={preferred_pid} 失效)")
             return hwnd, title
+
+    # 兜底：window_manager 已绑定时直接用其 hwnd。
+    # 2026-08-27 实测：游戏窗口后台/隐藏态时 find_game_window 的
+    # IsWindowVisible 检查失败、find_game_pids 枚举的 exe 名也可能与
+    # 当前实例不符 → 全部落空，导致走路退化成瞬移。已绑定 hwnd 是
+    # 启动时 find_by_pid 验证过的，IsWindow 存活即可信。
+    if preferred_pid:
+        try:
+            from core.window_manager import window_manager
+            wm_hwnd = getattr(window_manager, 'hwnd', 0)
+            if (wm_hwnd and getattr(window_manager, 'pid', 0) == preferred_pid
+                    and user32.IsWindow(wm_hwnd)):
+                return wm_hwnd, getattr(window_manager, 'window_title', None)
+        except Exception:
+            pass
     return None, None
 
 

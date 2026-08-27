@@ -1,0 +1,141 @@
+{
+  "id": "f8e3d690-ae5b-438e-b1a4-95bd73cfe47e",
+  "name": "新建任务序列",
+  "tasks": [
+    {
+      "id": "7789e10c-3e7e-4c65-b2ba-371c62241c38",
+      "name": "江湖任务",
+      "description": "",
+      "events": [
+        {
+          "id": "3ca147f7-cccd-4d41-997c-c8cc5caa0709",
+          "name": "接任务",
+          "event_type": "function",
+          "params": {
+            "module": "DSHNPC",
+            "function": "DSHNPC",
+            "args": [],
+            "kwargs": {},
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "函数调用1"
+        },
+        {
+          "id": "8fdca855-ad9e-4ca2-9e89-ae22ee910436",
+          "name": "函数调用 3",
+          "event_type": "function",
+          "params": {
+            "module": "JHRW1",
+            "function": "JHRW1",
+            "args": [],
+            "kwargs": {},
+            "result_validate_field": "target_location",
+            "result_validate_whitelist": [
+              "江南野外",
+              "建邺城",
+              "东海湾"
+            ],
+            "result_validate_retries": 3,
+            "result_validate_retry_interval": 0.5,
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "函数调用3"
+        },
+        {
+          "id": "a79b6c69-ac3b-4473-b47e-92d2191fffa9",
+          "name": "函数调用 2",
+          "event_type": "function",
+          "params": {
+            "module": "SYBUZ2",
+            "function": "SYBUZ2",
+            "args": [
+              "${函数调用3.target_location}"
+            ],
+            "kwargs": {
+              "x": "${函数调用3.target_coord.0}",
+              "y": "${函数调用3.target_coord.1}"
+            },
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "函数调用2"
+        }
+      ],
+      "loop_count": 0,
+      "loop_delay": 1.0,
+      "created_at": "2026-08-25 09:21:52",
+      "updated_at": "2026-08-25 09:22:48"
+    },
+    {
+      "id": "35d46137-9dad-4bca-a06f-f3263759ecf4",
+      "name": "15门派",
+      "description": "",
+      "events": [
+        {
+          "id": "f5f7db3c-c067-44cc-956a-fc4bc20f364e",
+          "name": "函数调用 1",
+          "event_type": "function",
+          "params": {
+            "module": "MPCG",
+            "function": "MPCG_auto_round",
+            "args": [],
+            "kwargs": {},
+            "auto_wait_arrival": false,
+            "wait_arrival_timeout": 0.0,
+            "wait_arrival_tolerance": 3.0,
+            "wait_arrival_stop_confirm_s": 1.0,
+            "wait_arrival_sample_interval": 0.2,
+            "wait_arrival_retries": 3
+          },
+          "pre_delay": 0.0,
+          "post_delay": 0.5,
+          "on_error": "skip",
+          "max_retries": 3,
+          "retry_interval": 1.0,
+          "enabled": true,
+          "var_name": "函数调用1"
+        }
+      ],
+      "loop_count": 0,
+      "loop_delay": 1.0,
+      "created_at": "2026-08-25 22:04:43",
+      "updated_at": "2026-08-25 22:13:08"
+    }
+  ],
+  "current_task_index": 0,
+  "current_event_index": 0,
+  "loop_count": 0,
+  "loop_delay": 1.0
+}
