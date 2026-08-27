@@ -535,11 +535,78 @@ def _lua_expr(gateway: str, expr: str) -> str:
     return (r.get("result") or {}).get("value") or ""
 
 
-def _gw_teleport(gateway: str, x: int, y: int) -> dict:
-    """瞬移到地图网格坐标 (x,y)。网关内部 ×20 发内部坐标 + 1002 同步。"""
+# ============================================================
+# 坐标体系守门（2026-08-28 用户实测：东海湾被瞬到 4710,7235 出界）
+# ============================================================
+# 根因：传送表 t[i].坐标 / 部分实体 x/y 存的是**内部像素坐标（网格×20）**，
+# 直接当网格发给网关会被再 ×20（或直接写入位置），角色落到地图边界外，
+# HUD 显示 4710,7235 这类"分辨率级"数值。
+# 铁律：**任何瞬移坐标必须过 _norm_grid_xy 守门，像素/网格自动判定 + 边界钳制。**
+
+# 梦幻单张地图网格上限经验值（最大图 ~300×240 格）。超过 → 判为像素坐标。
+GRID_SANITY_MAX = 400
+
+_MAP_BOUNDS_CACHE: Dict[str, Tuple[int, int]] = {}
+
+
+def _load_map_bounds(map_name: str) -> Optional[Tuple[int, int]]:
+    """读 data/map_ui_blocks.json 的 max_game_coord（用户实测边界），返回 (max_x,max_y)。"""
+    if map_name in _MAP_BOUNDS_CACHE:
+        return _MAP_BOUNDS_CACHE[map_name]
+    bounds = None
+    try:
+        p = os.path.join(_PROJECT_ROOT, "data", "map_ui_blocks.json")
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        mx = data.get(map_name, {}).get("max_game_coord")
+        if mx and len(mx) >= 2:
+            bounds = (int(mx[0]), int(mx[1]))
+    except Exception:
+        bounds = None
+    _MAP_BOUNDS_CACHE[map_name] = bounds
+    return bounds
+
+
+def _norm_grid_xy(x, y, map_name: str = None):
+    """把可疑坐标规约成合法网格坐标，返回 (x, y, note)。
+
+    规则：
+      1. x/y 任一 > GRID_SANITY_MAX → 判为内部像素坐标，÷20 转网格；
+      2. 已知地图边界（map_ui_blocks.max_game_coord，用户实测）→ 钳制入界；
+      3. 未知地图至少保证 ≥0 且 ≤GRID_SANITY_MAX。
+    """
+    x, y = float(x), float(y)
+    note = ""
+    if abs(x) > GRID_SANITY_MAX or abs(y) > GRID_SANITY_MAX:
+        x, y = x / 20.0, y / 20.0
+        note = "像素→网格÷20"
+    if map_name:
+        b = _load_map_bounds(map_name)
+        if b:
+            cx = int(min(max(round(x), 0), b[0]))
+            cy = int(min(max(round(y), 0), b[1]))
+            if (cx, cy) != (int(round(x)), int(round(y))):
+                note = (note + "+边界钳制").lstrip("+") if note else "边界钳制"
+            x, y = cx, cy
+        else:
+            x = int(min(max(round(x), 0), GRID_SANITY_MAX))
+            y = int(min(max(round(y), 0), GRID_SANITY_MAX))
+    else:
+        x = int(min(max(round(x), 0), GRID_SANITY_MAX))
+        y = int(min(max(round(y), 0), GRID_SANITY_MAX))
+    return x, y, note
+
+
+def _gw_teleport(gateway: str, x: int, y: int, map_name: str = None) -> dict:
+    """瞬移到地图网格坐标 (x,y)。网关内部 ×20 发内部坐标 + 1002 同步。
+    2026-08-28：入口强制过 _norm_grid_xy 守门（像素自动÷20 + 边界钳制）。
+    """
+    nx, ny, note = _norm_grid_xy(x, y, map_name)
+    if note:
+        logger.warning(f"瞬移坐标守门: ({x},{y}) → ({nx},{ny}) [{note}]")
     return _http_json(
         gateway, "/api/act/teleport",
-        {"x": int(x), "y": int(y), "sync": True, "jump": True}, timeout=15.0,
+        {"x": int(nx), "y": int(ny), "sync": True, "jump": True}, timeout=15.0,
     )
 
 
@@ -628,6 +695,11 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
     if hop:
         desc, d_x, d_y = hop
         tx, ty = (x, y) if (x is not None and y is not None) else (d_x, d_y)
+        # 2026-08-28 守门：传送表坐标可能是内部像素值（如 4710,7235），过守门再发
+        tx, ty, note = _norm_grid_xy(tx, ty, target_map)
+        if note:
+            logger.warning(f"cross_map 坐标守门: desc={desc} 原始=({d_x},{d_y}) "
+                           f"→ ({tx},{ty}) [{note}]")
         return _http_json(gateway, "/api/act/cross_map",
                           {"desc": desc, "x": int(tx), "y": int(ty),
                            "wait_ms": 3500, "sync": True}, timeout=25.0)
@@ -1067,9 +1139,15 @@ _G.__out = table.concat(out, ";")
             matched = (name == boss) if boss in exact_match else ((boss in name) or (name == boss))
             if matched:
                 try:
+                    bgx, bgy = int(gx), int(gy)
+                    # 2026-08-28 守门：实体兜底字段 u.x/u.y 可能是内部像素坐标，
+                    # >GRID_SANITY_MAX 判为像素 → ÷20 转网格，否则环带瞬移会出界
+                    if abs(bgx) > GRID_SANITY_MAX or abs(bgy) > GRID_SANITY_MAX:
+                        bgx, bgy = round(bgx / 20.0), round(bgy / 20.0)
+                        logger.warning(f"BOSS 坐标守门: {name} 原始=({gx},{gy}) → ({bgx},{bgy}) [像素→网格÷20]")
                     cands.append({
                         "id": uid, "name": name,
-                        "gx": int(gx), "gy": int(gy), "model": model,
+                        "gx": bgx, "gy": bgy, "model": model,
                         "src": src, "boss_pattern": boss,
                         "bsid": bsid,
                     })
@@ -1265,7 +1343,7 @@ def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) 
     cur = _cur_map_name(gateway)
     if cur == target_map:
         cx, cy = (x, y) if (x is not None and y is not None) else DEFAULT_MAP_CENTER.get(target_map, (80, 80))
-        _gw_teleport(gateway, cx, cy)
+        _gw_teleport(gateway, cx, cy, map_name=target_map)
         return True
     for _ in range(2):   # ok≠到达：实读复核，最多重试一次
         try:
@@ -1373,7 +1451,7 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
         if verbose:
             print(f"  → 瞬移到 BOSS 周边随机落点 ({tx},{ty})（距BOSS≈{d:.1f}格）", flush=True)
         try:
-            _gw_teleport(gateway, tx, ty)
+            _gw_teleport(gateway, tx, ty, map_name=cur_map)
         except Exception as e:
             logger.warning(f"瞬移失败: {e}")
             continue
