@@ -90,6 +90,25 @@ def main():
     window = MainWindow()
     window.show()
 
+    # ★2026-08-27 GUI 打开即重载网关（后台线程，不阻塞 UI）：
+    #   - 上次关窗已优雅停掉网关并清数据，这里从零拉起 + attach + 重新捕获 Lua state；
+    #   - 无法确定游戏 PID（未绑定/游戏未开）时静默跳过——后续任务跑起来时
+    #     gateway_guard.ensure_gateway 的自愈逻辑会兜底。
+    def _reload_gateway():
+        try:
+            from core.gateway_guard import _bound_pid, ensure_gateway
+            pid = _bound_pid()
+            if not pid:
+                print("[main] 网关重载跳过：游戏 PID 未绑定（任务启动时会自愈）")
+                return
+            ok, info = ensure_gateway(pid=pid, timeout=60.0, verbose=True)
+            print(f"[main] 网关重载{'成功' if ok else '失败'}: {info}")
+        except Exception as e:
+            print(f"[main] 网关重载异常（不影响 GUI 使用）: {e}")
+
+    import threading
+    threading.Thread(target=_reload_gateway, name="gateway-reload", daemon=True).start()
+
     sys.exit(app.exec_())
 
 

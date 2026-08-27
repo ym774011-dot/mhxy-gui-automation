@@ -571,6 +571,27 @@ class MainWindow(QMainWindow):
         task_engine.stop()
         # 状态由 status_signal 回调更新
 
+    def closeEvent(self, event):
+        """★2026-08-27 关窗收尾：强制停止任务引擎 + 本组网关。
+
+        铁律：必须走 stop_gateway 的优雅 shutdown（detach frida session），
+        直接 taskkill 会导致游戏闪退。清空网关运行数据后，下次打开 GUI
+        由启动逻辑重新拉起网关并重新 attach/捕获 Lua state。
+        """
+        logger.info("用户关闭 GUI：停止任务引擎与本组网关...")
+        try:
+            if task_engine.is_running:
+                task_engine.stop()
+        except Exception as e:
+            logger.warning(f"停止任务引擎异常（忽略）: {e}")
+        try:
+            from core.gateway_guard import stop_gateway
+            ok, info = stop_gateway(verbose=True)
+            logger.info(f"网关已{'停止' if ok else '停止失败'}: {info}")
+        except Exception as e:
+            logger.warning(f"停止网关异常（忽略）: {e}")
+        event.accept()
+
     # ==================================================================
     # 绑定窗口
     # ==================================================================

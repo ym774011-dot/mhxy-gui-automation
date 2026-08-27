@@ -149,7 +149,13 @@ def _spawn(pid) -> bool:
     port = _gw_port()
     args = [PYW, GATEWAY_PY, str(pid), "--port", str(port)]
     try:
-        subprocess.Popen(args, cwd=GATEWAY_DIR, creationflags=CREATE_NO_WINDOW)
+        # 2026-08-25: stdout/stderr 重定向到日志文件（pythonw 无控制台，print 全丢）
+        # 2026-08-27: 日志按端口命名，GUI 关窗时 stop_gateway 只清本组日志
+        import io
+        logf = open(os.path.join(GATEWAY_DIR, f"gateway_spawn_{port}.log"),
+                    "a", encoding="utf-8", buffering=1)
+        subprocess.Popen(args, cwd=GATEWAY_DIR, creationflags=CREATE_NO_WINDOW,
+                         stdout=logf, stderr=subprocess.STDOUT)
         return True
     except Exception:
         return False
@@ -208,11 +214,81 @@ def ensure_gateway(pid=None, timeout: float = 90.0, verbose: bool = False):
                        "error": "网关启动超时（确认游戏已启动、脚本有管理员权限）"}
 
 
+def stop_gateway(timeout: float = 8.0, verbose: bool = False):
+    """GUI 关闭时调用：强制停止本组网关并清空其运行数据。
+
+    步骤（2026-08-27）：
+      1. 先调 /api/admin/shutdown 优雅 detach（游戏运行中严禁直接强杀，
+         frida session 非正常中断会崩游戏，见 gateway._admin_shutdown 铁律）；
+      2. 端口仍被占（shutdown 失败/网关假死）→ taskkill 兜底；
+      3. 轮询确认端口已释放；
+      4. 清理本组网关运行日志（gateway_spawn_<port>.log），下次打开从零开始。
+
+    多组安全：只操作本组端口（group_config 解析），不影响其它组的网关。
+    返回 (ok, info)。
+    """
+    port = _gw_port()
+    info = {"port": port}
+
+    # 1. 优雅退出
+    try:
+        req = urllib.request.Request(
+            f"http://{GATEWAY_HOST}:{port}/api/admin/shutdown",
+            data=b"{}", headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=3)
+        if verbose:
+            print(f"[gateway_guard] 已发送 shutdown（端口 {port}）")
+    except Exception:
+        pass
+
+    # 2. 兜底强杀（端口仍被占时）
+    def _listener():
+        return _listener_pid_on_port(port)
+
+    t0 = time.time()
+    lp = _listener()
+    if lp:
+        time.sleep(1.0)  # 给 detach 留时间
+        lp = _listener()
+        if lp:
+            _kill_pid(lp)
+            info["killed_pid"] = lp
+
+    # 3. 轮询等待端口释放
+    while time.time() - t0 < timeout:
+        if _listener() is None:
+            info["stopped"] = True
+            break
+        time.sleep(0.4)
+    else:
+        info["stopped"] = False
+        info["error"] = f"端口 {port} 释放超时"
+
+    # 4. 清理本组网关运行日志（重新打开 GUI 时网关从干净状态加载）
+    for name in (f"gateway_spawn_{port}.log", f"gw_{port}.log"):
+        p = os.path.join(GATEWAY_DIR, name)
+        try:
+            if os.path.exists(p):
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write("")
+                info.setdefault("cleaned", []).append(name)
+        except Exception as e:
+            info.setdefault("clean_errors", []).append(f"{name}: {e}")
+
+    if verbose:
+        print("[gateway_guard] stop:", info)
+    return bool(info.get("stopped")), info
+
+
 if __name__ == "__main__":
-    # CLI 入口：python core/gateway_guard.py [PID]（bat 与 GUI 自愈共用同一逻辑）
-    pid_arg = None
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        pid_arg = int(sys.argv[1])
-    _ok, _info = ensure_gateway(pid=pid_arg, verbose=True)
+    # CLI 入口：python core/gateway_guard.py [PID]     → 拉起网关
+    #           python core/gateway_guard.py --stop   → 停止网关（GUI 关闭同款逻辑）
+    if len(sys.argv) > 1 and sys.argv[1] == "--stop":
+        _ok, _info = stop_gateway(verbose=True)
+    else:
+        pid_arg = None
+        if len(sys.argv) > 1 and sys.argv[1].isdigit():
+            pid_arg = int(sys.argv[1])
+        _ok, _info = ensure_gateway(pid=pid_arg, verbose=True)
     print("[gateway_guard]", "OK" if _ok else "FAIL", _info)
     raise SystemExit(0 if _ok else 1)
