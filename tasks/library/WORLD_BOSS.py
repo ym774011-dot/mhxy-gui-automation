@@ -611,12 +611,25 @@ FUNCTIONS = {
 # 底层网关通信
 # ============================================================
 
+# 2026-08-28 23:16-23:35 实锤（automation.log）：游戏重启后 frida attach 被拒
+# （VirtualAllocEx 0x5），网关反复"spawn 即退"，18082 持续拒绝连接；
+# _http_json 原逻辑"heal 失败→20s→再试一次→仍失败就 raise"把整个 farm 事件
+# 炸掉（23:27:43 / 23:30:59 / 23:34:16 三连 10061，GUI on_error=skip）。
+# farm 对网关失联的正确姿态：挂起等待自愈（周期 ensure_gateway + 原请求探测），
+# 恢复后无缝续跑；仅挂起超时或用户点停止才抛出。
+GATEWAY_DOWN_MAX_WAIT_S = 1800.0   # 失联最长挂起 30 分钟，超时才放弃
+GATEWAY_DOWN_POLL_S = 10.0         # 挂起期间探测周期（自愈为其 3 倍周期一次）
+
+
 def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0) -> dict:
     """POST JSON 到 gateway，返回解析后的 JSON。
 
     2026-08-27：网关不在线（WinError 10061 连接拒绝）时不再直接炸任务——
     先走 _heal_gateway()（gateway_guard.ensure_gateway 按 window_manager.pid
-    重拉并 attach），成功后重试一次；仍失败才抛出。
+    重拉并 attach）后重试。
+    2026-08-28（10061 三连炸修复）：heal 失败不再"20s 缓冲后试一次就放弃"，
+    改为挂起等待自愈：原请求本身即探测，恢复后无缝续跑；仅挂起超过
+    GATEWAY_DOWN_MAX_WAIT_S 或用户点停止才抛出（上层按原样报错）。
     """
     body = json.dumps(data).encode("utf-8") if data is not None else None
 
@@ -629,19 +642,31 @@ def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0
         with _urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
 
-    try:
-        return _once()
-    except Exception as e:
-        refused = isinstance(getattr(e, "reason", None), ConnectionRefusedError)
-        if not (refused or "10061" in str(e)):
-            raise
-        if not _heal_gateway():
-            # 2026-08-27：冷启动 attach 可达 170~200s，ensure_gateway 的
-            # 轮询窗口偶发卡边缘误报 timeout——网关其实马上就绪。
-            # heal "失败"后缓冲 20s 直接重试 HTTP 一次，不放弃。
-            time.sleep(20.0)
-            return _once()
-        return _once()
+    down_since = None
+    last_heal = 0.0
+    while True:
+        try:
+            r = _once()
+            if down_since is not None:
+                logger.info(f"网关已恢复（失联 {time.time() - down_since:.0f}s），任务继续")
+            return r
+        except Exception as e:
+            refused = isinstance(getattr(e, "reason", None), ConnectionRefusedError)
+            if not (refused or "10061" in str(e)):
+                raise   # 非失联错误照旧上抛，GUI 能看到真实错误
+            now = time.time()
+            if down_since is None:
+                down_since = now
+                logger.warning(f"网关失联(10061)，挂起等待自愈"
+                               f"（最长 {int(GATEWAY_DOWN_MAX_WAIT_S / 60)} 分钟）: {e}")
+            elif now - down_since > GATEWAY_DOWN_MAX_WAIT_S:
+                raise   # 挂起超时，放弃（保留最后一次失联异常）
+            if _gui_stop_requested():
+                raise   # 用户停止：交还上层，任务引擎正在收尾
+            if now - last_heal >= GATEWAY_DOWN_POLL_S * 3:
+                last_heal = now
+                _heal_gateway()   # 能拉起就拉起；拉不起下个自愈周期再试
+            time.sleep(GATEWAY_DOWN_POLL_S)
 
 
 def _heal_gateway() -> bool:
