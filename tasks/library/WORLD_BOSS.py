@@ -900,6 +900,18 @@ def _walk_to(map_name: str, gx: int, gy: int, pid: int = None,
     无专用地图包时，回退到校准数据通用走路（data/map_calibration/<地图名>.json）。
     返回地图包的结果 dict，额外字段 ok/message。
     """
+    # ★ 大地图有效点击范围钳制（2026-08-28）：WORLD_BOSS 直连走路绕过了
+    #   task_library_manager 的避让钩子，这里显式走 map_coord_ui_avoid，
+    #   否则 map_ui_blocks.json 的 max_game_coord 对 BOSS farming 不生效。
+    try:
+        from core.map_ui_block import map_coord_ui_avoid
+        _gx, _gy, _ui = map_coord_ui_avoid(map_name, int(gx), int(gy))
+        if (_gx, _gy) != (int(gx), int(gy)):
+            if verbose:
+                print(f"  [UI避让] {map_name} ({gx},{gy}) → ({_gx:.0f},{_gy:.0f})（{_ui}）")
+            gx, gy = int(_gx), int(_gy)
+    except Exception:
+        pass  # 避让失败不阻断走路
     walker = _get_map_walker(map_name)
     pid = pid or _get_bound_pid()
     if pid <= 0:
