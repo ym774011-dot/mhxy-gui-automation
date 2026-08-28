@@ -305,7 +305,8 @@ def stop_gateway(timeout: float = 8.0, verbose: bool = False):
         info["error"] = f"端口 {port} 释放超时"
 
     # 4. 清理本组网关运行日志（重新打开 GUI 时网关从干净状态加载）
-    for name in (f"gateway_spawn_{port}.log", f"gw_{port}.log"):
+    # 2026-08-28 补丁2：gateway.py 运行日志已按端口隔离为 gateway_run_<port>.log
+    for name in (f"gateway_spawn_{port}.log", f"gw_{port}.log", f"gateway_run_{port}.log"):
         p = os.path.join(GATEWAY_DIR, name)
         try:
             if os.path.exists(p):

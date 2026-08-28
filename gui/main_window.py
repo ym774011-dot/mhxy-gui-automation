@@ -22,7 +22,7 @@ self.config_panel`` 引用访问。
 import os
 import sys
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
     QAction,
     QFileDialog,
@@ -420,11 +420,20 @@ class MainWindow(QMainWindow):
             _port = (self._group_cfg.get("gateway") or {}).get("port", 18082)
             _st = GROUP_STYLE.get(self._group_id)
             _roles = (self._group_cfg.get("window") or {}).get("roles") or []
-            self._group_badge = QLabel(group_status_text(self._group_id, _port, len(_roles)))
+            self._group_badge_text = group_status_text(self._group_id, _port, len(_roles))
+            self._group_badge = QLabel(self._group_badge_text + "  ○离线")
             if _st:
                 self._group_badge.setStyleSheet("color: %s; font-weight: bold; padding: 0 8px;" % _st["accent"])
             self._group_badge.setObjectName("groupBadge")
             self._status_bar.addPermanentWidget(self._group_badge)
+            # ★2026-08-28 补丁1：徽章实时化——网关状态与 GUI 展示一一对应。
+            # 判定复用 gateway_guard._ready（与任务库自愈同一事实源）；
+            # /api/status 就绪字段带 2s TTL 缓存，轮询零 RPC 开销。
+            self._gw_timer = QTimer(self)
+            self._gw_timer.setInterval(5000)
+            self._gw_timer.timeout.connect(self._refresh_gateway_badge)
+            QTimer.singleShot(800, self._refresh_gateway_badge)  # 启动后首次快速刷新
+            self._gw_timer.start()
         except Exception:
             pass
         # 永久标签用于显示运行状态文字（如"就绪"、"运行中"、"已暂停"等）
@@ -433,6 +442,41 @@ class MainWindow(QMainWindow):
         # 进度信息标签（显示当前事件进度）
         self._progress_label = QLabel("")
         self._status_bar.addWidget(self._progress_label)
+
+    def _refresh_gateway_badge(self):
+        """★2026-08-28 补丁1：网关徽章实时刷新（补丁对应 gateway-config-review.md）。
+
+        状态映射（判定复用 gateway_guard._ready —— GUI 展示与任务自愈同源）：
+          ●在线        绿色  HTTP 通 + attach 本组游戏 PID + lua 已捕获
+          ⚠启动中      橙色  网关在线但未就绪（attach / lua 捕获进行中）
+          ⚠pid不匹配   橙色  网关在线但 attach 的是别的进程（ensure_gateway 将自愈换绑）
+          ○离线        灰色  HTTP 不通（网关未拉起/已停止）
+
+        本地无法确定游戏 PID 时降级为"⚠pid不匹配"语义不成立，改按离线外
+        的保守态处理（网关通则显示启动中）。
+        """
+        try:
+            from core.gateway_guard import _bound_pid, _ready, _status
+            pid = _bound_pid()
+            st = _status(timeout=1.5)
+            if st and pid and _ready(st, pid):
+                dot, color = "●在线", "#3a9d5d"
+            elif st and pid and st.get("pid") == pid:
+                dot, color = "⚠启动中", "#c97b2d"
+            elif st and pid:
+                dot, color = "⚠pid不匹配", "#c97b2d"
+            elif st:
+                dot, color = "⚠启动中", "#c97b2d"   # 网关通但本地未绑定 PID
+            else:
+                dot, color = "○离线", "#888888"
+        except Exception:
+            dot, color = "○离线", "#888888"
+        try:
+            self._group_badge.setText(f"{self._group_badge_text}  {dot}")
+            self._group_badge.setStyleSheet(
+                "color: %s; font-weight: bold; padding: 0 8px;" % color)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 窗口居中

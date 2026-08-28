@@ -50,6 +50,7 @@ try:
     from core.group_config import gateway_url
     DEFAULT_GATEWAY = gateway_url()  # ★2026-08-25 多组：组1=18082，组2=18083...
 except Exception:
+    # 2026-08-28 补丁3：最后兜底，仅 group_config 导入失败（独立 CLI 运行）时生效。
     DEFAULT_GATEWAY = "http://127.0.0.1:18082"
 
 

@@ -56,10 +56,10 @@ try:
     from core.group_config import gateway_url as _gateway_url
     DEFAULT_GATEWAY = _gateway_url()
 except Exception:
+    # 2026-08-28 补丁3：最后兜底，仅 group_config 导入失败（独立 CLI 运行）时生效。
+    # 原 WORLD_BOSS_GATEWAY 环境变量 override 已删除（冗余配置通道，与组配置并存
+    # 违反单一事实源）；实验指定网关请用函数 gateway= 参数。
     DEFAULT_GATEWAY = "http://127.0.0.1:18082"
-# 显式指定（环境变量优先级最高）。2026-08-27 用户指定：PID 15224 走组2网关 18083。
-if os.environ.get("WORLD_BOSS_GATEWAY"):
-    DEFAULT_GATEWAY = os.environ["WORLD_BOSS_GATEWAY"].rstrip("/")
 
 # GUI 函数下拉框中文标注（core/task_library_manager._get_signature_str 约定：
 # 命中 title 时显示 "中文标题  |  原签名"）。2026-08-28。
