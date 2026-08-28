@@ -621,6 +621,69 @@ GATEWAY_DOWN_MAX_WAIT_S = 1800.0   # 失联最长挂起 30 分钟，超时才放
 GATEWAY_DOWN_POLL_S = 10.0         # 挂起期间探测周期（自愈为其 3 倍周期一次）
 
 
+def _dismiss_engine_error_dialog() -> bool:
+    """点掉 Galaxy2D 引擎致命错误弹窗（2026-08-29 00:25 实锤新增）。
+
+    边走边CALL 对已失效实体反复调 事件开始/事件解析 时，引擎可能抛
+    **原生致命错误**（模态 MessageBox："致命的错误 / this arg is not a
+    userdata!"）。该弹窗卡住游戏主线程 → 网关 Lua 全部读超时。
+    Lua 层 pcall 拦不住原生弹窗，唯一解法是后台 PostMessage 点"确定"，
+    引擎随即恢复。弹窗属游戏进程（GetWindowThreadProcessId 校验），
+    兜底场景（PID 未绑定）只点标题精确匹配的第一个。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        hits = []   # (hwnd, pid)
+
+        def _enum_cb(hwnd, lparam):
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(hwnd, buf, n + 1)
+            t = buf.value
+            if ("致命的错误" in t) or ("not a userdata" in t):
+                pid = wintypes.DWORD(0)
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                hits.append((hwnd, int(pid.value)))
+            return True
+
+        CMPFUNC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        user32.EnumWindows(CMPFUNC(_enum_cb), 0)
+        if not hits:
+            return False
+        game_pid = _get_bound_pid()
+        target = None
+        for hwnd, pid in hits:
+            if game_pid and pid == game_pid:
+                target = hwnd
+                break
+        if target is None:
+            target = hits[0][0]
+        # 先试 WM_COMMAND(IDOK=1)（后台无焦点可收）；实测部分 MessageBox 不认，
+        # 再对 Button 子窗口发 BM_CLICK，直到 IsWindow 确认弹窗销毁
+        user32.PostMessageW(target, 0x0111, 1, 0)
+        gone = False
+        for _ in range(10):
+            if not user32.IsWindow(target):
+                gone = True
+                break
+            btn = user32.FindWindowExW(target, 0, "Button", None)
+            if btn:
+                user32.PostMessageW(btn, 0x00F5, 0, 0)   # BM_CLICK
+            time.sleep(0.2)
+        if gone:
+            logger.warning("已自动点掉引擎致命错误弹窗（this arg is not a userdata!），等待引擎恢复")
+        else:
+            logger.warning("引擎致命错误弹窗点击后未关闭，下个超时周期重试")
+        return gone
+    except Exception as e:
+        logger.warning(f"点掉引擎错误弹窗失败: {e}")
+        return False
+
+
 def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0) -> dict:
     """POST JSON 到 gateway，返回解析后的 JSON。
 
@@ -630,6 +693,11 @@ def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0
     2026-08-28（10061 三连炸修复）：heal 失败不再"20s 缓冲后试一次就放弃"，
     改为挂起等待自愈：原请求本身即探测，恢复后无缝续跑；仅挂起超过
     GATEWAY_DOWN_MAX_WAIT_S 或用户点停止才抛出（上层按原样报错）。
+    2026-08-29（读超时三连炸修复）：读超时（TimeoutError "timed out"）与
+    10061 同等待遇——此前只有 10061 走挂起重试，读超时直接 raise 把整个
+    farm 事件炸掉（00:25:24 实锤：引擎被致命错误弹窗卡死 → 全部请求
+    超时 → scan_scene_bosses 一发超时整场 farm 结束）。超时路径额外
+    自动点掉引擎致命弹窗（_dismiss_engine_error_dialog）从根上解锁。
     """
     body = json.dumps(data).encode("utf-8") if data is not None else None
 
@@ -644,29 +712,45 @@ def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0
 
     down_since = None
     last_heal = 0.0
+    last_dismiss = 0.0
     while True:
         try:
             r = _once()
             if down_since is not None:
-                logger.info(f"网关已恢复（失联 {time.time() - down_since:.0f}s），任务继续")
+                logger.info(f"网关已恢复（失联/卡死 {time.time() - down_since:.0f}s），任务继续")
             return r
         except Exception as e:
-            refused = isinstance(getattr(e, "reason", None), ConnectionRefusedError)
-            if not (refused or "10061" in str(e)):
-                raise   # 非失联错误照旧上抛，GUI 能看到真实错误
+            reason = getattr(e, "reason", None)
+            refused = isinstance(reason, ConnectionRefusedError) or "10061" in str(e)
+            timed_out = (isinstance(e, TimeoutError) or isinstance(reason, TimeoutError)
+                         or "timed out" in str(e).lower())
+            if not (refused or timed_out):
+                raise   # 非失联/超时错误照旧上抛，GUI 能看到真实错误
             now = time.time()
             if down_since is None:
                 down_since = now
-                logger.warning(f"网关失联(10061)，挂起等待自愈"
-                               f"（最长 {int(GATEWAY_DOWN_MAX_WAIT_S / 60)} 分钟）: {e}")
+                if timed_out:
+                    logger.warning(f"网关读超时（引擎可能被致命错误弹窗卡死，将自动点掉），"
+                                   f"挂起等待恢复（最长 {int(GATEWAY_DOWN_MAX_WAIT_S / 60)} 分钟）: {e}")
+                else:
+                    logger.warning(f"网关失联(10061)，挂起等待自愈"
+                                   f"（最长 {int(GATEWAY_DOWN_MAX_WAIT_S / 60)} 分钟）: {e}")
             elif now - down_since > GATEWAY_DOWN_MAX_WAIT_S:
-                raise   # 挂起超时，放弃（保留最后一次失联异常）
+                raise   # 挂起超时，放弃（保留最后一次异常）
             if _gui_stop_requested():
                 raise   # 用户停止：交还上层，任务引擎正在收尾
-            if now - last_heal >= GATEWAY_DOWN_POLL_S * 3:
-                last_heal = now
-                _heal_gateway()   # 能拉起就拉起；拉不起下个自愈周期再试
-            time.sleep(GATEWAY_DOWN_POLL_S)
+            if timed_out:
+                # 弹窗可能反复弹：每 2s 探一次，点掉后给引擎 1s 恢复时间再重发请求
+                if now - last_dismiss >= 2.0:
+                    last_dismiss = now
+                    if _dismiss_engine_error_dialog():
+                        time.sleep(1.0)
+                time.sleep(1.0)
+            else:
+                if now - last_heal >= GATEWAY_DOWN_POLL_S * 3:
+                    last_heal = now
+                    _heal_gateway()   # 能拉起就拉起；拉不起下个自愈周期再试
+                time.sleep(GATEWAY_DOWN_POLL_S)
 
 
 def _heal_gateway() -> bool:
@@ -1487,6 +1571,11 @@ def call_dialog_battle(gateway: str, keywords: List[str]) -> Tuple[bool, str]:
         for kw in keywords:
             if kw in text:
                 code = f'''
+-- 2026-08-29 预防：读选项与点击之间对话栏可能已被关掉（边走边CALL节拍密集），
+-- 拿失效链接喂 事件解析 会触发引擎原生致命错误（this arg is not a userdata!）
+if not (tp.窗口.对话栏 and tp.窗口.对话栏.可视) then
+  _G.__out = "false|NODLG"; return
+end
 local link = "{o['link']}"
 local ok, ret = pcall(function() return tp.窗口.对话栏:事件解析(link) end)
 _G.__out = tostring(ok) .. "|" .. tostring(ret or "")
