@@ -36,10 +36,10 @@ import sys
 import time
 import random
 import os
-from collections import deque
-from datetime import datetime, timedelta
-from typing import Optional, Tuple, List, Dict, Any, Callable
-from urllib.request import Request, urlopen
+from collections import deque as _deque
+from datetime import datetime as _datetime, timedelta as _timedelta
+from typing import Optional, Tuple, List, Dict, Any, Callable  # noqa: 仅注解使用；模块尾部收编为下划线，避免进 GUI 函数列表
+from urllib.request import Request as _Request, urlopen as _urlopen
 
 # 确保项目根目录在 sys.path，以便导入 library.map_packs.* 和 core.window_manager
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -53,13 +53,135 @@ except Exception:
     logger = logging.getLogger("WORLD_BOSS")
 
 try:
-    from core.group_config import gateway_url
-    DEFAULT_GATEWAY = gateway_url()
+    from core.group_config import gateway_url as _gateway_url
+    DEFAULT_GATEWAY = _gateway_url()
 except Exception:
     DEFAULT_GATEWAY = "http://127.0.0.1:18082"
 # 显式指定（环境变量优先级最高）。2026-08-27 用户指定：PID 15224 走组2网关 18083。
 if os.environ.get("WORLD_BOSS_GATEWAY"):
     DEFAULT_GATEWAY = os.environ["WORLD_BOSS_GATEWAY"].rstrip("/")
+
+# GUI 函数下拉框中文标注（core/task_library_manager._get_signature_str 约定：
+# 命中 title 时显示 "中文标题  |  原签名"）。2026-08-28。
+__function_meta__ = {
+    "WORLD_BOSS_captcha_gate": {
+        "title": "世界BOSS：防挂机验证码门（任务链首事件，有弹窗V7自动解）",
+        "args": {
+            "gateway": "网关地址，默认读组配置（http://127.0.0.1:18082）",
+            "verbose": "是否打印细节",
+        },
+    },
+    "WORLD_BOSS_auto_farm": {
+        "title": "世界BOSS：自动监控 farming 主入口（公告+实扫+CALL战斗）",
+        "args": {
+            "monitored_maps": "监控地图列表，默认内置监控表",
+            "target_bosses": "目标 BOSS 名单，默认内置白名单",
+            "spawn_patterns": "公告刷新句式正则，默认内置",
+            "battle_keywords": "对话栏战斗关键词，默认内置",
+            "home_coord": "初始回点坐标 (gx, gy)，默认 (240, 101)",
+            "max_runtime": "最长运行秒数，默认 1800",
+            "chat_poll_interval": "聊天公告轮询间隔秒",
+            "boss_scan_interval": "到图后 BOSS 实扫间隔秒",
+            "clear_timeout": "清图判定秒数（无怪超此值即换图）",
+            "battle_timeout": "单场战斗等待超时秒",
+            "walk_background": "True=后台走路（PostMessage），False=前台",
+            "verbose": "是否打印过程日志",
+            "gateway": "网关地址，默认读组配置",
+        },
+    },
+    "WORLD_BOSS_wait_and_farm": {
+        "title": "世界BOSS：按刷新时间表等待，到点前自动启动 farming",
+        "args": {
+            "target_bosses": "目标 BOSS 名单（取最近的刷新时间点）",
+            "schedule": "刷新时间表 {BOSS名: [分钟,...]}，默认内置",
+            "pre_start_minutes": "提前多少分钟启动 farming，默认 2",
+            "max_wait_minutes": "最大等待分钟数，超时直接返回",
+            "gateway": "网关地址，默认读组配置",
+            "verbose": "是否打印过程日志",
+        },
+    },
+    "WORLD_BOSS_probe_chat": {
+        "title": "世界BOSS：探测聊天框原始公告（验证字段名/格式）",
+        "args": {
+            "lines": "读取最近多少条，默认 120",
+            "gateway": "网关地址，默认读组配置",
+        },
+    },
+    "WORLD_BOSS_chat_maintenance": {
+        "title": "世界BOSS：聊天通道例行维护（清理网关大缓存）",
+        "args": {
+            "gateway": "网关地址，默认读组配置",
+            "verbose": "是否打印细节",
+        },
+    },
+    "WORLD_BOSS_confirm_list": {
+        "title": "世界BOSS：返回需用户确认的方向/决策清单",
+    },
+    "fetch_recv_announcements": {
+        "title": "提取网关系统公告（proto38，xt系统+cw传说频道去重）",
+        "args": {
+            "gateway": "网关地址",
+            "channel": "公告频道元组，默认 (\"xt\", \"cw\")",
+        },
+    },
+    "probe_chat_raw": {
+        "title": "读取最近系统公告文本列表（时间顺序，兼容旧接口）",
+        "args": {
+            "gateway": "网关地址",
+            "lines": "最多返回最近多少条",
+        },
+    },
+    "parse_spawn_notification": {
+        "title": "解析单条公告为 BOSS 刷新通知 {boss,map,text}",
+        "args": {
+            "text": "公告原文",
+            "target_bosses": "目标 BOSS 名单",
+            "monitored_maps": "监控地图名单",
+            "spawn_patterns": "可选刷新句式正则",
+        },
+    },
+    "find_latest_spawn": {
+        "title": "从公告缓存解析最近一条 BOSS 刷新通知",
+        "args": {
+            "gateway": "网关地址",
+            "target_bosses": "目标 BOSS 名单",
+            "monitored_maps": "监控地图名单",
+            "spawn_patterns": "可选刷新句式正则",
+            "lines": "回看最近多少条公告，默认 200",
+        },
+    },
+    "scan_scene_bosses": {
+        "title": "实扫当前场景 BOSS 实体（场景人物+临时Npc）",
+        "args": {
+            "gateway": "网关地址",
+            "target_bosses": "目标 BOSS 名单",
+            "exact_match": "需精确匹配的 BOSS 名元组，默认内置",
+        },
+    },
+    "call_npc_event_start": {
+        "title": "CALL 场景 BOSS 的『事件开始』进对话",
+        "args": {
+            "gateway": "网关地址",
+            "uid": "实体数字键（按标识重找后兜底）",
+            "bsid": "实体唯一标识（优先）",
+        },
+    },
+    "get_dialog_options": {
+        "title": "读取对话栏选项列表",
+        "args": {"gateway": "网关地址"},
+    },
+    "call_dialog_battle": {
+        "title": "对话栏匹配战斗关键词并 CALL 事件解析进战斗",
+        "args": {
+            "gateway": "网关地址",
+            "keywords": "战斗关键词列表（黑名单『你认错人了』优先拦截）",
+        },
+    },
+    "close_dialog": {
+        "title": "右键关闭当前对话栏",
+        "args": {"gateway": "网关地址"},
+    },
+}
 
 
 def _gui_stop_requested() -> bool:
@@ -482,12 +604,12 @@ def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0
     body = json.dumps(data).encode("utf-8") if data is not None else None
 
     def _once():
-        req = Request(
+        req = _Request(
             gateway.rstrip("/") + path,
             data=body,
             headers={"Content-Type": "application/json"} if body else {},
         )
-        with urlopen(req, timeout=timeout) as resp:
+        with _urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
 
     try:
@@ -1892,7 +2014,7 @@ def _ensure_walker_bound(gateway: str, verbose: bool = True) -> Optional[int]:
     """
     pid = None
     try:
-        with urlopen(Request(gateway.rstrip("/") + "/api/status"), timeout=8) as r:
+        with _urlopen(_Request(gateway.rstrip("/") + "/api/status"), timeout=8) as r:
             data = json.loads(r.read().decode("utf-8", "replace"))
         pid = ((data.get("result") or {}).get("pid")) or data.get("pid")
     except Exception:
@@ -1982,7 +2104,7 @@ def WORLD_BOSS_auto_farm(
     last_ann_text = None    # 已执行过的公告原文（过期公告拉扯修复 2026-08-28）
     ann_cleared = False     # 该公告对应的图是否已被判清图
     unreachable = {}        # 跨图失败的图 -> 冷却截止时间戳（2026-08-28）
-    recent_maps = deque(maxlen=3)  # 近期去过的图（换图避让，2026-08-28 实扫定案配套）
+    recent_maps = _deque(maxlen=3)  # 近期去过的图（换图避让，2026-08-28 实扫定案配套）
     # 2026-08-28 三界财神爷抢占模式状态
     caishen_pinned = None       # {"map","text"}：抢占激活中（期间只打财神爷）
     caishen_seen_texts = set()  # 已消费的财神爷公告原文（防同一条反复抢占）
@@ -2298,7 +2420,7 @@ def WORLD_BOSS_auto_farm(
     return result
 
 
-def _next_schedule_time(minutes_list: List[int], pre_minutes: int = 0) -> Optional[datetime]:
+def _next_schedule_time(minutes_list: List[int], pre_minutes: int = 0) -> Optional[_datetime]:
     """返回下一个符合分钟列表的时间点（可提前 pre_minutes）。
 
     2026-08-28 A1 修复：
@@ -2310,14 +2432,14 @@ def _next_schedule_time(minutes_list: List[int], pre_minutes: int = 0) -> Option
     以小时为步长平铺未来 3 天共 72 个整点候选，提前量用减法（自动跨午夜借位）。"""
     if not minutes_list:
         return None
-    now = datetime.now()
+    now = _datetime.now()
     base = now.replace(second=0, microsecond=0)
     candidates = []
     for h in range(0, 3 * 24):   # 未来 3 天 × 每小时
-        hb = (base + timedelta(hours=h)).replace(minute=0)
+        hb = (base + _timedelta(hours=h)).replace(minute=0)
         for m in minutes_list:
             dt = hb.replace(minute=m)                     # 真实刷新时刻
-            candidates.append(dt - timedelta(minutes=pre_minutes))  # 启动时刻
+            candidates.append(dt - _timedelta(minutes=pre_minutes))  # 启动时刻
     valid = [d for d in candidates if d > now]
     return min(valid) if valid else None
 
@@ -2339,7 +2461,7 @@ def WORLD_BOSS_wait_and_farm(
     schedule = schedule or dict(DEFAULT_BOSS_SCHEDULE)
 
     # 计算下一个最近刷新点
-    nearest: Optional[datetime] = None
+    nearest: Optional[_datetime] = None
     nearest_boss = ""
     for boss in target_bosses:
         minutes = schedule.get(boss, [])
@@ -2353,7 +2475,7 @@ def WORLD_BOSS_wait_and_farm(
     if nearest is None:
         return {"ok": False, "message": "未找到有效的刷新时间表，无法定时启动"}
 
-    now = datetime.now()
+    now = _datetime.now()
     wait_sec = max(0, int((nearest - now).total_seconds()))
     if wait_sec > max_wait_minutes * 60:
         return {"ok": False, "message": f"下一个刷新点 {nearest_boss} @ {nearest} 超过最大等待 {max_wait_minutes} 分钟"}
@@ -2460,3 +2582,11 @@ if __name__ == "__main__":
     gw = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_GATEWAY
     res = WORLD_BOSS_probe_chat(gateway=gw)
     print(json.dumps(res, ensure_ascii=False, indent=2))
+
+
+# ---- GUI 函数列表去噪（2026-08-28）----
+# typing 泛型仅用于注解（def 时已求值完毕），此处收编为下划线别名，
+# 避免它们以“可调用对象”身份混进 GUI 函数下拉框。若在函数体运行期引用
+# 这六个名字会 NameError——运行期请使用 _List 等下划线别名。
+_List, _Dict, _Optional, _Tuple, _Any, _Callable = List, Dict, Optional, Tuple, Any, Callable
+del List, Dict, Optional, Tuple, Any, Callable
