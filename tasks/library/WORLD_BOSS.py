@@ -1459,12 +1459,72 @@ def _wait_arrival_grid(gateway: str, tx: float, ty: float,
     return False
 
 
-def _close_big_map(verbose: bool = False) -> None:
-    """立即关闭大地图（Tab 键，后台）。
+def _bigmap_visible(gateway: str) -> Optional[bool]:
+    """读大地图可视状态 tp.窗口.小地图.可视。
+
+    ★ 2026-08-28 走路未启动根因修复的关键：
+      - 大地图开着时再按 TAB 是**关闭**（toggle），点击会落在游戏场地上无效；
+      - `_click_background` 末尾的**右键会把开着的地图关掉**（实测 可视 true→false），
+        随后 _close_big_map 再 TAB 就把图**重新打开** → 开关状态永久错位，
+        之后每次走路 TAB 都先关图 → 点击无效 → "走路未启动" → 全部退化瞬移。
+      因此开/关图前必须先读状态，只在需要时才按 TAB。
+    :return: True/False = 读到状态；None = 网关查询失败（调用方按旧逻辑兜底）。
+    """
+    try:
+        v = _lua(gateway, "_G.__out = tostring(tp.窗口.小地图 and tp.窗口.小地图.可视)")
+        if v == "true":
+            return True
+        if v == "false":
+            return False
+    except Exception:
+        pass
+    return None
+
+
+def _press_tab_if(hwnd: int, want_visible: bool, gateway: str,
+                  verbose: bool = False) -> bool:
+    """状态感知 TAB：仅当大地图可视状态 ≠ want_visible 时才按键，并轮询确认翻转。
+
+    ★ 2026-08-28 二轮修复：按完必须**确认状态真的翻转**（轮询读 可视，最多 ~1.2s）。
+      实测两次 TAB 间隔 <0.3s 时游戏可能吞掉一次 toggle（预同步 TAB + 地图包 TAB
+      竞态 → 状态与预期相反 → 点击落场地无效 → "走路未启动"）。
+    :return: True = 实际按了 TAB（且确认翻转）；False = 状态已满足未按键。
+    """
+    from library.map_packs.DHW import _press_tab
+    vis = _bigmap_visible(gateway)
+    if vis is None:
+        # 查询失败：按旧逻辑盲按（保持兼容），调用方无法保证状态
+        _press_tab(hwnd, background=True)
+        return True
+    if vis != want_visible:
+        _press_tab(hwnd, background=True)
+        # 轮询确认翻转（_press_tab 自带 0.3s settle，这里再给最多 ~1s 余量）
+        t0 = time.time()
+        while time.time() - t0 < 1.0:
+            now = _bigmap_visible(gateway)
+            if now == want_visible:
+                if verbose:
+                    act = "打开" if want_visible else "关闭"
+                    print(f"  ✓ 大地图{act}（可视={vis} → TAB，已确认）", flush=True)
+                return True
+            time.sleep(0.15)
+        if verbose:
+            print(f"  ! 大地图 TAB 后状态未确认翻转（期望可视={want_visible}）"
+                  f"——可能被吞键，下轮预同步会再纠正", flush=True)
+        return True
+    if verbose:
+        print(f"  · 大地图已处于目标状态（可视={vis}），跳过 TAB", flush=True)
+    return False
+
+
+def _close_big_map(verbose: bool = False, gateway: str = None) -> None:
+    """立即关闭大地图（Tab 键，后台，状态感知）。
 
     2026-08-28 用户定案：打开地图点击目标坐标后，立即关闭地图并马上 CALL
     （边走边CALL），绝不开着大地图干等。失败只提示不阻断（不影响后续 CALL）。
     窗口解析与走路通道一致：_get_bound_pid() → locate_game_window。
+    2026-08-28 状态感知：gateway 可用时先读 可视，已关闭就不按 TAB——
+    盲按 TAB 会把刚被右键关掉的地图重新打开（走路失败根因，见 _bigmap_visible）。
     """
     try:
         from library.map_packs.DHW import _press_tab
@@ -1474,9 +1534,12 @@ def _close_big_map(verbose: bool = False) -> None:
         if pid > 0:
             hwnd, _title = locate_game_window(pid, verbose=False)
         if hwnd:
-            _press_tab(hwnd, background=True)
-            if verbose:
-                print("  ✓ 大地图已关闭（点完坐标立即关图）", flush=True)
+            if gateway:
+                _press_tab_if(hwnd, False, gateway, verbose)
+            else:
+                _press_tab(hwnd, background=True)
+                if verbose:
+                    print("  ✓ 大地图已关闭（点完坐标立即关图）", flush=True)
         elif verbose:
             print("  ! 无法定位游戏窗口，跳过关图（不阻断流程）", flush=True)
     except Exception as e:
@@ -1568,10 +1631,24 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
         if verbose:
             print(f"  → 走路贴近 {cur_map} ({jx},{jy})（距BOSS≈{dist0:.0f}格，"
                   f"边走边CALL上限 {est:.0f}s）", flush=True)
+        # ★ 状态感知预同步（2026-08-28 走路未启动根因修复）：
+        #   地图包/校准走路第一步都是"TAB 开图"，若大地图当前已开着，
+        #   这个 TAB 会把它关掉 → 点击落场地无效 → 走路必败。
+        #   所以走路前先检查：图开着就先 TAB 关掉，让后续 TAB 稳定开图。
+        try:
+            from library.common.win_utils import locate_game_window as _lgw
+            _pid = _get_bound_pid()
+            _hwnd = 0
+            if _pid > 0:
+                _hwnd, _ = _lgw(_pid, verbose=False)
+            if _hwnd:
+                _press_tab_if(_hwnd, False, gateway, verbose)
+        except Exception:
+            pass  # 预同步失败不阻断走路
         walk_res = _walk_to(cur_map, jx, jy, background=walk_background, verbose=verbose)
         if walk_res.get("ok"):
             # ★ 用户定案：点完目标坐标立即关大地图，马上 CALL
-            _close_big_map(verbose)
+            _close_big_map(verbose, gateway=gateway)
             # 移动启动门控：点击没生效（角色完全没动）→ 直接转瞬移兜底
             t0s = time.time()
             base = _role_grid(gateway)
