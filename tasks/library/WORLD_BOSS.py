@@ -1369,6 +1369,18 @@ def _wait_battle_end(gateway: str, timeout: float = 180.0, poll: float = 0.5) ->
     return started
 
 
+# 2026-08-28 实测修复：1501 内部 desc=建邺城，客户端显示名=宝象国 —— 两个名字指同一张图。
+# _ensure_on_map 严格 == 比较导致「hop 链已到图、落图复核却判失败进 10 分钟冷却」。
+_MAP_ALIAS_CANON = {"宝象国": "建邺城"}
+
+
+def _map_same(a: str, b: str) -> bool:
+    """地图名等价比较（宝象国/建邺城互为别名）。"""
+    if a == b:
+        return True
+    return _MAP_ALIAS_CANON.get(a, a) == _MAP_ALIAS_CANON.get(b, b)
+
+
 def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) -> bool:
     """确保角色在 target_map；不在则跨图，在则落地图中心/指定坐标。返回是否到位。
 
@@ -1376,7 +1388,7 @@ def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) 
     曾出现"人在长寿郊外、日志标花果山、拿花果山校准数据点错屏幕"。
     现在跨图后实读地图名复核，不匹配重试一次，仍不匹配返回 False。"""
     cur = _cur_map_name(gateway)
-    if cur == target_map:
+    if _map_same(cur, target_map):
         cx, cy = (x, y) if (x is not None and y is not None) else DEFAULT_MAP_CENTER.get(target_map, (80, 80))
         _gw_teleport(gateway, cx, cy, map_name=target_map)
         return True
@@ -1388,7 +1400,7 @@ def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) 
         # 2026-08-28 提速轮：固定 sleep 1.5 → 0.3s 步进轮询，地图名一刷新就返回
         for _p in range(5):
             time.sleep(0.3)
-            if _cur_map_name(gateway) == target_map:
+            if _map_same(_cur_map_name(gateway), target_map):
                 return True
     return False
 
