@@ -373,6 +373,8 @@ EXACT_MATCH_BOSSES = ("知了王", "妖魔统领", "天降灵猴", "下凡的灵
 #   1 限时稀有：知了王 / 灵猴 / 二十八星宿 / 天罡地煞 / 十二生肖
 #   2 妖魔头领 / 妖魔统领（公告点名的大怪）+ 未登记杂鱼
 #   3 妖魔鬼怪 / 妖魔 / 鬼怪（每小时 :10 常刷、数量多，垫底——打不完不用抢）
+# 2026-08-28 三定案：普通模式 farm 排序已不再使用本表（除财神爷外无优先级，
+# 公告点名→距离）；表保留作文档，财神爷走独立抢占模式。
 BOSS_PRIORITY = {
     "三界财神爷": 0,
     "知了王": 1,
@@ -391,6 +393,13 @@ for _n in _28_STAR_BOSSES:
 for _n in _12_ZODIAC_BOSSES:
     BOSS_PRIORITY[_n] = 1
 _BOSS_PRIORITY_DEFAULT = 2
+
+# 2026-08-28 用户定案：三界财神爷"最最最优先"抢占模式。
+# 公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，期间绝不 CALL 其他怪；
+# 财神爷没了/被人锁定 → 解除抢占回落普通模式。普通模式除财神爷外无优先级。
+CAISHEN_BOSS = "三界财神爷"
+CAISHEN_SCAN_MISS_LIMIT = 6   # 财神爷图连续 N 扫无实体 → 判"没了/被占"（容忍公告先到怪未刷）
+CAISHEN_SCAN_MISS_GAP = 1.0   # 复扫间隔（秒）
 
 
 def _boss_priority(name: str) -> int:
@@ -1654,10 +1663,11 @@ def WORLD_BOSS_auto_farm(
 ) -> dict:
     """世界BOSS自动监控 farming 主入口。
 
-    优先级：聊天公告（入口信号） > 到图 Lua 实扫白名单怪（权威，2026-08-28 用户定案）。
-      1) 每轮循环先查聊天窗口公告，有公告立刻去公告图；
-      2) 瞬移到任一地图后立即 Lua 扫描白名单怪：场景加载 0.8s 复扫一次，
-         仍没有 → **立即瞬移去别的地图**（不干等 clear_timeout）；
+    优先级（2026-08-28 三定案）：
+      0) 三界财神爷抢占：公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，
+         期间绝不 CALL 其他怪；财神爷没了/被锁定 → 回落普通模式；
+      1) 聊天公告（入口信号） > 到图 Lua 实扫白名单怪（权威）；
+      2) 普通模式无优先级：公告点名先打，其余距离近先打，同图白名单全类型可打；
       3) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
     """
     monitored_maps = monitored_maps or list(DEFAULT_MONITORED_MAPS)
@@ -1680,6 +1690,10 @@ def WORLD_BOSS_auto_farm(
     ann_cleared = False     # 该公告对应的图是否已被判清图
     unreachable = {}        # 跨图失败的图 -> 冷却截止时间戳（2026-08-28）
     recent_maps = deque(maxlen=3)  # 近期去过的图（换图避让，2026-08-28 实扫定案配套）
+    # 2026-08-28 三界财神爷抢占模式状态
+    caishen_pinned = None       # {"map","text"}：抢占激活中（期间只打财神爷）
+    caishen_seen_texts = set()  # 已消费的财神爷公告原文（防同一条反复抢占）
+    caishen_scan_miss = 0       # 财神爷图连续无实体复扫计数
     print("=== WORLD_BOSS_auto_farm 开始 ===", flush=True)
     print(f"  监控地图={monitored_maps}", flush=True)
     print(f"  目标BOSS={target_bosses[:10]}{'...' if len(target_bosses)>10 else ''}", flush=True)
@@ -1699,6 +1713,62 @@ def WORLD_BOSS_auto_farm(
                 stopped = True
                 break
             continue
+
+        # 0.5) 三界财神爷抢占模式（2026-08-28 用户定案：最最最优先）。
+        #      未进战斗时财神爷公告出现 → 立即瞬移财神爷图，期间绝不 CALL 其他怪；
+        #      财神爷没了/被人锁定 → 解除抢占回落普通模式（该图其他怪照常打）。
+        if caishen_pinned is None and not _in_battle(gateway):
+            cs_ann = find_latest_spawn(gateway, [CAISHEN_BOSS],
+                                       monitored_maps, spawn_patterns)
+            if cs_ann and cs_ann.get("text") not in caishen_seen_texts:
+                caishen_seen_texts.add(cs_ann.get("text"))
+                caishen_pinned = {"map": cs_ann["map"], "text": cs_ann.get("text")}
+                caishen_scan_miss = 0
+                if verbose:
+                    print(f"[{int(time.time()-t0)}s] ⚡ 财神爷公告抢占 → {cs_ann['map']}",
+                          flush=True)
+        if caishen_pinned:
+            cs_map = caishen_pinned["map"]
+            if cs_map in unreachable and time.time() < unreachable[cs_map]:
+                if verbose:
+                    print(f"  ⚡ 财神爷图 {cs_map} 跨图冷却中 → 判放弃，回落普通模式", flush=True)
+                caishen_pinned = None
+                continue
+            # 跨图（jump 链，0.3s 级）；失败入冷却并放弃抢占
+            if not _ensure_on_map(gateway, cs_map, None, None):
+                unreachable[cs_map] = time.time() + 600
+                if verbose:
+                    print(f"  ⚡ 跨图到财神爷图 {cs_map} 失败 → 放弃抢占", flush=True)
+                caishen_pinned = None
+                continue
+            cur_map = cs_map
+            cs_list = scan_scene_bosses(gateway, [CAISHEN_BOSS])
+            if cs_list:
+                caishen_scan_miss = 0
+                b = cs_list[0]
+                kw = _boss_battle_keywords(b["name"], list(battle_keywords))
+                res = _farm_one_boss(gateway, b, kw, battle_timeout,
+                                     walk_background, verbose, cur_map)
+                if res.get("ok") and res.get("battle_ended"):
+                    farmed_total += 1
+                    print(f"  ✓ 击杀 三界财神爷 @ {cur_map}（累计 {farmed_total}）", flush=True)
+                else:
+                    # gone = 没了；no_battle_option = 被人锁定/占领 → 都解除抢占
+                    print(f"  ✗ 三界财神爷 跳过: {res.get('reason')} {res.get('msg')}", flush=True)
+                caishen_pinned = None  # 打完/没打成 → 回落普通模式
+            else:
+                # 公告先到怪未刷 / 已被击杀消失：复扫几轮再判，绝不顺手打其他怪
+                caishen_scan_miss += 1
+                if caishen_scan_miss >= CAISHEN_SCAN_MISS_LIMIT:
+                    if verbose:
+                        print(f"  ⚡ 财神爷图连续 {caishen_scan_miss} 扫无实体 → "
+                              f"判没了/被占，回落普通模式", flush=True)
+                    caishen_pinned = None
+                else:
+                    if not _sleep_stoppable(CAISHEN_SCAN_MISS_GAP):
+                        stopped = True
+                        break
+            continue  # 抢占期间不走普通公告/换图逻辑
 
         # 1) 聊天公告 → 目标地图
         # 2026-08-28 修复"过期公告拉扯"：recv 缓存里的老公告没有时间戳，
@@ -1774,6 +1844,17 @@ def WORLD_BOSS_auto_farm(
                     break
                 if not _captcha_solve(gateway, verbose):
                     break
+                # 0.5) 财神爷抢占检查（2026-08-28 用户定案）：每打一只前都查，
+                #      未进战斗时公告出现 → 立刻放弃本图杂鱼，交外层瞬移去财神爷图
+                cs_ann = find_latest_spawn(gateway, [CAISHEN_BOSS],
+                                           monitored_maps, spawn_patterns)
+                if cs_ann and cs_ann.get("text") not in caishen_seen_texts:
+                    caishen_seen_texts.add(cs_ann.get("text"))
+                    caishen_pinned = {"map": cs_ann["map"], "text": cs_ann.get("text")}
+                    caishen_scan_miss = 0
+                    if verbose:
+                        print(f"  ⚡ 财神爷公告抢占: {cs_ann['map']} → 放弃当前杂鱼", flush=True)
+                    break
                 live = [x for x in scan_scene_bosses(gateway, target_bosses)
                         if (x["name"], x["gx"], x["gy"]) not in excluded]
                 if not live:
@@ -1783,11 +1864,10 @@ def WORLD_BOSS_auto_farm(
                     gx0, gy0 = (rg0[0], rg0[1]) if rg0 else (0.0, 0.0)
                 except Exception:
                     gx0, gy0 = 0.0, 0.0
-                # 优先级（稀有>普通）为主键；同优先级时公告指定的 BOSS 先打，
-                # 最后按距离近先打（2026-08-28 修订）
+                # 2026-08-28 二定案：普通模式除财神爷外无优先级——公告点名的先打，
+                # 其余一律距离近先打；同坐标白名单怪全类型都可攻击（不限一种）
                 ann = (spawn or {}).get("boss")
-                b = min(live, key=lambda x: (_boss_priority(x["name"]),
-                                             0 if ann and ann in x["name"] else 1,
+                b = min(live, key=lambda x: (0 if ann and ann in x["name"] else 1,
                                              (x["gx"] - gx0) ** 2 + (x["gy"] - gy0) ** 2))
                 this_keywords = _boss_battle_keywords(b["name"], list(battle_keywords))
                 # 2026-08-28：走路/校准一律用实读地图名——cur_map 标签万一错了
