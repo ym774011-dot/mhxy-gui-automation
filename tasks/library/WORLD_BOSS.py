@@ -508,11 +508,14 @@ EXACT_MATCH_BOSSES = ("知了王", "妖魔统领", "天降灵猴", "下凡的灵
 #   现：头领/统领=2（杂鱼之上），"妖魔鬼怪"显式登记=3（垫底）。
 #   0 三界财神爷（用户指定最高）
 #   1 限时稀有：知了王 / 灵猴 / 二十八星宿 / 天罡地煞 / 十二生肖
-#   2 妖魔头领 / 妖魔统领（公告点名的大怪）+ 未登记杂鱼
+#   2 妖魔头领 / 妖魔统领（公告点名的大怪）
 #   3 妖魔鬼怪 / 妖魔 / 鬼怪（每小时 :10 常刷、数量多，垫底——打不完不用抢）
 # 2026-08-28 五定案（用户 20:55）：妖魔鬼怪/妖魔/鬼怪=最低优先级重新生效——
-#   本表恢复参与普通模式排序：稀有(1) > 头领/统领/未登记(2) > 妖族杂鱼(3)垫底；
+#   本表恢复参与普通模式排序：稀有(1) > 头领/统领(2) > 妖族杂鱼(3)垫底；
 #   且妖族公告不再触发跨图（LOW_PRIORITY_BOSSES），只在场景内顺手清。
+# 2026-08-28 六定案（用户 21:02）：未登记(默认 2) 从 _boss_priority 移除——
+#   未登记实体一律视为非目标（不排序/不攻击），白名单+本表双重门控，
+#   防止未知 NPC/杂鱼被走近+CALL 空转。词缀类（"初出茅庐地煞星"）按类别子串归级。
 BOSS_PRIORITY = {
     "三界财神爷": 0,
     "知了王": 1,
@@ -530,7 +533,6 @@ for _n in _28_STAR_BOSSES:
     BOSS_PRIORITY[_n] = 1
 for _n in _12_ZODIAC_BOSSES:
     BOSS_PRIORITY[_n] = 1
-_BOSS_PRIORITY_DEFAULT = 2
 
 # 2026-08-28 五定案：这批公告词/实体名视为"杂鱼"——公告不触发跨图，
 # 场景内排序永远垫底（其他 BOSS 打完才轮到它们）。
@@ -546,9 +548,19 @@ CAISHEN_SCAN_MISS_LIMIT = 2
 CAISHEN_SCAN_MISS_GAP = 0.5
 
 
-def _boss_priority(name: str) -> int:
-    """BOSS 击杀优先级，未登记的一律 2。"""
-    return BOSS_PRIORITY.get(str(name or "").strip(), _BOSS_PRIORITY_DEFAULT)
+def _boss_priority(name: str):
+    """BOSS 击杀优先级；未登记返回 None（=非目标，不参与排序/攻击）。
+
+    词缀类（六定案）：场景实体名带随机词缀（如"初出茅庐地煞星"），
+    按类别子串归到该类别的优先级，否则词缀名会被误判为未登记非目标。
+    """
+    n = str(name or "").strip()
+    if n in BOSS_PRIORITY:
+        return BOSS_PRIORITY[n]
+    for cls in ("地煞星", "天罡星"):
+        if cls in n:
+            return BOSS_PRIORITY[cls]
+    return None
 
 # 模块元数据（任务库注册用）
 MODULE_NAME = "WORLD_BOSS"
@@ -2080,10 +2092,11 @@ def WORLD_BOSS_auto_farm(
       0) 三界财神爷抢占：公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，
          期间绝不 CALL 其他怪；财神爷没了/被锁定 → 回落普通模式；
       1) 聊天公告（入口信号） > 到图 Lua 实扫白名单怪（权威）；
-      2) 普通模式按 BOSS_PRIORITY 排序：稀有(1) > 头领/统领/未登记(2) >
+      2) 普通模式按 BOSS_PRIORITY 排序：稀有(1) > 头领/统领(2) >
          妖魔鬼怪/妖魔/鬼怪(3)垫底；同优先级距离近先打。
          妖族杂鱼公告不触发跨图（LOW_PRIORITY_BOSSES 过滤），
          只在场景轮换时顺手清——其他 BOSS 打完才轮到它们；
+         未登记实体（优先级 None）=非目标，不排序不攻击（六定案）；
       3) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
     """
     monitored_maps = monitored_maps or list(DEFAULT_MONITORED_MAPS)
@@ -2300,7 +2313,11 @@ def WORLD_BOSS_auto_farm(
         # 2026-08-28 B5：复用 0.4 的本轮扫描（未跨图时），不再重复全量 dump。
         if scanned is None:
             scanned = scan_scene_bosses(gateway, target_bosses)
-        bosses = [x for x in scanned if _boss_key(x) not in excluded]
+        # 2026-08-28 六定案：未登记实体（_boss_priority=None）=非目标，
+        # 直接剔除——不排序/不攻击，也不再阻塞清图判定/轮换。
+        bosses = [x for x in scanned
+                  if _boss_key(x) not in excluded
+                  and _boss_priority(x["name"]) is not None]
         if bosses:
             no_boss_since = None
             if verbose:
@@ -2328,7 +2345,8 @@ def WORLD_BOSS_auto_farm(
                         print(f"  ⚡ 财神爷公告抢占: {cs_ann['map']} → 放弃当前杂鱼", flush=True)
                     break
                 live = [x for x in scan_scene_bosses(gateway, target_bosses)
-                        if _boss_key(x) not in excluded]
+                        if _boss_key(x) not in excluded
+                        and _boss_priority(x["name"]) is not None]
                 if not live:
                     break
                 try:
