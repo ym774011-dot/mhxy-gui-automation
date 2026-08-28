@@ -2355,8 +2355,8 @@ def WORLD_BOSS_auto_farm(
                 except Exception:
                     gx0, gy0 = 0.0, 0.0
                 # 2026-08-28 五定案：普通模式恢复优先级排序——财神爷独立抢占外，
-                # BOSS_PRIORITY 小者先打：稀有(1) > 头领/统领/未登记(2) >
-                # 妖魔鬼怪/妖魔/鬼怪(3)垫底；同优先级距离近先打。
+                # BOSS_PRIORITY 小者先打：稀有(1) > 头领/统领(2) >
+                # 妖魔鬼怪/妖魔/鬼怪(3)垫底；未登记=_boss_priority 返回 None=非目标已剔除。同优先级距离近先打。
                 # 同坐标白名单怪全类型都可攻击（不限一种）。
                 cs_live = [x for x in live if x["name"] == CAISHEN_BOSS]
                 if cs_live:
