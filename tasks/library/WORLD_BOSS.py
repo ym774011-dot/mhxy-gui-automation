@@ -710,7 +710,7 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
             _http_json(gateway, "/api/act/cross_map",
                        {"desc": desc, "x": 100, "y": 100,
                         "wait_ms": 3000, "sync": True}, timeout=25.0)
-            time.sleep(1.8)
+            time.sleep(1.2)  # 2026-08-28 提速轮：1.8→1.2（网关 sync+wait_ms 已等主程）
         return {"ok": True, "error": None, "via": "hop_chain"}
     # 两段式：回长安枢纽
     hub_hop = (_find_exact_hop(gateway, "长安")
@@ -1289,14 +1289,15 @@ def _boss_battle_keywords(boss_name: str, fallback: List[str]) -> List[str]:
     return unique + [k for k in fallback if k not in seen]
 
 
-def _wait_battle_start(gateway: str, timeout: float = 4.0, poll: float = 0.4) -> bool:
+def _wait_battle_start(gateway: str, timeout: float = 3.0, poll: float = 0.25) -> bool:
     """点了战斗选项后，等待 tp.战斗中 变 true（真进战斗的权威验证）。
 
     pcall(事件解析) 返回 ok 不代表进战斗（2026-08-27 实测假击杀 14 连：
     pcall ok=true 但战斗根本没触发）。必须以 tp.战斗中 为准。
-    2026-08-28：15s→4s、poll 1.0→0.4（用户要求延迟最小化）。真触发时
-    战斗态 1~2s 内就会出现；没触发就是超距，早失败早走近重试，不值
-    干等 15s。误判成超距的代价只是一次廉价走近重试。"""
+    2026-08-28：15s→4s、poll 1.0→0.4；再压 4s→3s、0.4→0.25（提速轮）。
+    真触发时战斗态 1~2s 内就会出现；没触发就是超距，早失败早走近重试。
+    误判成超距的代价只是一次廉价走近重试，且下一轮 _in_battle 守门能兜住
+    战斗态迟到的情况。"""
     t0 = time.time()
     while time.time() - t0 < timeout:
         if _in_battle(gateway):
@@ -1305,7 +1306,7 @@ def _wait_battle_start(gateway: str, timeout: float = 4.0, poll: float = 0.4) ->
     return False
 
 
-def _wait_dialog_ready(gateway: str, timeout: float = 1.5, poll: float = 0.3):
+def _wait_dialog_ready(gateway: str, timeout: float = 1.5, poll: float = 0.2):
     """CALL 后轮询等对话栏弹出（替代固定 sleep 1.5s），返回选项列表。"""
     t0 = time.time()
     opts = []
@@ -1320,8 +1321,11 @@ def _wait_dialog_ready(gateway: str, timeout: float = 1.5, poll: float = 0.3):
     return opts
 
 
-def _wait_battle_end(gateway: str, timeout: float = 180.0, poll: float = 2.0) -> bool:
-    """轮询 tp.战斗中；先等到 true（战斗开始），再等回 false（结束）。"""
+def _wait_battle_end(gateway: str, timeout: float = 180.0, poll: float = 0.5) -> bool:
+    """轮询 tp.战斗中；先等到 true（战斗开始），再等回 false（结束）。
+
+    2026-08-28 提速轮：poll 2.0→0.5——战斗结束瞬间最多 0.5s 就察觉，
+    旧版每只怪白等平均 1s。"""
     t0 = time.time()
     started = False
     while time.time() - t0 < timeout:
@@ -1350,9 +1354,11 @@ def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) 
             _gw_cross_map(gateway, target_map, x, y)
         except Exception as e:
             logger.warning(f"_ensure_on_map 跨图失败: {e}")
-        time.sleep(1.5)  # 等切图落地，地图名才刷新
-        if _cur_map_name(gateway) == target_map:
-            return True
+        # 2026-08-28 提速轮：固定 sleep 1.5 → 0.3s 步进轮询，地图名一刷新就返回
+        for _p in range(5):
+            time.sleep(0.3)
+            if _cur_map_name(gateway) == target_map:
+                return True
     return False
 
 
@@ -1368,11 +1374,13 @@ import math as _math
 
 
 def _role_grid(gateway: str):
-    """读角色网格坐标（内部坐标 ÷20）。失败返回 None。"""
+    """读角色网格坐标（内部坐标 ÷20）。失败返回 None。
+
+    2026-08-28 提速轮：原两次独立 _lua_expr（2 个 HTTP 请求）合并为 1 次。"""
     try:
-        px = float(_lua_expr(gateway, "tp.角色坐标.x"))
-        py = float(_lua_expr(gateway, "tp.角色坐标.y"))
-        return px / 20.0, py / 20.0
+        v = _lua_expr(gateway, 'tostring(tp.角色坐标.x)..","..tostring(tp.角色坐标.y)')
+        xs, ys = v.split(",", 1)
+        return float(xs) / 20.0, float(ys) / 20.0
     except Exception:
         return None
 
@@ -1435,7 +1443,7 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
                                   f"当前 ({rg[0]},{rg[1]})，距BOSS "
                                   f"{_grid_dist(rg, boss_gx, boss_gy):.1f} 格）", flush=True)
                         return "walked"
-                time.sleep(0.8)
+                time.sleep(0.4)  # 2026-08-28 提速轮：0.8→0.4（到位即开打）
         if verbose:
             print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
 
@@ -1455,7 +1463,7 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
         except Exception as e:
             logger.warning(f"瞬移失败: {e}")
             continue
-        time.sleep(1.0)
+        time.sleep(0.5)  # 2026-08-28 提速轮：1.0→0.5（jump 落地快）
         rg = _role_grid(gateway)
         if rg is None or _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE + 1:
             return "teleported"
@@ -1513,7 +1521,7 @@ def _farm_one_boss(
             if bok:
                 # pcall ok ≠ 进战斗：必须等 tp.战斗中 变 true 才算真触发
                 # （2026-08-27 实测：远处 pcall 全部 ok=true 但战斗没发生 → 假击杀 14 连）
-                if _wait_battle_start(gateway, timeout=4.0):
+                if _wait_battle_start(gateway, timeout=3.0):
                     ended = _wait_battle_end(gateway, timeout=battle_timeout)
                     close_dialog(gateway)
                     return {"ok": True, "battle_ended": ended, "msg": bmsg,
@@ -1522,7 +1530,7 @@ def _farm_one_boss(
                 close_dialog(gateway)
                 far = True
                 if verbose:
-                    print(f"  [尝试{attempt}] 选项已点但 4s 内未进战斗（{bmsg}），判超距走近重试",
+                    print(f"  [尝试{attempt}] 选项已点但 3s 内未进战斗（{bmsg}），判超距走近重试",
                           flush=True)
             else:
                 # 没命中战斗选项：判断是不是超距确认框
@@ -1630,7 +1638,7 @@ def WORLD_BOSS_auto_farm(
     home_coord: Tuple[int, int] = (240, 101),
     max_runtime: int = 1800,
     chat_poll_interval: float = 1.5,
-    boss_scan_interval: float = 2.0,
+    boss_scan_interval: float = 1.0,
     clear_timeout: float = 10.0,
     battle_timeout: float = 180.0,
     walk_background: bool = True,
@@ -1641,7 +1649,7 @@ def WORLD_BOSS_auto_farm(
 
     优先级：聊天公告（入口信号） > 到图 Lua 实扫白名单怪（权威，2026-08-28 用户定案）。
       1) 每轮循环先查聊天窗口公告，有公告立刻去公告图；
-      2) 瞬移到任一地图后立即 Lua 扫描白名单怪：场景加载 1.5s 复扫一次，
+      2) 瞬移到任一地图后立即 Lua 扫描白名单怪：场景加载 0.8s 复扫一次，
          仍没有 → **立即瞬移去别的地图**（不干等 clear_timeout）；
       3) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
     """
@@ -1752,6 +1760,7 @@ def WORLD_BOSS_auto_farm(
             # 每击杀一只后重扫：战斗后场景人物槽位/实例会重排（SYBUZ2 同款坑），
             # 静态列表的 id/bsid 会错位导致 CALL 错实体（2026-08-27 实测）。
             # excluded 为函数级黑名单，跨轮生效：无战斗选项/已消失的实体不再重试。
+            real_map_cache = [None]  # 提速轮：本轮 farm 内地图不变，实读地图名只查一次
             while time.time() - t0 < max_runtime:
                 if _gui_stop_requested():
                     stopped = True
@@ -1763,9 +1772,8 @@ def WORLD_BOSS_auto_farm(
                 if not live:
                     break
                 try:
-                    px = float(_lua_expr(gateway, "tp.角色坐标.x"))
-                    py = float(_lua_expr(gateway, "tp.角色坐标.y"))
-                    gx0, gy0 = px / 20.0, py / 20.0
+                    rg0 = _role_grid(gateway)
+                    gx0, gy0 = (rg0[0], rg0[1]) if rg0 else (0.0, 0.0)
                 except Exception:
                     gx0, gy0 = 0.0, 0.0
                 # 优先级（稀有>普通）为主键；同优先级时公告指定的 BOSS 先打，
@@ -1777,7 +1785,10 @@ def WORLD_BOSS_auto_farm(
                 this_keywords = _boss_battle_keywords(b["name"], list(battle_keywords))
                 # 2026-08-28：走路/校准一律用实读地图名——cur_map 标签万一错了
                 # （跨图未到达），拿错图的校准数据点屏幕会全错（长寿郊外点花果山像素事故）
-                real_map = _cur_map_name(gateway) or cur_map
+                # 2026-08-28 提速轮：内层循环内地图不会变，每只怪读一次 → 进图读一次缓存
+                if not real_map_cache[0]:
+                    real_map_cache[0] = _cur_map_name(gateway) or cur_map
+                real_map = real_map_cache[0]
                 res = _farm_one_boss(gateway, b, this_keywords, battle_timeout,
                                      walk_background, verbose, real_map)
                 if res.get("ok") and res.get("battle_ended"):
@@ -1788,7 +1799,7 @@ def WORLD_BOSS_auto_farm(
                     reason = res.get("reason") or ("no_battle_start" if res.get("ok") else "failed")
                     print(f"  ✗ {b['name']} 跳过: {reason} {res.get('msg')}", flush=True)
                     excluded.add((b["name"], b["gx"], b["gy"]))
-                if not _sleep_stoppable(1.0):
+                if not _sleep_stoppable(0.3):  # 2026-08-28 提速轮：1.0→0.3，连续击杀不间断
                     stopped = True
                     break
         else:
@@ -1797,8 +1808,9 @@ def WORLD_BOSS_auto_farm(
             #    公告只是入口信号；图上有没有怪以 Lua 扫场景人物/临时Npc 为权威。
             if no_boss_since is None:
                 no_boss_since = time.time()
-                # 场景加载 1.5s 后复扫一次：命中 → 回主循环直接进 farm 分支
-                if not _sleep_stoppable(1.5):
+                # 场景加载 0.8s 后复扫一次：命中 → 回主循环直接进 farm 分支
+                # （2026-08-28 提速轮：1.5→0.8，实扫立判，没怪立刻走）
+                if not _sleep_stoppable(0.8):
                     stopped = True
                     break
                 re = [x for x in scan_scene_bosses(gateway, target_bosses)
