@@ -35,6 +35,12 @@ GATEWAY_PY = os.path.join(GATEWAY_DIR, "gateway.py")
 PYW = r"E:\py\pythonw.exe"
 CREATE_NO_WINDOW = 0x08000000
 
+# 2026-08-28：localhost 探测强制不走系统代理（urllib 默认读注册表代理，
+# 若代理进程不可用/规则拒绝 loopback，127.0.0.1 的 /api/status 探测会整段失明）。
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+# 最近一次探测的真实异常（轮询失败日志带上它，"探测失明"可一锤定音）
+_last_status_err = ""
+
 _lock = threading.Lock()
 
 
@@ -56,13 +62,17 @@ def _gw_url() -> str:
 
 
 def _status(timeout: float = 3.0) -> dict:
-    """GET /api/status。2026-08-27：timeout 1.2→3.0（游戏加载期 status 偶发慢）。"""
+    """GET /api/status。2026-08-27：timeout 1.2→3.0（游戏加载期 status 偶发慢）。
+    2026-08-28：无代理 opener + 记录真实异常（旧版 except 吞掉一切只剩 None，
+    无法区分"网关没起"与"探测链路被堵"）。"""
+    global _last_status_err
     try:
-        req = urllib.request.Request(_gw_url() + "/api/status", timeout=timeout)
-        with urllib.request.urlopen(req) as resp:
+        req = urllib.request.Request(_gw_url() + "/api/status")
+        with _OPENER.open(req, timeout=timeout) as resp:
             d = json.loads(resp.read().decode("utf-8", "replace"))
         return d.get("result") or {}
-    except Exception:
+    except Exception as e:
+        _last_status_err = repr(e)
         return None
 
 
@@ -88,16 +98,6 @@ def _bound_pid():
     if pid and _is_game_process(pid):
         return pid
     return None
-
-
-def _psutil():
-    """psutil 可用则返回模块（2026-08-28：替代 tasklist/netstat 子进程，单次
-    调用 0.2~0.3s → <5ms；这是开关路径上最便宜的提速）。"""
-    try:
-        import psutil
-        return psutil
-    except ImportError:
-        return None
 
 
 def _psutil():
@@ -312,7 +312,8 @@ def ensure_gateway(pid=None, timeout: float = 120.0, verbose: bool = False):
             if isinstance(st, dict):
                 last_poll_st, last_poll_err = st, None
             else:
-                last_poll_err = "status 超时/不可达"
+                # 2026-08-28：带上真实异常（ConnectionRefused/timeout/代理 502…）
+                last_poll_err = f"status 超时/不可达 ({_last_status_err})"
             if verbose and time.time() - t0 >= next_progress:
                 print(f"[gateway_guard] 等待网关就绪 {time.time()-t0:.0f}s..."
                       f" status={last_poll_st or last_poll_err}")

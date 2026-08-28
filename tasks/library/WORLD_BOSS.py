@@ -657,7 +657,8 @@ def _heal_gateway() -> bool:
     try:
         from core import gateway_guard
         _t0 = time.time()
-        logger.info("网关自愈开始（冷启动 attach 可达 170~200s，非卡死，请耐心等待）...")
+        logger.info("网关自愈开始（attach 实测 ~1.2s；若等满超时窗多为探测失明，"
+                    "结束日志会带真实原因）...")
         ok, _info = gateway_guard.ensure_gateway(verbose=False)
         logger.info(f"网关自愈{'成功' if ok else '失败'} 耗时 {time.time() - _t0:.0f}s info={_info}")
         return bool(ok)
