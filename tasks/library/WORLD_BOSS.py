@@ -353,6 +353,9 @@ APPROACH_GRID_DISTANCE = 4.0
 WALK_ARRIVAL_TIMEOUT = 30.0  # 走路贴近后等"离BOSS进范围"的上限（旧 90s 太长，怪在眼前干等）
 WALK_ARRIVAL_BOX = 20        # 2026-08-28 用户定案：落点 ±20 格内就算"走路到位"，
                              # 不再强制走到 4 格内才认（CALL 不中由后续补瞬移拉近）
+WALK_START_TIMEOUT = 6.0     # 走路点击后角色坐标必须在这窗口内动起来；
+                             # 不动 = 点击没生效（像素映射偏差/被 UI 吃掉），立即转瞬移
+WALK_STALL_TIMEOUT = 6.0     # 走路中途连续无位移上限（卡住/被打断 → 放弃走路转瞬移）
 # 无地图包瞬移兜底落点：BOSS 周边随机环带半径范围（格）。绝不落在 BOSS 坐标上。
 TELEPORT_OFFSET_RANGE = (3.0, 8.0)
 # 第一次落点仍超距时，第二次补传用更近的半径。
@@ -1455,25 +1458,60 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
         # 轮询中只要离 **BOSS** ≤ APPROACH_GRID_DISTANCE 就立即返回开 CALL，
         # 不等走到抖动落点（旧版 _wait_arrival_grid 90s 干等，怪在眼前也不打）。
         if walk_res.get("ok"):
-            t0w = time.time()
-            while time.time() - t0w < WALK_ARRIVAL_TIMEOUT:
+            # ★ 移动启动门控（2026-08-28 用户实测：日志打了"走路贴近"但画面从没动过，
+            #   白等 30s 后靠瞬移兜底）。点击大地图后角色坐标必须真的动起来，
+            #   否则 _walk_to 的 ok 只代表"点击发出了"，不代表"角色在走"。
+            t0s = time.time()
+            base = _role_grid(gateway)
+            moving = False
+            rg = None
+            while time.time() - t0s < WALK_START_TIMEOUT:
                 rg = _role_grid(gateway)
-                if rg is not None:
-                    # ① 离 BOSS ≤4 格：进 CALL 范围，直接返回开打（最理想）
-                    if _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
-                        return "walked"
-                    # ② 落点 ±20 格：用户定案算"到位"，先 CALL 试试（服务器远距离有时认），
-                    #    CALL 不中走 _farm_one_boss 的第二次移动补瞬移拉近
-                    if (abs(rg[0] - jx) <= WALK_ARRIVAL_BOX
-                            and abs(rg[1] - jy) <= WALK_ARRIVAL_BOX):
-                        if verbose:
-                            print(f"  ✓ 走路到位（±{WALK_ARRIVAL_BOX} 格内，"
-                                  f"当前 ({rg[0]},{rg[1]})，距BOSS "
-                                  f"{_grid_dist(rg, boss_gx, boss_gy):.1f} 格）", flush=True)
-                        return "walked"
-                time.sleep(0.4)  # 2026-08-28 提速轮：0.8→0.4（到位即开打）
-        if verbose:
-            print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
+                if rg and base and _grid_dist(rg, base[0], base[1]) > 0.5:
+                    moving = True
+                    break
+                if rg and base is None:
+                    base = rg
+                time.sleep(0.5)
+            if not moving:
+                if verbose:
+                    print(f"  ! 走路未启动（{WALK_START_TIMEOUT:.0f}s 内角色坐标无变化，"
+                          f"点击没生效），转瞬移兜底", flush=True)
+            else:
+                # 轮询中只要离 **BOSS** ≤ APPROACH_GRID_DISTANCE 就立即返回开 CALL，
+                # 不等走到抖动落点（旧版 _wait_arrival_grid 90s 干等，怪在眼前也不打）。
+                t0w = time.time()
+                last_rg, last_move_t = rg, time.time()
+                while time.time() - t0w < WALK_ARRIVAL_TIMEOUT:
+                    rg = _role_grid(gateway)
+                    if rg is not None:
+                        # 卡住判定：连续 WALK_STALL_TIMEOUT 无位移 → 走路被打断，放弃
+                        if _grid_dist(rg, last_rg[0], last_rg[1]) > 0.3:
+                            last_rg, last_move_t = rg, time.time()
+                        elif time.time() - last_move_t > WALK_STALL_TIMEOUT:
+                            if verbose:
+                                print(f"  ! 走路中途卡住（{WALK_STALL_TIMEOUT:.0f}s 无位移，"
+                                      f"停在 ({rg[0]:.0f},{rg[1]:.0f})），转瞬移兜底", flush=True)
+                            break
+                        # ① 离 BOSS ≤4 格：进 CALL 范围，直接返回开打（最理想）
+                        if _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
+                            return "walked"
+                        # ② 落点 ±20 格：用户定案算"到位"，先 CALL 试试（服务器远距离有时认），
+                        #    CALL 不中走 _farm_one_boss 的第二次移动补瞬移拉近
+                        if (abs(rg[0] - jx) <= WALK_ARRIVAL_BOX
+                                and abs(rg[1] - jy) <= WALK_ARRIVAL_BOX):
+                            if verbose:
+                                print(f"  ✓ 走路到位（±{WALK_ARRIVAL_BOX} 格内，"
+                                      f"当前 ({rg[0]},{rg[1]})，距BOSS "
+                                      f"{_grid_dist(rg, boss_gx, boss_gy):.1f} 格）", flush=True)
+                            return "walked"
+                    time.sleep(0.4)  # 2026-08-28 提速轮：0.8→0.4（到位即开打）
+        elif verbose:
+            if walk_res.get("ok"):
+                # 移动了但 30s 内没进 CALL 范围也没进落点框
+                print(f"  ! 走路超时未到位（{WALK_ARRIVAL_TIMEOUT:.0f}s），转瞬移兜底", flush=True)
+            else:
+                print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
 
     # 2) 无地图包/走不到 → 随机环带落点瞬移（用户批准的兜底）
     for rng in (TELEPORT_OFFSET_RANGE, TELEPORT_RETRY_RANGE):
