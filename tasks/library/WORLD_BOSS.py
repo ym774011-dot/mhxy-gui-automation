@@ -510,8 +510,9 @@ EXACT_MATCH_BOSSES = ("知了王", "妖魔统领", "天降灵猴", "下凡的灵
 #   1 限时稀有：知了王 / 灵猴 / 二十八星宿 / 天罡地煞 / 十二生肖
 #   2 妖魔头领 / 妖魔统领（公告点名的大怪）+ 未登记杂鱼
 #   3 妖魔鬼怪 / 妖魔 / 鬼怪（每小时 :10 常刷、数量多，垫底——打不完不用抢）
-# 2026-08-28 三定案：普通模式 farm 排序已不再使用本表（除财神爷外无优先级，
-# 公告点名→距离）；表保留作文档，财神爷走独立抢占模式。
+# 2026-08-28 五定案（用户 20:55）：妖魔鬼怪/妖魔/鬼怪=最低优先级重新生效——
+#   本表恢复参与普通模式排序：稀有(1) > 头领/统领/未登记(2) > 妖族杂鱼(3)垫底；
+#   且妖族公告不再触发跨图（LOW_PRIORITY_BOSSES），只在场景内顺手清。
 BOSS_PRIORITY = {
     "三界财神爷": 0,
     "知了王": 1,
@@ -530,6 +531,10 @@ for _n in _28_STAR_BOSSES:
 for _n in _12_ZODIAC_BOSSES:
     BOSS_PRIORITY[_n] = 1
 _BOSS_PRIORITY_DEFAULT = 2
+
+# 2026-08-28 五定案：这批公告词/实体名视为"杂鱼"——公告不触发跨图，
+# 场景内排序永远垫底（其他 BOSS 打完才轮到它们）。
+LOW_PRIORITY_BOSSES = {"妖魔鬼怪", "妖魔", "鬼怪"}
 
 # 2026-08-28 用户定案：三界财神爷"最最最优先"抢占模式。
 # 公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，期间绝不 CALL 其他怪；
@@ -2071,11 +2076,14 @@ def WORLD_BOSS_auto_farm(
 ) -> dict:
     """世界BOSS自动监控 farming 主入口。
 
-    优先级（2026-08-28 三定案）：
+    优先级（2026-08-28 五定案）：
       0) 三界财神爷抢占：公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，
          期间绝不 CALL 其他怪；财神爷没了/被锁定 → 回落普通模式；
       1) 聊天公告（入口信号） > 到图 Lua 实扫白名单怪（权威）；
-      2) 普通模式无优先级：公告点名先打，其余距离近先打，同图白名单全类型可打；
+      2) 普通模式按 BOSS_PRIORITY 排序：稀有(1) > 头领/统领/未登记(2) >
+         妖魔鬼怪/妖魔/鬼怪(3)垫底；同优先级距离近先打。
+         妖族杂鱼公告不触发跨图（LOW_PRIORITY_BOSSES 过滤），
+         只在场景轮换时顺手清——其他 BOSS 打完才轮到它们；
       3) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
     """
     monitored_maps = monitored_maps or list(DEFAULT_MONITORED_MAPS)
@@ -2238,6 +2246,10 @@ def WORLD_BOSS_auto_farm(
             if spawn.get("text") != last_ann_text:
                 last_ann_text = spawn.get("text")
                 ann_cleared = False
+        # 2026-08-28 五定案：妖魔鬼怪/妖魔/鬼怪=最低优先级——公告不再为它们跨图。
+        # 其他 BOSS 的公告照常响应；杂鱼只在场景轮换时顺手清（全场只剩杂鱼照打）。
+        if spawn and spawn.get("boss") in LOW_PRIORITY_BOSSES:
+            spawn = None
         if spawn:
             if cur_map != spawn["map"]:
                 if verbose:
@@ -2324,17 +2336,17 @@ def WORLD_BOSS_auto_farm(
                     gx0, gy0 = (rg0[0], rg0[1]) if rg0 else (0.0, 0.0)
                 except Exception:
                     gx0, gy0 = 0.0, 0.0
-                # 2026-08-28 二定案：普通模式除财神爷外无优先级——公告点名的先打，
-                # 其余一律距离近先打；同坐标白名单怪全类型都可攻击（不限一种）
-                # 2026-08-28 四定案：财神爷在 live 里 → 跳过一切排序直接领取
-                ann = (spawn or {}).get("boss")
+                # 2026-08-28 五定案：普通模式恢复优先级排序——财神爷独立抢占外，
+                # BOSS_PRIORITY 小者先打：稀有(1) > 头领/统领/未登记(2) >
+                # 妖魔鬼怪/妖魔/鬼怪(3)垫底；同优先级距离近先打。
+                # 同坐标白名单怪全类型都可攻击（不限一种）。
                 cs_live = [x for x in live if x["name"] == CAISHEN_BOSS]
                 if cs_live:
                     b = cs_live[0]
                     if verbose:
-                        print("  ⚡ 财神爷在场 → 直接领取（优先于公告/距离排序）", flush=True)
+                        print("  ⚡ 财神爷在场 → 直接领取（优先于优先级/距离排序）", flush=True)
                 else:
-                    b = min(live, key=lambda x: (0 if ann and ann in x["name"] else 1,
+                    b = min(live, key=lambda x: (_boss_priority(x["name"]),
                                                  (x["gx"] - gx0) ** 2 + (x["gy"] - gy0) ** 2))
                 this_keywords = _boss_battle_keywords(b["name"], list(battle_keywords))
                 # 2026-08-28：走路/校准一律用实读地图名——cur_map 标签万一错了
