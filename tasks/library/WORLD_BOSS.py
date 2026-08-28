@@ -37,7 +37,7 @@ import time
 import random
 import os
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple, List, Dict, Any, Callable
 from urllib.request import Request, urlopen
 
@@ -352,7 +352,9 @@ _BATTLE_DENY_OPTIONS = (
 # 只有弹“太远”确认框/无战斗选项时才走近（走路优先）一次，再 CALL 重试。
 # 绝不“打过一只就先走一段”，也绝不失败后随机散开环带——都太费时间。
 QUICK_CALL_MAX_TRIES = 3
-APPROACH_GRID_DISTANCE = 4.0
+# 2026-08-28 C11：4→6 格。实测 CALL 命中最远 19.2 格（超距确认框阈值远比
+# 想象宽），4 格让边走边CALL多跑冤枉路；6 格在"少走路"与"防太远弹窗"间取衡。
+APPROACH_GRID_DISTANCE = 6.0
 WALK_ARRIVAL_TIMEOUT = 30.0  # 走路贴近后等"离BOSS进范围"的上限（旧 90s 太长，怪在眼前干等）
 WALK_ARRIVAL_BOX = 20        # 2026-08-28 用户定案：落点 ±20 格内就算"走路到位"，
                              # 不再强制走到 4 格内才认（CALL 不中由后续补瞬移拉近）
@@ -739,12 +741,20 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
                           {"desc": desc, "x": int(tx), "y": int(ty),
                            "wait_ms": 3500, "sync": True}, timeout=25.0)
     # 实测链路兜底（2026-08-27）：desc 全局查表 → 链式拼接从任意位置直达。
+    # 2026-08-28 B6 修复：旧实现每步发完请求不查结果，链中一步被吞整链错位
+    # （后续 hop 都基于错误起点）。现在每步查 HTTP ok，失败静默重发一次。
     chain = _HOP_CHAINS.get(target_map)
     if chain:
         for desc in chain:
-            _http_json(gateway, "/api/act/cross_map",
-                       {"desc": desc, "x": 100, "y": 100,
-                        "wait_ms": 3000, "sync": True}, timeout=25.0)
+            for _attempt in (1, 2):
+                r = _http_json(gateway, "/api/act/cross_map",
+                               {"desc": desc, "x": 100, "y": 100,
+                                "wait_ms": 3000, "sync": True}, timeout=25.0)
+                if isinstance(r, dict) and r.get("ok"):
+                    break
+                logger.warning(f"hop 链步骤失败({'重试' if _attempt == 1 else '放弃'}): "
+                               f"desc={desc} resp={r}")
+                time.sleep(1.0)
             time.sleep(1.2)  # 2026-08-28 提速轮：1.8→1.2（网关 sync+wait_ms 已等主程）
         return {"ok": True, "error": None, "via": "hop_chain"}
     # 两段式：回长安枢纽
@@ -995,6 +1005,13 @@ def _strip_colors(text: str) -> str:
     return _COLOR_CODE_RE.sub("", text or "")
 
 
+# 2026-08-28 B9：recvall 全量 dump 的 TTL 缓存——内层每杀一只前的财神爷公告
+# 检查曾每次都拉全量缓存（2000 包解析），3s TTL 内复用结果，量级下降。
+# 副作用仅是公告最长滞后 3s 被感知，对 20~30 分钟粒度的刷新周期无影响。
+_ANN_CACHE: Dict[str, Any] = {"t": 0.0, "items": []}
+_ANN_CACHE_TTL = 3.0
+
+
 def fetch_recv_announcements(gateway: str, channel=("xt", "cw")) -> List[Dict[str, Any]]:
     """从网关 /api/net/recvall 缓存提取系统公告（proto38），按缓存顺序去重。
 
@@ -1006,6 +1023,9 @@ def fetch_recv_announcements(gateway: str, channel=("xt", "cw")) -> List[Dict[st
     """
     # 注意：第3个位置参数是 data，timeout 必须用关键字传参
     #（曾因 timeout=30.0 被当成 body POST 导致网关 404）
+    now = time.time()
+    if now - _ANN_CACHE["t"] < _ANN_CACHE_TTL:
+        return _ANN_CACHE["items"]
     r = _http_json(gateway, "/api/net/recvall", None, timeout=30.0)
     # 网关异常时 result 为 null（如 frida 脚本销毁），安全降级为空列表
     if not isinstance(r, dict):
@@ -1047,6 +1067,8 @@ def fetch_recv_announcements(gateway: str, channel=("xt", "cw")) -> List[Dict[st
                 continue
             seen.add(key)
             out.append({"channel": ch, "raw": m.group(0), "text": txt})
+    _ANN_CACHE["t"] = now
+    _ANN_CACHE["items"] = out
     return out
 
 
@@ -1147,6 +1169,16 @@ def find_latest_spawn(
 # 场景 BOSS 扫描与 CALL 战斗
 # ============================================================
 
+def _boss_key(b: dict) -> tuple:
+    """excluded 黑名单键（2026-08-28 A2 修复）。
+
+    旧键 (name,gx,gy)：同一坐标重生的新怪会被上一只尸体的黑名单永久误排除；
+    同名双实体同格也互相误伤。改用 bsid（全场唯一、跨槽位重排稳定，2026-08-27
+    实测）；个别实体无 bsid 时才回退位置键（保守兼容）。"""
+    bsid = b.get("bsid") or ""
+    return ("bsid", bsid) if bsid else ("pos", b["name"], b["gx"], b["gy"])
+
+
 def scan_scene_bosses(
     gateway: str,
     target_bosses: List[str],
@@ -1187,7 +1219,9 @@ _G.__out = table.concat(out, ";")
             matched = (name == boss) if boss in exact_match else ((boss in name) or (name == boss))
             if matched:
                 try:
-                    bgx, bgy = int(gx), int(gy)
+                    # 2026-08-28 A4 修复：格子x/格子y 可能是浮点（如 "10.5"），
+                    # 旧 int("10.5") 直接 ValueError → 实体被静默丢掉
+                    bgx, bgy = int(float(gx)), int(float(gy))
                     # 2026-08-28 守门：实体兜底字段 u.x/u.y 可能是内部像素坐标，
                     # >GRID_SANITY_MAX 判为像素 → ÷20 转网格，否则环带瞬移会出界
                     if abs(bgx) > GRID_SANITY_MAX or abs(bgy) > GRID_SANITY_MAX:
@@ -1502,20 +1536,29 @@ def _press_tab_if(hwnd: int, want_visible: bool, gateway: str,
         _press_tab(hwnd, background=True)
         return True
     if vis != want_visible:
-        _press_tab(hwnd, background=True)
-        # 轮询确认翻转（_press_tab 自带 0.3s settle，这里再给最多 ~1s 余量）
-        t0 = time.time()
-        while time.time() - t0 < 1.0:
-            now = _bigmap_visible(gateway)
-            if now == want_visible:
+        # 2026-08-28 B7 修复：首次 TAB 后未确认翻转 → 不再只告警，复核后补按一次。
+        # 竞态来源：走路点击末尾的右键关图在途（游戏侧延迟处理），我们读到
+        # vis=True 按 TAB，右键先落把图关掉、TAB 再把图打开 → 状态与预期相反。
+        # 补按时以实时读到的状态为基准再 toggle 一次，多数情况一轮自愈。
+        for _attempt in (1, 2):
+            _press_tab(hwnd, background=True)
+            # 轮询确认翻转（_press_tab 自带 0.3s settle，这里再给最多 ~1s 余量）
+            t0 = time.time()
+            while time.time() - t0 < 1.0:
+                now = _bigmap_visible(gateway)
+                if now == want_visible:
+                    if verbose:
+                        act = "打开" if want_visible else "关闭"
+                        extra = "" if _attempt == 1 else "（补按后成功）"
+                        print(f"  ✓ 大地图{act}（可视={vis} → TAB，已确认）{extra}", flush=True)
+                    return True
+                time.sleep(0.15)
+            if _attempt == 1:
                 if verbose:
-                    act = "打开" if want_visible else "关闭"
-                    print(f"  ✓ 大地图{act}（可视={vis} → TAB，已确认）", flush=True)
-                return True
-            time.sleep(0.15)
+                    print("  ! TAB 后状态未确认翻转（可能被右键关图竞态吞键），补按一次", flush=True)
         if verbose:
-            print(f"  ! 大地图 TAB 后状态未确认翻转（期望可视={want_visible}）"
-                  f"——可能被吞键，下轮预同步会再纠正", flush=True)
+            print(f"  ! 大地图 TAB 两次仍未翻转（期望可视={want_visible}）"
+                  f"——下轮预同步会再纠正", flush=True)
         return True
     if verbose:
         print(f"  · 大地图已处于目标状态（可视={vis}），跳过 TAB", flush=True)
@@ -1917,6 +1960,13 @@ def WORLD_BOSS_auto_farm(
     target_bosses = target_bosses or list(DEFAULT_TARGET_BOSSES)
     spawn_patterns = spawn_patterns or list(DEFAULT_SPAWN_PATTERNS)
     battle_keywords = battle_keywords or list(DEFAULT_BATTLE_KEYWORDS)
+    # 2026-08-28 B8 修复：监控表去重——同图双名（如 建邺城/宝象国 同为 1501）
+    # 只保留首个，否则轮换会在两名之间空转切图（_map_same 归一后再判重）。
+    _deduped: List[str] = []
+    for _m in monitored_maps:
+        if not any(_map_same(_m, _k) for _k in _deduped):
+            _deduped.append(_m)
+    monitored_maps = _deduped
 
     # 0) 启动自绑：走路通道必须先于任何 BOSS 交互就绪
     _ensure_walker_bound(gateway, verbose)
@@ -1957,37 +2007,51 @@ def WORLD_BOSS_auto_farm(
                 break
             continue
 
-        # 0.4) 财神爷在场直接领取（2026-08-28 用户四定案，最高优先）：
+        # 0.4) 战斗态守门 + 财神爷在场直接领取（2026-08-28 用户四定案，最高优先）：
         #      三界财神爷已出现在当前场景（就在面前）→ 最优先动作是直接 CALL 领取，
         #      绝不跨图、绝不先去"查看公告"/响应其他公告——"查看"只是信息动作，
         #      永远低于"目标在场直接领取"。
-        if not _in_battle(gateway):
-            cs_here = [x for x in scan_scene_bosses(gateway, [CAISHEN_BOSS])
-                       if (x["name"], x["gx"], x["gy"]) not in excluded]
-            if cs_here:
-                b = cs_here[0]
-                if verbose:
-                    print(f"[{int(time.time()-t0)}s] ⚡ 财神爷就在面前（{cur_map or '?'} "
-                          f"{b['gx']},{b['gy']}）→ 直接领取，不切图", flush=True)
-                kw = _boss_battle_keywords(b["name"], list(battle_keywords))
-                real_map = _cur_map_name(gateway) or cur_map or ""
-                res = _farm_one_boss(gateway, b, kw, battle_timeout,
-                                     walk_background, verbose, real_map)
-                if res.get("ok") and res.get("battle_ended"):
-                    farmed_total += 1
-                    print(f"  ✓ 击杀 三界财神爷（累计 {farmed_total}）", flush=True)
-                else:
-                    reason = res.get("reason") or "failed"
-                    print(f"  ✗ 三界财神爷 跳过: {reason} {res.get('msg')}", flush=True)
-                    excluded.add((b["name"], b["gx"], b["gy"]))
-                continue
+        # 2026-08-28 A3 修复：战斗超时退出后角色可能仍在战斗中，主循环此前无守门，
+        # 会在战斗态跨图/瞬移（瞬移包被服务器丢弃还浪费轮次）。战斗中等待自然结束。
+        # 2026-08-28 B5 修复：每轮只做一次全量场景扫描，0.4 与 step2 共享结果
+        # （旧逻辑 0.4 扫一次 + step2 再扫一次，双倍 Lua dump 开销）。
+        in_battle = _in_battle(gateway)
+        scanned = None  # 本轮场景扫描结果（0.4/step2 共享；跨图后置 None 强制重扫）
+        if in_battle:
+            if verbose:
+                print(f"[{int(time.time()-t0)}s] 战斗中（超时未决/战斗收尾），原地等待...", flush=True)
+            if not _sleep_stoppable(2.0):
+                stopped = True
+                break
+            continue
+        scanned = scan_scene_bosses(gateway, target_bosses)
+        cs_here = [x for x in scanned
+                   if x["name"] == CAISHEN_BOSS and _boss_key(x) not in excluded]
+        if cs_here:
+            b = cs_here[0]
+            if verbose:
+                print(f"[{int(time.time()-t0)}s] ⚡ 财神爷就在面前（{cur_map or '?'} "
+                      f"{b['gx']},{b['gy']}）→ 直接领取，不切图", flush=True)
+            kw = _boss_battle_keywords(b["name"], list(battle_keywords))
+            real_map = _cur_map_name(gateway) or cur_map or ""
+            res = _farm_one_boss(gateway, b, kw, battle_timeout,
+                                 walk_background, verbose, real_map)
+            if res.get("ok") and res.get("battle_ended"):
+                farmed_total += 1
+                print(f"  ✓ 击杀 三界财神爷（累计 {farmed_total}）", flush=True)
+            else:
+                reason = res.get("reason") or "failed"
+                print(f"  ✗ 三界财神爷 跳过: {reason} {res.get('msg')}", flush=True)
+                excluded.add(_boss_key(b))
+            continue
 
         # 0.5) 三界财神爷抢占模式（2026-08-28 用户定案：最最最优先）。
         #      未进战斗时财神爷公告出现 → 立即瞬移财神爷图，期间绝不 CALL 其他怪；
         #      财神爷没了/被人锁定 → 解除抢占回落普通模式（该图其他怪照常打）。
         #      2026-08-28 四定案：公告随时查看；财神爷图没财神 → 本图 CALL 其他
         #      BOSS，没有其他再换图（复扫上限已收紧为 2×0.5s）。
-        if caishen_pinned is None and not _in_battle(gateway):
+        # 0.5 抢占检查复用 0.4 的 in_battle（战斗中已在上面 continue，此处必为 False）
+        if caishen_pinned is None and not in_battle:
             cs_ann = find_latest_spawn(gateway, [CAISHEN_BOSS],
                                        monitored_maps, spawn_patterns)
             if cs_ann and cs_ann.get("text") not in caishen_seen_texts:
@@ -2076,6 +2140,7 @@ def WORLD_BOSS_auto_farm(
                     cur_map = spawn["map"]
                     recent_maps.append(cur_map)
                     no_boss_since = None
+                    scanned = None  # 跨图后 0.4 的扫描属旧图，作废（B5 共享扫描配套）
         elif cur_map is None:
             # 暂无公告：随机切一张监控地图扫描（保持在线待命）
             cur_map = _pick_random_map(None, monitored_maps, tuple(recent_maps))
@@ -2085,6 +2150,7 @@ def WORLD_BOSS_auto_farm(
                 unreachable[cur_map] = time.time() + 600
                 cur_map = _cur_map_name(gateway) or cur_map
             recent_maps.append(cur_map)
+            scanned = None  # 同上：跨图后旧扫描作废
 
         # 1.5) 每 10 分钟清理一次网关 recv 缓存（防膨胀拖慢 dumpRecvAll，
         #      用户 2026-08-27 定案）；失败静默跳过，不影响主流程。
@@ -2097,8 +2163,10 @@ def WORLD_BOSS_auto_farm(
         # 2) 扫描当前地图 BOSS
         # 2026-08-28 修复：外层判定必须剔除 excluded（尸体/被锁实体），
         # 否则"34个BOSS全是尸体"的图永远不清图、不轮换，干转死循环。
-        bosses = [x for x in scan_scene_bosses(gateway, target_bosses)
-                  if (x["name"], x["gx"], x["gy"]) not in excluded]
+        # 2026-08-28 B5：复用 0.4 的本轮扫描（未跨图时），不再重复全量 dump。
+        if scanned is None:
+            scanned = scan_scene_bosses(gateway, target_bosses)
+        bosses = [x for x in scanned if _boss_key(x) not in excluded]
         if bosses:
             no_boss_since = None
             if verbose:
@@ -2126,7 +2194,7 @@ def WORLD_BOSS_auto_farm(
                         print(f"  ⚡ 财神爷公告抢占: {cs_ann['map']} → 放弃当前杂鱼", flush=True)
                     break
                 live = [x for x in scan_scene_bosses(gateway, target_bosses)
-                        if (x["name"], x["gx"], x["gy"]) not in excluded]
+                        if _boss_key(x) not in excluded]
                 if not live:
                     break
                 try:
@@ -2162,7 +2230,7 @@ def WORLD_BOSS_auto_farm(
                     # battle_ended=False = 根本没进战斗（假触发），同样按失败处理
                     reason = res.get("reason") or ("no_battle_start" if res.get("ok") else "failed")
                     print(f"  ✗ {b['name']} 跳过: {reason} {res.get('msg')}", flush=True)
-                    excluded.add((b["name"], b["gx"], b["gy"]))
+                    excluded.add(_boss_key(b))
                 if not _sleep_stoppable(0.3):  # 2026-08-28 提速轮：1.0→0.3，连续击杀不间断
                     stopped = True
                     break
@@ -2178,7 +2246,7 @@ def WORLD_BOSS_auto_farm(
                     stopped = True
                     break
                 re = [x for x in scan_scene_bosses(gateway, target_bosses)
-                      if (x["name"], x["gx"], x["gy"]) not in excluded]
+                      if _boss_key(x) not in excluded]
                 if re:
                     continue
                 # 复扫仍空 → 立即轮换（公告记忆同步作废，防老公告拉回）
@@ -2231,29 +2299,27 @@ def WORLD_BOSS_auto_farm(
 
 
 def _next_schedule_time(minutes_list: List[int], pre_minutes: int = 0) -> Optional[datetime]:
-    """返回今天内下一个符合分钟列表的时间点（可提前 pre_minutes）。"""
+    """返回下一个符合分钟列表的时间点（可提前 pre_minutes）。
+
+    2026-08-28 A1 修复：
+      - 旧实现 now.replace(hour=(now.hour+1)%24) 不带日期进位，23 点后算出的
+        "明天 00:xx" 实际落在今天 00:xx（已过去）→ 全部候选被过滤 → 返回 None。
+      - 旧实现 max(0, m-pre_minutes) 把提前量钳死在本小时内，整点刷新
+        （m=0, pre=2）的提前启动时刻应为昨天 23:58，被钳成 00:00 失效。
+    新实现：minutes 是"每小时内的分钟"表（如 [0,10] = 每小时的 :00 和 :10），
+    以小时为步长平铺未来 3 天共 72 个整点候选，提前量用减法（自动跨午夜借位）。"""
     if not minutes_list:
         return None
     now = datetime.now()
-    # 当前小时内的候选
+    base = now.replace(second=0, microsecond=0)
     candidates = []
-    for m in minutes_list:
-        dt = now.replace(minute=m, second=0, microsecond=0)
-        dt_pre = dt.replace(minute=max(0, m - pre_minutes))
-        if dt_pre <= now:
-            candidates.append(dt)
-        else:
-            candidates.append(dt_pre)
-    # 下个小时起的候选
-    future = []
-    for m in minutes_list:
-        nxt = now.replace(minute=m, second=0, microsecond=0)
-        if nxt < now:
-            nxt = nxt.replace(hour=(now.hour + 1) % 24)
-        nxt_pre = nxt.replace(minute=max(0, m - pre_minutes))
-        future.append(nxt_pre)
-    all_valid = [d for d in candidates + future if d > now]
-    return min(all_valid) if all_valid else None
+    for h in range(0, 3 * 24):   # 未来 3 天 × 每小时
+        hb = (base + timedelta(hours=h)).replace(minute=0)
+        for m in minutes_list:
+            dt = hb.replace(minute=m)                     # 真实刷新时刻
+            candidates.append(dt - timedelta(minutes=pre_minutes))  # 启动时刻
+    valid = [d for d in candidates if d > now]
+    return min(valid) if valid else None
 
 
 def WORLD_BOSS_wait_and_farm(
@@ -2294,7 +2360,15 @@ def WORLD_BOSS_wait_and_farm(
 
     if verbose:
         print(f"[WORLD_BOSS] 等待到 {nearest}（{nearest_boss} 刷新前{pre_start_minutes}分钟），还需 {wait_sec}s", flush=True)
-    time.sleep(wait_sec)
+    # 2026-08-28 B10 修复：裸 time.sleep(wait_sec) 不可中断，GUI 点停止要干等
+    # 到点；改为 0.5s 步进 + 停止检查，随时可取消。
+    waited = 0.0
+    while waited < wait_sec:
+        if _gui_stop_requested() or not _sleep_stoppable(min(0.5, wait_sec - waited)):
+            print("[WORLD_BOSS] 等待期间被 GUI 停止，未启动 farming", flush=True)
+            return {"ok": False, "stopped": True,
+                    "message": f"等待 {nearest_boss} 刷新期间被 GUI 停止"}
+        waited += 0.5
 
     # 启动主 farm
     result = WORLD_BOSS_auto_farm(
@@ -2372,7 +2446,7 @@ def WORLD_BOSS_confirm_list() -> List[dict]:
          "risk": "落点随机在障碍物旁可能卡走不到→CALL仍太远则跳过该只，下轮重试"},
         {"topic": "距离门控",
          "question": "超距 CALL 会弹“你距离这个NPC太远了”，阈值是多少格？",
-         "default": "APPROACH_GRID_DISTANCE=4 格：≤4 直接 CALL，>4 先走近（走路优先）。",
+         "default": "APPROACH_GRID_DISTANCE=6 格（2026-08-28 C11：4→6，实测 CALL 19.2 格可命中）：≤6 直接 CALL，>6 先走近（走路优先）。",
          "risk": "阈值过小多一次逼近动作；过大仍弹太远提示"},
         {"topic": "清图判定",
          "question": "怎样算'这张图刷的BOSS打完了'？是无BOSS持续N秒，还是有'XX已消失'公告？",
