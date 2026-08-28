@@ -318,6 +318,9 @@ BOSS_BATTLE_KEYWORDS: Dict[str, List[str]] = {
                      # 容"请星君赐教"（教）与"请星君赐消"（消，2026-08-27 星官截图）
     "十二生肖":    ["那我就不客气了", "不客气"],  # 2026-08-27 实测寅虎对话：红色选项“那我就不客气了”，
                                                   # 第二行“你继续观赏景色吧”=取消
+    # 2026-08-28 三界财神爷截图：红色选项“我要试试”（领取/开战），“我就试试”变体兜底。
+    # “查看”类说明性选项不在本表 → 永不误点，更不会被当成最高优先级动作。
+    "三界财神爷":  ["我要试试", "我就试试"],
 }
 # 二十八星宿每个具体名共享同一套关键词
 for _s in _28_STAR_BOSSES:
@@ -356,6 +359,13 @@ WALK_ARRIVAL_BOX = 20        # 2026-08-28 用户定案：落点 ±20 格内就�
 WALK_START_TIMEOUT = 6.0     # 走路点击后角色坐标必须在这窗口内动起来；
                              # 不动 = 点击没生效（像素映射偏差/被 UI 吃掉），立即转瞬移
 WALK_STALL_TIMEOUT = 6.0     # 走路中途连续无位移上限（卡住/被打断 → 放弃走路转瞬移）
+# ★ 2026-08-28 用户定案"边走边CALL"：打开地图点击目标坐标后，立即关闭地图并
+#   马上 CALL 目标，每 WALK_CALL_INTERVAL 秒 CALL 一次，绝无"到达后傻等固定延迟"。
+#   超时上限 = 距离 / 预计走路速度 + 余量（≈走到落点的时刻）；走完仍未中 →
+#   落点再补一次 CALL 兜底。接近目标即可 CALL 成功，无需精确站上坐标点。
+WALK_CALL_INTERVAL = 0.5     # 边走边CALL 节拍（秒）
+WALK_SPEED_GRID_SEC = 4.0    # 预计走路速度（格/秒），用于估算走路超时上限
+WALK_TIME_MARGIN = 5.0       # 走路时间估算余量（秒），覆盖起步/寻路绕行开销
 # 无地图包瞬移兜底落点：BOSS 周边随机环带半径范围（格）。绝不落在 BOSS 坐标上。
 TELEPORT_OFFSET_RANGE = (3.0, 8.0)
 # 第一次落点仍超距时，第二次补传用更近的半径。
@@ -401,8 +411,10 @@ _BOSS_PRIORITY_DEFAULT = 2
 # 公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，期间绝不 CALL 其他怪；
 # 财神爷没了/被人锁定 → 解除抢占回落普通模式。普通模式除财神爷外无优先级。
 CAISHEN_BOSS = "三界财神爷"
-CAISHEN_SCAN_MISS_LIMIT = 6   # 财神爷图连续 N 扫无实体 → 判"没了/被占"（容忍公告先到怪未刷）
-CAISHEN_SCAN_MISS_GAP = 1.0   # 复扫间隔（秒）
+# 2026-08-28 用户四定案：财神爷图扫不到财神 → 立即回落（本图 CALL 其他 BOSS，
+# 没有其他再换图），绝不多轮干等。2 次×0.5s 间隔只容忍场景加载瞬间。
+CAISHEN_SCAN_MISS_LIMIT = 2
+CAISHEN_SCAN_MISS_GAP = 0.5
 
 
 def _boss_priority(name: str) -> int:
@@ -1447,13 +1459,97 @@ def _wait_arrival_grid(gateway: str, tx: float, ty: float,
     return False
 
 
+def _close_big_map(verbose: bool = False) -> None:
+    """立即关闭大地图（Tab 键，后台）。
+
+    2026-08-28 用户定案：打开地图点击目标坐标后，立即关闭地图并马上 CALL
+    （边走边CALL），绝不开着大地图干等。失败只提示不阻断（不影响后续 CALL）。
+    窗口解析与走路通道一致：_get_bound_pid() → locate_game_window。
+    """
+    try:
+        from library.map_packs.DHW import _press_tab
+        from library.common.win_utils import locate_game_window
+        pid = _get_bound_pid()
+        hwnd = 0
+        if pid > 0:
+            hwnd, _title = locate_game_window(pid, verbose=False)
+        if hwnd:
+            _press_tab(hwnd, background=True)
+            if verbose:
+                print("  ✓ 大地图已关闭（点完坐标立即关图）", flush=True)
+        elif verbose:
+            print("  ! 无法定位游戏窗口，跳过关图（不阻断流程）", flush=True)
+    except Exception as e:
+        if verbose:
+            print(f"  ! 关闭大地图失败（不阻断流程）: {e}", flush=True)
+
+
+def _walk_and_call(gateway: str, boss_gx: int, boss_gy: int,
+                   dist0: float, verbose: bool, call_fn) -> str:
+    """边走边CALL 主循环（2026-08-28 用户定案）。
+
+    走路点击已发出、大地图已关闭后进入本循环：
+      - 每 WALK_CALL_INTERVAL 秒 CALL 一次（接近目标即可命中，无需精确站上坐标）；
+      - 超时上限 = 距离 / 预计走路速度 + 余量（≈走到落点的时刻）；
+      - CALL 成功立即返回，绝无"到达后傻等固定延迟"；
+      - 走完/超时后补一次 CALL 兜底（用户定案）；
+      - 卡住检测：连续 WALK_STALL_TIMEOUT 无位移 → 先试补 CALL，再交瞬移兜底。
+    :param call_fn: 单次 CALL 尝试，返回 "battle"/"gone"/"far"/"fail"
+    :return: "walked_call_ok" CALL已触发战斗 / "gone" 目标消失 / "walked" 走完未中
+    """
+    timeout = max(3.0, dist0 / WALK_SPEED_GRID_SEC + WALK_TIME_MARGIN)
+    t0 = time.time()
+    last_rg, last_move_t = _role_grid(gateway), time.time()
+    next_call = 0.0
+    stalled = False
+    while time.time() - t0 < timeout:
+        rg = _role_grid(gateway)
+        if rg is not None:
+            if last_rg is None or _grid_dist(rg, last_rg[0], last_rg[1]) > 0.3:
+                last_rg, last_move_t = rg, time.time()
+            elif time.time() - last_move_t > WALK_STALL_TIMEOUT:
+                if verbose:
+                    print(f"  ! 走路卡住（{WALK_STALL_TIMEOUT:.0f}s 无位移，"
+                          f"停在 ({rg[0]:.0f},{rg[1]:.0f})），边走边CALL收尾", flush=True)
+                stalled = True
+                break
+        # ★ 边走边CALL：0.5s 节拍，命中战斗立即返回
+        if time.time() >= next_call:
+            next_call = time.time() + WALK_CALL_INTERVAL
+            r = call_fn()
+            if r == "battle":
+                d = _grid_dist(rg, boss_gx, boss_gy) if rg else -1.0
+                if verbose:
+                    print(f"  ✓ 边走边CALL命中（{time.time()-t0:.1f}s，距BOSS {d:.1f} 格）",
+                          flush=True)
+                return "walked_call_ok"
+            if r == "gone":
+                return "gone"
+        time.sleep(0.1)
+    # 走完/超时（≈已到落点）或卡住 → 补一次 CALL 兜底（用户定案）
+    if verbose:
+        print(f"  → 走路阶段结束（{time.time()-t0:.0f}s，"
+              f"{'中途卡住' if stalled else '到达估算上限'}），补 CALL 兜底", flush=True)
+    r = call_fn()
+    if r == "battle":
+        return "walked_call_ok"
+    if r == "gone":
+        return "gone"
+    return "walked"
+
+
 def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
-                   walk_background: bool, verbose: bool) -> str:
-    """把角色带到能 CALL 的距离内。返回模式:
-      "close"      已在阈值内，无需移动
-      "walked"     地图包真实走路到位
-      "teleported" 无地图包/走不到 → 随机环带落点瞬移兜底（不重叠BOSS）
-      "far"        全部手段失败，仍超距（调用方应跳过该BOSS）
+                   walk_background: bool, verbose: bool,
+                   call_fn=None) -> str:
+    """把角色带到能 CALL 的距离内（2026-08-28 边走边CALL 定案版）。
+
+    流程：地图包/校准真实走路 → 点击目标坐标后 **立即关大地图** → 马上开 CALL
+    （边走边CALL，每 0.5s 一次，超时上限=距离估算的走路时间，走完补 CALL 兜底）
+    → 仍不中再走瞬移环带兜底。全程无"到达后傻等固定延迟"。
+    :param call_fn: 单次 CALL 尝试（返回 "battle"/"gone"/"far"/"fail"），见 _farm_one_boss
+    :return: "close" 已在阈值内 / "walked_call_ok" 途中/兜底CALL已命中 /
+             "walked" 走完仍未中 / "gone" 目标消失 / "teleported" 瞬移兜底 /
+             "far" 全部手段失败
     """
     rg = _role_grid(gateway)
     if rg is not None and _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
@@ -1461,22 +1557,25 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
 
     # 1) 有地图包或校准数据 → 真实走路（拟人优先，防举报）
     if _get_map_walker(cur_map) or _load_calibration(cur_map):
+        # lazy-bind：未绑定 PID 时现场绑定（farm 主流程已绑，独立调用/重连后兜底），
+        # 否则走路必然报"未绑定 PID"退化成瞬移（2026-08-28 实测暴露）。
+        if _get_bound_pid() <= 0:
+            _ensure_walker_bound(gateway, verbose=verbose)
         jx = max(0, int(boss_gx) + random.randint(-2, 2))
         jy = max(0, int(boss_gy) + random.randint(-2, 2))
+        dist0 = _grid_dist(rg, boss_gx, boss_gy) if rg else 30.0
+        est = max(3.0, dist0 / WALK_SPEED_GRID_SEC + WALK_TIME_MARGIN)
         if verbose:
-            print(f"  → 走路贴近 {cur_map} ({jx},{jy})", flush=True)
+            print(f"  → 走路贴近 {cur_map} ({jx},{jy})（距BOSS≈{dist0:.0f}格，"
+                  f"边走边CALL上限 {est:.0f}s）", flush=True)
         walk_res = _walk_to(cur_map, jx, jy, background=walk_background, verbose=verbose)
-        # 2026-08-28 用户定案"有怪就 CALL"：落点只是手段，CALL 是目的。
-        # 轮询中只要离 **BOSS** ≤ APPROACH_GRID_DISTANCE 就立即返回开 CALL，
-        # 不等走到抖动落点（旧版 _wait_arrival_grid 90s 干等，怪在眼前也不打）。
         if walk_res.get("ok"):
-            # ★ 移动启动门控（2026-08-28 用户实测：日志打了"走路贴近"但画面从没动过，
-            #   白等 30s 后靠瞬移兜底）。点击大地图后角色坐标必须真的动起来，
-            #   否则 _walk_to 的 ok 只代表"点击发出了"，不代表"角色在走"。
+            # ★ 用户定案：点完目标坐标立即关大地图，马上 CALL
+            _close_big_map(verbose)
+            # 移动启动门控：点击没生效（角色完全没动）→ 直接转瞬移兜底
             t0s = time.time()
             base = _role_grid(gateway)
             moving = False
-            rg = None
             while time.time() - t0s < WALK_START_TIMEOUT:
                 rg = _role_grid(gateway)
                 if rg and base and _grid_dist(rg, base[0], base[1]) > 0.5:
@@ -1484,48 +1583,46 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
                     break
                 if rg and base is None:
                     base = rg
+                # 2026-08-28 提速：启动探测期不空等——每拍顺手 CALL 一次
+                # （点击可能没生效，但 CALL 零成本；中途命中战斗直接省掉瞬移兜底）
+                if call_fn is not None:
+                    r = call_fn()
+                    if r == "battle":
+                        return "walked_call_ok"
+                    if r == "gone":
+                        return "gone"
                 time.sleep(0.5)
             if not moving:
                 if verbose:
                     print(f"  ! 走路未启动（{WALK_START_TIMEOUT:.0f}s 内角色坐标无变化，"
                           f"点击没生效），转瞬移兜底", flush=True)
+            elif call_fn is not None:
+                # ★ 边走边CALL：每 0.5s CALL 一次，走完补 CALL 兜底
+                r = _walk_and_call(gateway, boss_gx, boss_gy, dist0, verbose, call_fn)
+                if r in ("walked_call_ok", "gone"):
+                    return r
+                # 走完仍未中 → 落点可能仍超距，走下面瞬移环带拉近兜底
             else:
-                # 轮询中只要离 **BOSS** ≤ APPROACH_GRID_DISTANCE 就立即返回开 CALL，
-                # 不等走到抖动落点（旧版 _wait_arrival_grid 90s 干等，怪在眼前也不打）。
+                # 兼容旧调用（无 call_fn）：按落点 ±WALK_ARRIVAL_BOX 轮询到位
                 t0w = time.time()
                 last_rg, last_move_t = rg, time.time()
                 while time.time() - t0w < WALK_ARRIVAL_TIMEOUT:
                     rg = _role_grid(gateway)
                     if rg is not None:
-                        # 卡住判定：连续 WALK_STALL_TIMEOUT 无位移 → 走路被打断，放弃
                         if _grid_dist(rg, last_rg[0], last_rg[1]) > 0.3:
                             last_rg, last_move_t = rg, time.time()
                         elif time.time() - last_move_t > WALK_STALL_TIMEOUT:
-                            if verbose:
-                                print(f"  ! 走路中途卡住（{WALK_STALL_TIMEOUT:.0f}s 无位移，"
-                                      f"停在 ({rg[0]:.0f},{rg[1]:.0f})），转瞬移兜底", flush=True)
                             break
-                        # ① 离 BOSS ≤4 格：进 CALL 范围，直接返回开打（最理想）
                         if _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
                             return "walked"
-                        # ② 落点 ±20 格：用户定案算"到位"，先 CALL 试试（服务器远距离有时认），
-                        #    CALL 不中走 _farm_one_boss 的第二次移动补瞬移拉近
                         if (abs(rg[0] - jx) <= WALK_ARRIVAL_BOX
                                 and abs(rg[1] - jy) <= WALK_ARRIVAL_BOX):
-                            if verbose:
-                                print(f"  ✓ 走路到位（±{WALK_ARRIVAL_BOX} 格内，"
-                                      f"当前 ({rg[0]},{rg[1]})，距BOSS "
-                                      f"{_grid_dist(rg, boss_gx, boss_gy):.1f} 格）", flush=True)
                             return "walked"
-                    time.sleep(0.4)  # 2026-08-28 提速轮：0.8→0.4（到位即开打）
+                    time.sleep(0.4)
         elif verbose:
-            if walk_res.get("ok"):
-                # 移动了但 30s 内没进 CALL 范围也没进落点框
-                print(f"  ! 走路超时未到位（{WALK_ARRIVAL_TIMEOUT:.0f}s），转瞬移兜底", flush=True)
-            else:
-                print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
+            print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
 
-    # 2) 无地图包/走不到 → 随机环带落点瞬移（用户批准的兜底）
+    # 2) 走路不可用/未启动/走完仍超距 → 随机环带落点瞬移兜底（不重叠BOSS）
     for rng in (TELEPORT_OFFSET_RANGE, TELEPORT_RETRY_RANGE):
         ang = random.uniform(0.0, _math.tau)
         d = random.uniform(*rng)
@@ -1541,7 +1638,7 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
         except Exception as e:
             logger.warning(f"瞬移失败: {e}")
             continue
-        time.sleep(0.5)  # 2026-08-28 提速轮：1.0→0.5（jump 落地快）
+        time.sleep(0.5)  # jump 落地快（提速轮：1.0→0.5）
         rg = _role_grid(gateway)
         if rg is None or _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE + 1:
             return "teleported"
@@ -1566,82 +1663,84 @@ def _farm_one_boss(
     verbose: bool,
     cur_map: str,
 ) -> dict:
-    """对单个 BOSS 实体 —— CALL 优先（用户 2026-08-28 定案：先 CALL 再走近）。
+    """对单个 BOSS 实体 —— 原地 CALL + 边走边CALL（2026-08-28 用户四定案）。
 
-    流程：原地 CALL 事件开始 → 命中战斗选项直接打；
-    弹超距确认框 / 选项点了没进战斗 / 对象级 CALL 失败 → 才走近一次
-    （走路优先，瞬移兜底）→ 再 CALL；
-    走近后仍不成 = 该只已被占/尸体 → 放弃换下一只。全程最多一次移动。
-    绝不做"距离预检先走近"——服务器远距离 CALL 有时也认，先试最便宜的。
-    2026-08-28：移动上限 1 次 → 2 次（走路 ±20 到位后 CALL 不中 → 补一次瞬移环带拉近）。"""
+    流程（全程无"到达后傻等固定延迟"）：
+      1) 原地立即 CALL 一次（怪在面前/近距离 → 直接命中开打，最快路径）；
+      2) 超距/未中 → 走路贴近：点击地图目标坐标后 **立即关大图**，马上开 CALL，
+         每 WALK_CALL_INTERVAL(0.5s) CALL 一次，超时上限=距离/预计走路速度+余量，
+         走完仍未中 → 落点补一次 CALL 兜底；接近即可命中，无需精确站上坐标；
+      3) 走路不可用/未启动/走完仍超距 → 瞬移环带拉近（approach 内部）→ 落地补 CALL。
+    CALL 成功立即进战斗，整个移动链（走路→瞬移）都在 _approach_boss 内一次完成。
+    """
     moves = 0
-    for attempt in range(1, QUICK_CALL_MAX_TRIES + 1):
-        # 2026-08-28 新增：上次 CALL 可能已触发战斗但 4s 窗口没探到（tp.战斗中
-        # 有延迟），重试前先查战斗态——已进战斗直接进入等结束，绝不白 CALL。
+
+    def _call_once() -> str:
+        """单次完整 CALL 尝试。返回 "battle"/"gone"/"far"/"fail"。"""
+        # 上次 CALL 可能已触发战斗但窗口没探到（tp.战斗中 有延迟），先查战斗态
         if _in_battle(gateway):
-            if verbose:
-                print(f"  [尝试{attempt}] 检测到已在战斗（上次CALL已生效），直接等战斗结束",
-                      flush=True)
-            ended = _wait_battle_end(gateway, timeout=battle_timeout)
-            close_dialog(gateway)
-            return {"ok": True, "battle_ended": ended, "msg": "prev_call_triggered",
-                    "attempts": attempt, "approached": moves > 0}
+            return "battle"
         ok, msg = call_npc_event_start(gateway, boss.get("id"), boss.get("bsid"))
         if not ok:
             if "消失" in msg or "NOTFOUND" in msg:
-                return {"ok": False, "reason": "gone", "msg": msg}
-            # CALL 对象级失败（NOFN 等）：走近一次再看
-            far = True
-        else:
-            # 2026-08-28：固定 sleep 1.5 → 轮询等对话弹出（0.3s 步进，最快 0.3s 就绪）
-            _wait_dialog_ready(gateway)
-            bok, bmsg = call_dialog_battle(gateway, battle_keywords)
-            if bok:
-                # pcall ok ≠ 进战斗：必须等 tp.战斗中 变 true 才算真触发
-                # （2026-08-27 实测：远处 pcall 全部 ok=true 但战斗没发生 → 假击杀 14 连）
-                if _wait_battle_start(gateway, timeout=3.0):
-                    ended = _wait_battle_end(gateway, timeout=battle_timeout)
-                    close_dialog(gateway)
-                    return {"ok": True, "battle_ended": ended, "msg": bmsg,
-                            "attempts": attempt, "approached": moves > 0}
-                # 没真进战斗：八成是距离不够（选项能弹但服务器不认），按超距处理走近重试
-                close_dialog(gateway)
-                far = True
-                if verbose:
-                    print(f"  [尝试{attempt}] 选项已点但 3s 内未进战斗（{bmsg}），判超距走近重试",
-                          flush=True)
-            else:
-                # 没命中战斗选项：判断是不是超距确认框
-                far = _dialog_is_too_far(gateway)
-                close_dialog(gateway)
-                if verbose:
-                    why = "超距确认框" if far else f"无战斗选项（{bmsg}）"
-                    print(f"  [尝试{attempt}] {why}", flush=True)
-                # 2026-08-28 修复：对话栏无选项 ≠ 直接放弃——瞬移落点离 BOSS 太远时
-                # 服务器弹的对话栏根本没有战斗选项（翼火蛇@建邺城 实测：尝试1 空对话栏
-                # 就被判死，一次都没走近）。还没移动过 → 一律判可能超距，走近再试一次。
-                if not far and moves == 0:
-                    far = True
-                    if verbose:
-                        print(f"  [尝试{attempt}] 还没移动过，判可能距离太远 → 走近重试",
-                              flush=True)
+                return "gone"
+            return "far"  # 对象级失败（NOFN 等）：大概率距离远，边走边CALL会自然重试
+        _wait_dialog_ready(gateway)
+        bok, bmsg = call_dialog_battle(gateway, battle_keywords)
+        if bok:
+            # pcall ok ≠ 进战斗：必须等 tp.战斗中 变 true 才算真触发
+            # （2026-08-27 实测：远处 pcall 全部 ok=true 但战斗没发生 → 假击杀 14 连；
+            #   2026-08-28 实测：窗口 2.0s 偏短（tp.战斗中 有延迟）→ 恢复 3.0s）
+            if _wait_battle_start(gateway, timeout=3.0):
+                return "battle"
+            close_dialog(gateway)
+            if verbose:
+                print(f"  [CALL] 选项已点但 3s 内未进战斗（{bmsg}），下一节拍继续 CALL",
+                      flush=True)
+            return "far"
+        far = _dialog_is_too_far(gateway)
+        close_dialog(gateway)
+        if verbose and far:
+            print("  [CALL] 超距确认框（边走边CALL中，靠近后自动命中）", flush=True)
+        return "far" if far else "fail"
 
-        # 需要移动且还有移动额度（≤2 次）→ 走路优先，瞬移兜底
-        if far and moves < 2:
-            mode = _approach_boss(gateway, cur_map, boss["gx"], boss["gy"],
-                                  walk_background, verbose)
-            moves += 1
-            if mode == "far":
-                return {"ok": False, "reason": "unreachable", "msg": "走近失败仍超距"}
-            continue
+    # 1) 原地立即 CALL（怪就在面前 → 直接命中，不移动）
+    r = _call_once()
+    if r == "battle":
+        ended = _wait_battle_end(gateway, timeout=battle_timeout)
+        close_dialog(gateway)
+        return {"ok": True, "battle_ended": ended, "msg": "call_ok",
+                "attempts": 1, "approached": False}
+    if r == "gone":
+        return {"ok": False, "reason": "gone", "msg": "目标已消失"}
+    if verbose:
+        print("  [CALL] 原地未命中 → 转走路贴近 + 边走边CALL", flush=True)
 
-        # 已走近过仍不成 / 无需移动的失败：不打转不散开，直接放弃这只
-        if attempt >= QUICK_CALL_MAX_TRIES or not far:
-            break
-        time.sleep(0.1)  # 2026-08-28：重试间隔 0.5~1.0 → 0.1（延迟最小化）
+    # 2) 走路贴近 + 边走边CALL（点图即关图开CALL；内置走完补 CALL 兜底）
+    mode = _approach_boss(gateway, cur_map, boss["gx"], boss["gy"],
+                          walk_background, verbose, call_fn=_call_once)
+    moves += 1
+    if mode == "walked_call_ok":
+        ended = _wait_battle_end(gateway, timeout=battle_timeout)
+        close_dialog(gateway)
+        return {"ok": True, "battle_ended": ended, "msg": "walk_call_ok",
+                "attempts": 2, "approached": True}
+    if mode == "gone":
+        return {"ok": False, "reason": "gone", "msg": "目标已消失（走近途中）"}
+    if mode == "far":
+        return {"ok": False, "reason": "unreachable", "msg": "走近失败仍超距"}
 
+    # 3) 到位/瞬移落地后仍未中 → 最后补一次 CALL 兜底
+    r = _call_once()
+    if r == "battle":
+        ended = _wait_battle_end(gateway, timeout=battle_timeout)
+        close_dialog(gateway)
+        return {"ok": True, "battle_ended": ended, "msg": "final_call_ok",
+                "attempts": 3, "approached": moves > 0}
+    if r == "gone":
+        return {"ok": False, "reason": "gone", "msg": "目标已消失"}
     return {"ok": False, "reason": "no_battle_option",
-            "msg": f"CALL×{attempt}+贴近重试后仍未命中战斗选项（可能已被他人锁定）"}
+            "msg": "原地CALL+边走边CALL+落地补CALL后仍未命中（可能已被他人锁定）"}
 
 
 def _pick_random_map(cur_map: Optional[str], monitored_maps: List[str],
@@ -1776,9 +1875,36 @@ def WORLD_BOSS_auto_farm(
                 break
             continue
 
+        # 0.4) 财神爷在场直接领取（2026-08-28 用户四定案，最高优先）：
+        #      三界财神爷已出现在当前场景（就在面前）→ 最优先动作是直接 CALL 领取，
+        #      绝不跨图、绝不先去"查看公告"/响应其他公告——"查看"只是信息动作，
+        #      永远低于"目标在场直接领取"。
+        if not _in_battle(gateway):
+            cs_here = [x for x in scan_scene_bosses(gateway, [CAISHEN_BOSS])
+                       if (x["name"], x["gx"], x["gy"]) not in excluded]
+            if cs_here:
+                b = cs_here[0]
+                if verbose:
+                    print(f"[{int(time.time()-t0)}s] ⚡ 财神爷就在面前（{cur_map or '?'} "
+                          f"{b['gx']},{b['gy']}）→ 直接领取，不切图", flush=True)
+                kw = _boss_battle_keywords(b["name"], list(battle_keywords))
+                real_map = _cur_map_name(gateway) or cur_map or ""
+                res = _farm_one_boss(gateway, b, kw, battle_timeout,
+                                     walk_background, verbose, real_map)
+                if res.get("ok") and res.get("battle_ended"):
+                    farmed_total += 1
+                    print(f"  ✓ 击杀 三界财神爷（累计 {farmed_total}）", flush=True)
+                else:
+                    reason = res.get("reason") or "failed"
+                    print(f"  ✗ 三界财神爷 跳过: {reason} {res.get('msg')}", flush=True)
+                    excluded.add((b["name"], b["gx"], b["gy"]))
+                continue
+
         # 0.5) 三界财神爷抢占模式（2026-08-28 用户定案：最最最优先）。
         #      未进战斗时财神爷公告出现 → 立即瞬移财神爷图，期间绝不 CALL 其他怪；
         #      财神爷没了/被人锁定 → 解除抢占回落普通模式（该图其他怪照常打）。
+        #      2026-08-28 四定案：公告随时查看；财神爷图没财神 → 本图 CALL 其他
+        #      BOSS，没有其他再换图（复扫上限已收紧为 2×0.5s）。
         if caishen_pinned is None and not _in_battle(gateway):
             cs_ann = find_latest_spawn(gateway, [CAISHEN_BOSS],
                                        monitored_maps, spawn_patterns)
@@ -1823,8 +1949,8 @@ def WORLD_BOSS_auto_farm(
                 caishen_scan_miss += 1
                 if caishen_scan_miss >= CAISHEN_SCAN_MISS_LIMIT:
                     if verbose:
-                        print(f"  ⚡ 财神爷图连续 {caishen_scan_miss} 扫无实体 → "
-                              f"判没了/被占，回落普通模式", flush=True)
+                        print(f"  ⚡ 财神爷图 {caishen_scan_miss} 扫无财神实体 → "
+                              f"本图 CALL 其他 BOSS，没有再换图（回落普通模式）", flush=True)
                     caishen_pinned = None
                 else:
                     if not _sleep_stoppable(CAISHEN_SCAN_MISS_GAP):
@@ -1928,9 +2054,16 @@ def WORLD_BOSS_auto_farm(
                     gx0, gy0 = 0.0, 0.0
                 # 2026-08-28 二定案：普通模式除财神爷外无优先级——公告点名的先打，
                 # 其余一律距离近先打；同坐标白名单怪全类型都可攻击（不限一种）
+                # 2026-08-28 四定案：财神爷在 live 里 → 跳过一切排序直接领取
                 ann = (spawn or {}).get("boss")
-                b = min(live, key=lambda x: (0 if ann and ann in x["name"] else 1,
-                                             (x["gx"] - gx0) ** 2 + (x["gy"] - gy0) ** 2))
+                cs_live = [x for x in live if x["name"] == CAISHEN_BOSS]
+                if cs_live:
+                    b = cs_live[0]
+                    if verbose:
+                        print("  ⚡ 财神爷在场 → 直接领取（优先于公告/距离排序）", flush=True)
+                else:
+                    b = min(live, key=lambda x: (0 if ann and ann in x["name"] else 1,
+                                                 (x["gx"] - gx0) ** 2 + (x["gy"] - gy0) ** 2))
                 this_keywords = _boss_battle_keywords(b["name"], list(battle_keywords))
                 # 2026-08-28：走路/校准一律用实读地图名——cur_map 标签万一错了
                 # （跨图未到达），拿错图的校准数据点屏幕会全错（长寿郊外点花果山像素事故）
