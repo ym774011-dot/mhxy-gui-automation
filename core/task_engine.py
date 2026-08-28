@@ -96,6 +96,12 @@ def _get_yolo_detector():
 
 
 from core.task_engine_mixins import ClickMixin, YoloMixin, SwitchMixin
+from core.interrupt import TaskInterrupted, install as install_interrupt
+
+# 2026-08-28：装线程感知可中断 sleep（幂等）。必须在任务库模块扫描前装，
+# pack 内 time.sleep 才会走可中断路径（pack 均为 time.sleep 属性调用，
+# 模块级补丁天然生效）。
+install_interrupt()
 
 
 class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
@@ -222,12 +228,15 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             self._emit_log("info", "任务已恢复")
 
     def stop(self) -> None:
-        """停止执行(在下一个事件边界生效)。
+        """停止执行（即时生效，2026-08-28 重做）。
 
-        2026-08-05 10:35 加固：工作线程若卡在不可中断的阻塞调用（如模板匹配
-        wait_for_template 旧版本 / 函数库调用），可能长时间不退出导致状态停在
-        "正在停止"。stop 在请求停止后等待少量时间，若工作线程仍未结束则强制
-        复位运行状态（守护线程不会阻塞主进程，但 is_running 必须复位才能重启）。
+        原逻辑只等事件边界 → 单个长函数（走路/等待循环）内无法中断，
+        用户感知"点停止要等一整轮"。现三层收敛：
+          1. should_stop 置位 → 工作线程内所有 time.sleep 分片轮询，
+             命中即抛 TaskInterrupted（core/interrupt.py），典型 <0.1s 退出；
+          2. 等 1.0s 未退出（卡在纯 Python 长循环）→
+             PyThreadState_SetAsyncExc 注入 TaskInterrupted 兜底；
+          3. 再等 2.0s 仍卡在 C 级阻塞调用 → 强制复位状态（原兜底保留）。
         """
         if self.is_running:
             self.should_stop.set()
@@ -236,17 +245,23 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             self._emit_status("正在停止")
             self._emit_log("info", "任务请求停止")
 
-            # 等待工作线程结束（最多 3 秒），超时强制复位，避免"正在停止"卡死
             try:
                 thread = getattr(self, "_thread", None)
+                # 第 1 层：协作中断（可中断 sleep）通常 <0.2s 退出
                 if thread is not None and thread.is_alive():
-                    thread.join(timeout=3.0)
+                    thread.join(timeout=1.0)
+                # 第 2 层：异步异常注入（纯 Python 长循环兜底）
+                if thread is not None and thread.is_alive() and thread.ident:
+                    from core.interrupt import inject_exception
+                    res = inject_exception(thread.ident, TaskInterrupted())
+                    if res == 1:
+                        logger.info("已向工作线程注入异步中断异常")
+                    thread.join(timeout=2.0)
+                # 第 3 层：仍卡住（C 级阻塞）→ 强制复位（守护线程继续跑但不再占用状态）
                 if thread is not None and thread.is_alive():
-                    # 线程仍卡住：强制复位运行状态（守护线程继续运行但不再占用
-                    # 引擎状态；后续若其 finally 执行会再次 emit 已停止）
                     logger.warning(
-                        "任务引擎工作线程 3 秒未退出，强制复位状态（避免卡在"
-                        "正在停止）。如旧线程仍在操作，请勿立即重复启动。"
+                        "任务引擎工作线程 3 秒未退出（疑似卡在阻塞调用），"
+                        "强制复位状态。旧线程在阻塞调用返回后会自行退出。"
                     )
                     self.is_running = False
                     self.is_paused.clear()
@@ -311,6 +326,12 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         """
         success = True
         message = "任务序列执行完成"
+
+        # 2026-08-28：注册为可中断工作线程（time.sleep 分片轮询 should_stop，
+        # 睡眠中命中停止请求即抛 TaskInterrupted，实现"停止即时生效"）
+        from core.interrupt import register_worker, unregister_worker
+        register_worker(threading.current_thread(),
+                        lambda: self.should_stop.is_set())
 
         # 序列级循环：0=无限循环，依赖 should_stop 退出；默认 1（执行一遍不循环）
         seq_loop_count = (task_sequence.loop_count
@@ -406,6 +427,13 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
 
             if success:
                 logger.info(f"任务序列执行完成: {task_sequence.name!r}")
+        except TaskInterrupted:
+            # 2026-08-28：即时中断（可中断 sleep / 异步异常注入抛出）。
+            # 继承 BaseException 所以不会被各层 except Exception 吞掉，
+            # 一路穿透到此统一按"任务被停止"收尾。
+            logger.info("任务执行被即时中断（停止请求）")
+            success = False
+            message = "任务已被停止（即时中断）"
         except Exception as e:
             # 兜底异常保护，防止工作线程静默崩溃
             logger.exception(f"任务序列执行异常: {e}")
@@ -413,6 +441,8 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
             message = f"任务序列执行异常: {e}"
         finally:
             # 清理状态
+            from core.interrupt import unregister_worker as _uw
+            _uw(threading.current_thread())
             self.is_running = False
             self.is_paused.clear()
             self.current_task = None

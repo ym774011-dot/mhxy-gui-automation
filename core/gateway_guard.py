@@ -90,13 +90,38 @@ def _bound_pid():
     return None
 
 
-def _is_game_process(pid: int) -> bool:
-    """校验 PID 是存活的游戏实例（tasklist /FI）。
+def _psutil():
+    """psutil 可用则返回模块（2026-08-28：替代 tasklist/netstat 子进程，单次
+    调用 0.2~0.3s → <5ms；这是开关路径上最便宜的提速）。"""
+    try:
+        import psutil
+        return psutil
+    except ImportError:
+        return None
 
-    2026-08-27 修复：tasklist（不带 /V）只输出**映像名**，本游戏真实进程名是
-    快乐西游.exe（窗口标题才是"十年一梦…"），旧判定 '十年一梦' in out 永远为假
-    → config fallback 的合法 PID 全被误杀 → ensure_gateway 报 no_pid。
+
+def _psutil():
+    """psutil 可用则返回模块（2026-08-28：替代 tasklist/netstat 子进程，单次
+    调用 0.2~0.3s → <5ms；这是开关路径上最便宜的提速）。"""
+    try:
+        import psutil
+        return psutil
+    except ImportError:
+        return None
+
+
+def _is_game_process(pid: int) -> bool:
+    """校验 PID 是存活的游戏实例。
+
+    优先 psutil（毫秒级）；无 psutil 时回退 tasklist /FI（~0.25s）。
+    2026-08-27 修复：游戏真实进程名是 快乐西游.exe（窗口标题才是"十年一梦…"）。
     """
+    psu = _psutil()
+    if psu is not None:
+        try:
+            return any(k in psu.Process(pid).name() for k in ("十年一梦", "快乐西游", "mhxy"))
+        except Exception:
+            return False
     try:
         out = subprocess.check_output(
             f"tasklist /FI \"PID eq {pid}\" /FO CSV", shell=True).decode("gbk", "ignore")
@@ -106,9 +131,18 @@ def _is_game_process(pid: int) -> bool:
 
 
 def _listener_pid_on_port(port: int = None):
-    """netstat 找占用端口的监听进程 PID（杀旧网关用）。"""
+    """找占用端口的监听进程 PID。psutil 优先（毫秒级），回退 netstat。"""
     if port is None:
         port = _gw_port()
+    psu = _psutil()
+    if psu is not None:
+        try:
+            for c in psu.net_connections(kind="tcp"):
+                if "LISTEN" in (c.status or "") and c.laddr \
+                        and c.laddr.port == port and c.pid:
+                    return int(c.pid)
+        except Exception:
+            pass
     try:
         out = subprocess.check_output(
             f"netstat -ano | findstr :{port}", shell=True).decode("gbk", "ignore")
@@ -123,7 +157,13 @@ def _listener_pid_on_port(port: int = None):
 
 
 def _pid_alive(pid: int) -> bool:
-    """进程是否存活（tasklist /FI，杀旧网关轮询用）。"""
+    """进程是否存活。psutil 优先（毫秒级），回退 tasklist。"""
+    psu = _psutil()
+    if psu is not None:
+        try:
+            return psu.pid_exists(int(pid))
+        except Exception:
+            return False
     try:
         out = subprocess.check_output(
             f"tasklist /FI \"PID eq {pid}\" /FO CSV", shell=True).decode("gbk", "ignore")
@@ -139,8 +179,9 @@ def _graceful_kill(pid: int, port: int = None) -> bool:
     异常 → **游戏闪退**（20:15/20:24 两次实测）。必须先调 /api/admin/shutdown
     让 gateway 先 session.detach() 再退出，taskkill 仅作兜底。
 
-    2026-08-27 提速：固定 sleep(2.5) 改为轮询进程退出（0.3s 步进，上限 2.5s），
-    正常 shutdown 后几百 ms 即可继续。
+    2026-08-27 提速：固定 sleep(2.5) 改为轮询进程退出。
+    2026-08-28 再提速：0.3s→0.1s 步进；进程已退出则**跳过 taskkill**
+    （旧版无条件 taskkill 已死 PID 白耗 ~0.3s，且 /F 落在错误复用的 PID 上有风险）。
     """
     if port is None:
         port = _gw_port()
@@ -150,13 +191,16 @@ def _graceful_kill(pid: int, port: int = None) -> bool:
             data=b"{}", headers={"Content-Type": "application/json"})
         urllib.request.urlopen(req, timeout=3)
         t0 = time.time()
-        while time.time() - t0 < 2.5:
+        while time.time() - t0 < 2.0:
             if not _pid_alive(pid):
-                break
-            time.sleep(0.3)
+                return True
+            time.sleep(0.1)
     except Exception:
         pass
-    return _kill_pid(pid)
+    # 仍存活才强杀兜底
+    if _pid_alive(pid):
+        return _kill_pid(pid)
+    return True
 
 
 def _kill_pid(pid: int) -> bool:
@@ -167,8 +211,12 @@ def _kill_pid(pid: int) -> bool:
         return False
 
 
-def _spawn(pid) -> bool:
-    """拉起网关并 attach 指定 PID（多开场景禁止 --auto，避免 attach 错实例）。"""
+def _spawn(pid):
+    """拉起网关并 attach 指定 PID（多开场景禁止 --auto，避免 attach 错实例）。
+
+    2026-08-28：返回 Popen 句柄（供 ensure_gateway 检测"进程秒退"早停），
+    失败返回 None。调用方按真值判断即可。
+    """
     port = _gw_port()
     args = [PYW, GATEWAY_PY, str(pid), "--port", str(port)]
     try:
@@ -177,11 +225,23 @@ def _spawn(pid) -> bool:
         import io
         logf = open(os.path.join(GATEWAY_DIR, f"gateway_spawn_{port}.log"),
                     "a", encoding="utf-8", buffering=1)
-        subprocess.Popen(args, cwd=GATEWAY_DIR, creationflags=CREATE_NO_WINDOW,
-                         stdout=logf, stderr=subprocess.STDOUT)
-        return True
+        return subprocess.Popen(args, cwd=GATEWAY_DIR,
+                                creationflags=CREATE_NO_WINDOW,
+                                stdout=logf, stderr=subprocess.STDOUT)
     except Exception:
-        return False
+        return None
+
+
+def _read_run_log_tail(port: int = None, lines: int = 30) -> str:
+    """读网关运行日志尾部（spawn 秒退时报错定位用）。"""
+    if port is None:
+        port = _gw_port()
+    p = os.path.join(GATEWAY_DIR, f"gateway_run_{port}.log")
+    try:
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            return "".join(f.readlines()[-lines:])
+    except Exception:
+        return ""
 
 
 def _ready(st: dict, pid: int) -> bool:
@@ -224,16 +284,24 @@ def ensure_gateway(pid=None, timeout: float = 120.0, verbose: bool = False):
         lp = _listener_pid_on_port()
         if lp:
             _graceful_kill(lp)
-            time.sleep(1.0)
+            # 2026-08-28：删固定 sleep(1.0)——_graceful_kill 内部已轮询到进程退出
+            # （0.1s 步进），进程没退也留了 2s 上限，这里再睡 1s 纯属白等。
 
-        _spawn(pid)
+        proc = _spawn(pid)
 
         t0 = time.time()
         last_poll_err = None
         last_poll_st = None
         next_progress = 10.0
         while time.time() - t0 < timeout:
-            time.sleep(0.4)   # 2026-08-27: 0.8→0.4，就绪拾取更快
+            time.sleep(0.15)  # 2026-08-28: 0.4→0.15，就绪拾取更快（~1s 启动不再多等 0.4s）
+            # 2026-08-28：网关进程秒退（PID 失效/attach 失败）→ 早停报错，
+            # 旧行为会傻等满 120s（"打开很慢"的主要来源之一）
+            if proc is not None and proc.poll() is not None:
+                tail = _read_run_log_tail()
+                return False, {"action": "spawn_died", "pid": pid,
+                               "error": "网关进程启动即退出（游戏 PID 失效或 frida attach 失败）",
+                               "log_tail": tail}
             st = _status()
             if _ready(st, pid):
                 if verbose:
@@ -282,13 +350,19 @@ def stop_gateway(timeout: float = 8.0, verbose: bool = False):
         pass
 
     # 2. 兜底强杀（端口仍被占时）
+    # 2026-08-28 提速：固定 sleep(1.0)+kill 改为"0.1s 步进轮询，端口释放即走，
+    # 最多等 2s detach 宽限，仍在监听才强杀"。网关正常 shutdown 现在几十 ms
+    # 内退出（gateway.py os._exit 延迟 0.5s→0.05s），快路径实测 <0.5s；
+    # 宽限上限保留 2s 是安全底线（强杀正在 detach 的网关会崩游戏）。
     def _listener():
         return _listener_pid_on_port(port)
 
     t0 = time.time()
-    lp = _listener()
-    if lp:
-        time.sleep(1.0)  # 给 detach 留时间
+    while time.time() - t0 < 2.0:
+        if _listener() is None:
+            break
+        time.sleep(0.1)
+    else:
         lp = _listener()
         if lp:
             _kill_pid(lp)
@@ -299,7 +373,7 @@ def stop_gateway(timeout: float = 8.0, verbose: bool = False):
         if _listener() is None:
             info["stopped"] = True
             break
-        time.sleep(0.4)
+        time.sleep(0.1)
     else:
         info["stopped"] = False
         info["error"] = f"端口 {port} 释放超时"
