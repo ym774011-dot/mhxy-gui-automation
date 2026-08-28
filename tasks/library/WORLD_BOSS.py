@@ -665,7 +665,10 @@ def _find_hop_teleport(gateway: str, target_name: str):
     if v and "|" in v and "," in v:
         desc_part, xy = v.split("|", 1)
         x, y = xy.split(",")
-        return desc_part, int(float(x)), int(float(y))
+        # 2026-08-28 量纲修复：tp.场景.传送.坐标 恒为内部像素（×20 网格，
+        # 全量实测均为 20 倍数，如 傲来国传送女儿村 (120,220)→网格(6,11)），
+        # 读取时即转网格；>GRID_SANITY_MAX 才转的守门会漏掉 (120,220) 这类小值。
+        return desc_part, int(float(x) / 20), int(float(y) / 20)
     return None
 
 
@@ -707,7 +710,8 @@ def _find_exact_hop(gateway: str, dest_name: str, sep: str = "传送",
     if v and "|" in v and "," in v:
         desc_part, xy = v.split("|", 1)
         x, y = xy.split(",")
-        return desc_part, int(float(x)), int(float(y))
+        # 2026-08-28 量纲修复：与 _find_hop_teleport 同源，传送表坐标恒为内部像素，÷20 转网格
+        return desc_part, int(float(x) / 20), int(float(y) / 20)
     return None
 
 
@@ -1157,8 +1161,9 @@ local function scan(tbl, src)
     if type(u) == "table" then
       local name = tostring(u.名称 or u.名字 or "")
       local model = tostring(u.模型 or u.模型名 or "")
-      local gx = tonumber(u.格子x or u.x or -1) or -1
-      local gy = tonumber(u.格子y or u.y or -1) or -1
+      -- 2026-08-28 量纲修复：格子x/格子y 本身是网格；兜底字段 u.x/u.y 是内部像素(×20)，在源头÷20
+      local gx = tonumber(u.格子x) or ((tonumber(u.x) or -20) / 20)
+      local gy = tonumber(u.格子y) or ((tonumber(u.y) or -20) / 20)
       local bsid = tostring(u.标识 or "")   -- 全场唯一且跨槽位重排稳定，实测 2026-08-27
       if #name > 0 then
         out[#out+1] = string.format("%s|%s|%s|%s|%s|%s|%s", tostring(id), name, gx, gy, model, src, bsid)
