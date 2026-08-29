@@ -76,17 +76,82 @@ def _status(timeout: float = 3.0) -> dict:
         return None
 
 
+_ROLE_ID_RE = None
+
+
+def _extract_role_id(title: str):
+    """从窗口标题提取角色 ID（'…然学[701529]…' → '701529'）。
+
+    角色 ID 跨游戏重启稳定，是自动重绑的最可靠锚点；
+    标题里的登录时间戳无方括号，不会误匹配。
+    """
+    global _ROLE_ID_RE
+    if _ROLE_ID_RE is None:
+        import re
+        _ROLE_ID_RE = re.compile(r"\[(\d{4,})\]")
+    m = _ROLE_ID_RE.search(title or "")
+    return m.group(1) if m else None
+
+
+def _auto_rebind(old_pid: int):
+    """绑定的游戏进程已死（游戏重启换 PID）→ 按角色 ID 自动重绑 window_manager。
+
+    根因（2026-08-29 实锤）：GUI 长驻进程的 window_manager.pid 绑死旧游戏 PID，
+    游戏重启后 farm/ensure_gateway 自愈循环永远 attach 死 PID，每 ~40s 拉起
+    网关即秒退（gateway_run_<port>.log 刷屏 VirtualAllocEx 0x5），永不自愈。
+
+    锚点：旧绑定标题里的角色 ID（如 701529）。成功绑定后 bind() 会同步
+    持久化 config window.pid/title，monitor/下次启动恢复全部跟上。
+    返回新 PID（int）或 None。
+    """
+    try:
+        from core.window_manager import WindowManager
+        wm = WindowManager()
+        # 进程还活着且是游戏实例 → 无需重绑
+        if _pid_alive(old_pid) and _is_game_process(old_pid):
+            return int(old_pid)
+        role_id = _extract_role_id(getattr(wm, "window_title", "") or "")
+        if not role_id:
+            return None
+        token = f"[{role_id}]"
+        for hwnd, title, pid, visible in WindowManager.list_game_windows():
+            if not pid or pid == old_pid:
+                continue
+            # 带方括号匹配：GUI 自身标题（"MHXY GUI [组1]…"）不含角色 ID 括号串
+            if token in (title or "") and _is_game_process(pid):
+                if wm.bind(pid=int(pid)):
+                    try:
+                        from utils.logger import logger
+                        logger.info(f"网关守卫自动重绑成功: 旧PID={old_pid} → 新PID={pid}"
+                                    f"（角色ID {role_id}）")
+                    except Exception:
+                        print(f"[gateway_guard] 自动重绑: {old_pid} → {pid}")
+                    return int(pid)
+                return None
+    except Exception:
+        return None
+    return None
+
+
 def _bound_pid():
     """取脚本绑定的窗口 PID（唯一权威）：
     1. window_manager 单例（GUI 运行时实时值，最优）
     2. config window.pid 回退（GUI 未初始化时，须校验进程存活且是游戏实例）
+
+    2026-08-29：绑定 PID 已死时不再原样返回（旧版导致自愈循环死绑死 PID），
+    先尝试按角色 ID 自动重绑到新游戏进程。
     """
     try:
         from core.window_manager import WindowManager
         wm = WindowManager()
         pid = getattr(wm, "pid", 0) or 0
         if pid > 0:
-            return int(pid)
+            if _pid_alive(pid) and _is_game_process(pid):
+                return int(pid)
+            new_pid = _auto_rebind(int(pid))
+            if new_pid:
+                return new_pid
+            return None
     except Exception:
         pass
     try:
