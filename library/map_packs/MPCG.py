@@ -593,6 +593,23 @@ SECT_MAP_ID = {
 # 会员卡「门派传送」子菜单第 2 项（门派传送）与每门派选项的 选中判断 中心坐标，随实例动态读取。
 
 # ============================================================
+# 门派全局直达 desc 表（2026-08-30 实图 dump 收集，服务器全局查表不校验起点图，
+# 任意位置发该 desc 的 cross_map 1003 即直达门派图）——会员卡不可用时的兜底。
+# 数据来源：大唐国境/大唐境外/长安 传送表 dump（同 WORLD_BOSS._HOP_CHAINS 铁律）。
+# 未收录门派（普陀山/凌波城/天宫/神木林/无底洞/龙宫/女儿村）须走会员卡主路径。
+# ============================================================
+SECT_DESC_DIRECT = {
+    "魔王寨":   "大唐境外传送魔王寨",   # 实测 dump（大唐境外表）1140,100
+    "五庄观":   "大唐境外传送五庄观",   # 实测 dump 12700,820
+    "狮驼岭":   "大唐境外传送狮驼岭",   # 实测 dump 80,1440
+    "盘丝洞":   "大唐境外传送盘丝岭",   # 实测 dump 10570,80（盘丝岭=盘丝洞1513）
+    "阴曹地府": "大唐国境传送阴曹地府", # 实测 dump（大唐国境表）1020,180
+    "化生寺":   "长安传送化生寺",       # 实测 dump（长安表）10040,160
+    "大唐官府": "长安传送大唐官府",     # 实测 dump（长安表）6160,80
+    "方寸山":   "长寿村传送方寸山",     # WORLD_BOSS._HOP_CHAINS 既有
+}
+
+# ============================================================
 # 各门派护法所在地图坐标（网格, 地图坐标格 = 真实坐标/20）。
 # 2026-08-25 玩家提供：会员卡落地后瞬移到该坐标即可让「X门派护法」刷进附近。
 # 龙宫(-1,-1)=无需瞬移（任务落地即在护法旁），直接 CALL 龙宫护法。
@@ -684,17 +701,25 @@ _G.__out = out'''
     return _lua_read(gateway, code)
 
 
-def _open_bag(gateway) -> bool:
-    """用 Lua 直接 CALL 道具行囊:打开() 开背包（后台安全：不抢焦点、无鼠标/键盘注入）。
+def _open_bag(gateway, hwnd=None) -> bool:
+    """打开道具行囊背包。
 
-    实测（2026-08-25）：ALT+E 键盘在后台模式因游戏读不到系统键盘状态表而不可用；
-    PostMessage 鼠标点击按钮又可能有误差。CALL 窗口方法 打开() 直接在游戏内开箱，
-    可视=true 且物品随之加载。返回是否已打开。"""
-    r = _lua_call(gateway, r'''
-local b = tp.窗口 and tp.窗口.道具行囊
-if not b then _G.__out="NO"; return end
-local ok, err = pcall(function() return b["打开"](b) end)
-_G.__out = tostring(ok) .. (err and (":" .. tostring(err)) or "")''')
+    ★2026-08-30 用户要求：从 Lua CALL `道具行囊:打开()` 改为**鼠标点击背包按钮**——
+      用户实测程序化 CALL 开关背包会偶发"物品表空/致命弹窗崩溃"（客户端状态异常），
+      真实点击（最接近人工操作）开包稳定。按钮坐标实测 (915,585) @ 1000x620 客户区，
+      兼容其它尺寸按比例换算。需 hwnd 做后台 PostMessage 点击。
+    """
+    if hwnd is None:
+        return False
+    # 客户区 620000 ≈ 1000x620；按钮实测 (915,585) → 相对 (0.915, 0.943)
+    try:
+        import win32gui
+        _rect = win32gui.GetClientRect(hwnd)
+        _w, _h = _rect[2], _rect[3]
+        _bx, _by = int(_w * 0.915), int(_h * 0.943)
+    except Exception:
+        _bx, _by = 915, 585
+    _click(hwnd, _bx, _by)   # 左键点击背包按钮
     for _ in range(5):
         if _lua_expr(gateway, "tostring(tp.窗口.道具行囊.可视 or false)") == "true":
             return True
@@ -702,8 +727,12 @@ _G.__out = tostring(ok) .. (err and (":" .. tostring(err)) or "")''')
     return False
 
 
-def _member_card_pos(gateway):
-    """袋中「鲜衣怒马会员卡」item 坐标 (x,y)；找不到返回 (None,None)。"""
+def _member_card_pos(gateway, timeout: float = 3.0):
+    """袋中「鲜衣怒马会员卡」item 坐标 (x,y)；找不到返回 (None,None)。
+
+    ★2026-08-30 软轮询：背包刚打开物品未加载时读 `背包.物品` 可能读到空表/半开态
+      （用户实测：脚本开包无道具、手动开才有 → 随后 CRT 致命弹窗）。改为内部
+      带超时轮询——读到有效坐标即返回；道具未加载则小睡重试，不硬读半开背包。"""
     code = r'''
 local bag = tp.窗口.道具行囊
 local out = "-1,-1"
@@ -716,12 +745,20 @@ if type(bag) == "table" and type(bag.物品) == "table" then
   end
 end
 _G.__out = out'''
-    v = _lua_read(gateway, code)
-    try:
-        x, y = v.split(",")
-        return int(x), int(y)
-    except (ValueError, TypeError):
-        return None, None
+    t_bagc = time.time()
+    while time.time() - t_bagc < timeout:
+        try:
+            v = _lua_read(gateway, code)
+            x, y = v.split(",")
+            xi, yi = int(x), int(y)
+            if xi >= 0 and yi >= 0:
+                return xi, yi
+        except (ValueError, TypeError):
+            pass
+        except Exception:
+            pass
+        time.sleep(0.25)
+    return None, None
 
 
 def _member_sect_center(gateway, name):
@@ -863,12 +900,21 @@ def _find_hop_teleport(gateway: str, target_name: str):
 
 
 def _teleport_by_desc(gateway, map_name, x, y):
-    """回退：/api/act/cross_map 1003 跨图+瞬移+1002 同步。返回 (ok, arrived)。"""
-    hop = _find_hop_teleport(gateway, map_name)
-    if not hop:
+    """回退：/api/act/cross_map 1003 跨图+瞬移+1002 同步。返回 (ok, arrived)。
+
+    ★2026-08-30：优先用 SECT_DESC_DIRECT（实图 dump 的全局直达 desc，任意位置可用），
+    未命中再查当前图传送表——修"凌波城等图找不到五庄观"导致的卡关。"""
+    desc = SECT_DESC_DIRECT.get(map_name) if map_name else None
+    use_xy = None
+    if not desc:
+        hop = _find_hop_teleport(gateway, map_name)
+        if hop:
+            desc, d_x, d_y = hop
+            use_xy = (d_x, d_y)
+    if not desc:
         return False, None
-    desc, d_x, d_y = hop
-    tx, ty = (x, y) if x is not None and y is not None else (d_x, d_y)
+    tx, ty = (x, y) if x is not None and y is not None else (
+        use_xy if use_xy else (80, 80))
     try:
         r = _http_json(gateway, "/api/act/cross_map",
                        {"desc": desc, "x": tx, "y": ty, "wait_ms": 3000, "sync": True},
@@ -932,7 +978,7 @@ def MPCG_teleport_sect(
     if bag_vis != "true":
         # ALT+E 键盘后台不可用（游戏读不到系统键盘状态表），PostMessage 点按钮有误差；
         # 直接 CALL 背包在游戏内开箱最稳
-        if not _open_bag(gateway):
+        if not _open_bag(gateway, hwnd):
             # 兜底：CALL 失败再用真实输入 ALT+E
             if input_controller is not None:
                 input_controller.press_key("alt+e")
@@ -1121,9 +1167,11 @@ def MPCG_accept_round(
                 "elapsed_ms": round((time.time() - t0) * 1000, 1)}
 
     # 4) 轮询读对话，点「准备好了」接受
+    # ★2026-08-30 竞态修复：CALL 返回后使者对话填充存在延迟，3s 窗口不够
+    #（实测手动 sleep 0.5s 后选项才就绪）→ 拉长到 5s 并每次读前小睡。
     clicked = False
     opts = []
-    ddl = time.time() + 3.0
+    ddl = time.time() + 5.0
     while time.time() < ddl:
         opts = _dialog_options(gateway)
         for o in opts:
@@ -1136,7 +1184,7 @@ def MPCG_accept_round(
                 break
         if clicked:
             break
-        time.sleep(0.2)
+        time.sleep(0.3)
     if not clicked:
         return {"ok": False, "message": "使者对话中未见「准备好了」有效选项（对话栏被其它菜单占用？）",
                 "source": "accept_round", "dialog": opts,

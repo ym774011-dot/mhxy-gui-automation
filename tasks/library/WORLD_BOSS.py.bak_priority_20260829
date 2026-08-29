@@ -61,12 +61,6 @@ except Exception:
     # 违反单一事实源）；实验指定网关请用函数 gateway= 参数。
     DEFAULT_GATEWAY = "http://127.0.0.1:18082"
 
-# 2026-08-29 分离网关：聊天公告独立网关（WORLD_BOSS_CHAT_GATEWAY）。
-# 建议配合主网关 MHXY_GW_MIN=1（纯 Lua 桥）+ 聊天网关 MHXY_GW_CHAT=1（仅嗅探）
-# 分进程隔离"网络数据嗅探"与"游戏内部 Lua 桥"，降低注入互为干扰导致崩溃的风险。
-# 未设置时公告走与主流程同一个 gateway（旧行为）。
-_CHAT_GW = os.environ.get("WORLD_BOSS_CHAT_GATEWAY") or ""
-
 # GUI 函数下拉框中文标注（core/task_library_manager._get_signature_str 约定：
 # 命中 title 时显示 "中文标题  |  原签名"）。2026-08-28。
 __function_meta__ = {
@@ -241,7 +235,6 @@ DEFAULT_TARGET_BOSSES = [
     "三界财神爷",    # 最高优先级（用户指定：三界财神爷＞知了王＞其他）
     "天降灵猴",      # 公告名
     "下凡的灵猴",    # 场景实体名（公告“天降灵猴”刷出的实体）
-    "新型冠状病毒",  # 2026-08-29 用户确认：与"下凡的灵猴"同为 P3 白名单，路过就近顺手打
     "妖魔",
     "鬼怪",
     "妖魔统领",
@@ -256,12 +249,11 @@ DEFAULT_TARGET_BOSSES = [
 
 # 监控地图列表（顺序 = 无公告时的轮换顺序）。
 # 有地图包的图走“真实走路”贴近；无地图包的图靠“BOSS周边随机落点瞬移”兜底。
-# 注意：本表 = 会出现世界 BOSS 的图；城镇枢纽（长安/长安城）不在此列，
-#   它们只作跨图传送中转（见 MAP_ROUTES / _find_exact_hop），永不刷 BOSS。
 DEFAULT_MONITORED_MAPS = [
     "东海湾",
     "江南野外",
     "建邺城",
+    "长安",
     "长寿村",
     "长寿郊外",  # 妖魔刷新图；校准走路（data/map_calibration/长寿郊外.json）
     "大唐国境",  # 妖魔刷新图；校准走路（2026-08-27 用户校准）
@@ -271,12 +263,6 @@ DEFAULT_MONITORED_MAPS = [
     "宝象国",   # BXG 地图包（2026-08-27 注册；星官“赐福”刷新图）
     "大唐境外",  # 校准走路（2026-08-27 用户校准）
 ]
-
-# 城镇枢纽图：永不刷世界 BOSS（用户 2026-08-29 定案：长安城不出怪物 BOSS）。
-# 这些图仅作为跨图传送中转（MAP_ROUTES / _find_exact_hop 仍保留其路线），
-# 不参与 farming 轮换、也不作为公告跨图目标——否则脚本会跑到城里空转找怪。
-# 用 _map_same 归一，避免“长安 / 长安城”双名漏判。
-NO_BOSS_CITY_MAPS = ("长安", "长安城")
 
 # BOSS → 可能刷新的地图（来源：2026-08-27 游戏公告原文截图）。
 # 用途：1) 公告只报 BOSS 名不报地图时，按此表兜底选图；
@@ -445,13 +431,9 @@ BOSS_BATTLE_KEYWORDS: Dict[str, List[str]] = {
     "妖魔":        ["让我来收拾你"],
     "鬼怪":        ["让我来收拾你"],
     "妖魔统领":    ["让我来收拾你", "收拾你"],
-    "妖魔头领":    ["让我来收拾你", "收拾你",
-                     "休得在此放肆", "放肆"],  # 2026-08-27 公告实际用词是"妖魔头领"（非"统领"）
-                                                    # 2026-08-29 截图：冥府头领红色选项"休得在此放肆"开战
+    "妖魔头领":    ["让我来收拾你", "收拾你"],  # 2026-08-27 公告实际用词是"妖魔头领"（非"统领"）
     "天降灵猴":    ["我来瞧瞧你的啥", "瞧瞧你的啥"],
     "下凡的灵猴":  ["我来瞧瞧你的啥", "瞧瞧你的啥"],
-    "新型冠状病毒": ["消灭它们", "消灭", "消杀", "收拾你"],  # 2026-08-29 新增：无实测截图，词条为候选；
-                                                           # 主要靠 call_dialog_battle 的宽松兜底捕获
     "知了王":      ["知了还这么嚣张？讨打！", "讨打", "嚣张"],
     "心魔":        ["消灭他们", "消灭", "前去消灭"],
     "二十八星宿":  ["请星君赐", "那我就不客气了", "不客气"],  # "请星君赐"前缀兼
@@ -475,7 +457,6 @@ for _s in _12_ZODIAC_BOSSES:
 DEFAULT_BATTLE_KEYWORDS = [
     "挑战", "战斗", "击杀", "抓捕", "制服", "对付", "消灭", "进入战斗", "讨伐",
     "降服",  # 十二生肖公告用词：“赶紧去降服它们”（2026-08-27 截图）
-    "休得在此放肆",  # 2026-08-29 截图：头领类 BOSS（冥府头领）红色开战选项
 ]
 
 # 超距确认框标志：CALL 后弹出的对话含这些字样 = 距离太远，需要走近后重试。
@@ -496,8 +477,6 @@ QUICK_CALL_MAX_TRIES = 3
 # 2026-08-28 C11：4→6 格。实测 CALL 命中最远 19.2 格（超距确认框阈值远比
 # 想象宽），4 格让边走边CALL多跑冤枉路；6 格在"少走路"与"防太远弹窗"间取衡。
 APPROACH_GRID_DISTANCE = 6.0
-# 2026-08-29 平级交叉攻击：异名目标相对同名最近目标的可接受额外距离（格），脚边异名可切换
-CROSS_NAME_NEAR_DIST = 6.0
 WALK_ARRIVAL_TIMEOUT = 30.0  # 走路贴近后等"离BOSS进范围"的上限（旧 90s 太长，怪在眼前干等）
 WALK_ARRIVAL_BOX = 20        # 2026-08-28 用户定案：落点 ±20 格内就算"走路到位"，
                              # 不再强制走到 4 格内才认（CALL 不中由后续补瞬移拉近）
@@ -508,7 +487,7 @@ WALK_STALL_TIMEOUT = 6.0     # 走路中途连续无位移上限（卡住/被打
 #   马上 CALL 目标，每 WALK_CALL_INTERVAL 秒 CALL 一次，绝无"到达后傻等固定延迟"。
 #   超时上限 = 距离 / 预计走路速度 + 余量（≈走到落点的时刻）；走完仍未中 →
 #   落点再补一次 CALL 兜底。接近目标即可 CALL 成功，无需精确站上坐标点。
-WALK_CALL_INTERVAL = 1.5     # 边走边CALL 节拍（秒）（2026-08-29 用户定案：0.5→1.5，降低走路期高频CALL对寻路的干扰/对对话框刷新的冲击）
+WALK_CALL_INTERVAL = 0.5     # 边走边CALL 节拍（秒）
 WALK_SPEED_GRID_SEC = 4.0    # 预计走路速度（格/秒），用于估算走路超时上限
 WALK_TIME_MARGIN = 5.0       # 走路时间估算余量（秒），覆盖起步/寻路绕行开销
 # 无地图包瞬移兜底落点：BOSS 周边随机环带半径范围（格）。绝不落在 BOSS 坐标上。
@@ -518,42 +497,7 @@ TELEPORT_RETRY_RANGE = (2.0, 4.0)
 
 # 必须名称完全相等才匹配的 BOSS（避免“妖魔”误中普通 NPC）。
 # 注意：扫描时“天降灵猴”的公告名可能对应场景实体“下凡的灵猴”，需同时注册。
-# 注意：妖魔统领已从本表移除（2026-08-29）——它与妖魔头领是同一只 BOSS，
-# 只是名字后缀不同（头领/统领），改由下方 SUFFIX_MATCH_BOSSES 统一按后缀识别，
-# 避免"避世统领"这类前缀变体因为不在精确表里被漏掉。
-EXACT_MATCH_BOSSES = ("知了王", "天降灵猴", "下凡的灵猴", "三界财神爷")
-
-# 2026-08-29 新增：后缀匹配表——BOSS 全名前缀不固定、只有后缀固定。
-#   妖魔头领 / 妖魔统领 是同一只 BOSS，只是后缀不同；且实测实体名前缀
-#   每次刷新都变（避世头领、净神头领、XX 统领…），只有后缀恒定。
-#   若按完整名进白名单，不同前缀的实体会被整体漏掉。
-#   匹配方式统一为 name.endswith(后缀)，同时作用于场景扫描 / 公告文本 / 优先级。
-SUFFIX_MATCH_BOSSES: Tuple[str, ...] = ("头领", "统领")
-# 后缀 → 代表类别（用于取战斗关键词与优先级档位）。
-#   两个后缀指向同一只 BOSS，统一归类到"妖魔头领"：
-#   "避世头领""净神统领"都能拿到"让我来收拾你"，且同处 PRI_TOULING 档。
-BOSS_SUFFIX_CATEGORY: Dict[str, str] = {
-    "头领": "妖魔头领",
-    "统领": "妖魔头领",
-}
-
-# 2026-08-29 新增：二十八星君 / 二十八星宿 公告专用锚点。
-#   句式："玉皇大帝特派二十八星君之一的娄金狗到东海湾附近……"
-#   兼容"二十八星宿"写法，以及"下凡至 / 降临 / 出现 / 到"等多种动词。
-#   星君名用惰性匹配（靠动词分词），地点段放宽到 20 字后在 Python 侧
-#   按已知地图名取最长命中（再长的修饰语如"附近一带"都会被自然剔除）。
-_STAR_LORD_SPAWN_RE = re.compile(
-    r"二十八星(?:君|宿)\s*(?:之)?\s*(?:一)?\s*(?:的)?\s*"
-    r"([^\s，,。、]{2,10}?)"
-    r"\s*(?:下凡至|下凡到|降临至|降临于|降临|出现在了|出现在|出现于|出现|到达|到|至|去往|前往|赶往)"
-    r"\s*([^\s，,。、]{2,20})"
-)
-# 公告文本里按后缀切 token：取后缀前 1~2 字作前缀（头领 / 统领 各生成一条）。
-#   限制 2 字的原因：放宽到 3+ 字会把"听说避世头领"的"听说"一起吞进来。
-_SUFFIX_TOKEN_RES = {
-    suf: re.compile(r"([^\s，,。、]{1,2}" + re.escape(suf) + r")")
-    for suf in SUFFIX_MATCH_BOSSES
-}
+EXACT_MATCH_BOSSES = ("知了王", "妖魔统领", "天降灵猴", "下凡的灵猴", "三界财神爷")
 
 # 击杀优先级（2026-08-28 用户修订）：数字越小越优先。
 # 根因修复：旧表只有财神爷/知了王，星宿/灵猴/生肖全落默认 2 与妖魔鬼怪同级，
@@ -572,57 +516,36 @@ _SUFFIX_TOKEN_RES = {
 # 2026-08-28 六定案（用户 21:02）：未登记(默认 2) 从 _boss_priority 移除——
 #   未登记实体一律视为非目标（不排序/不攻击），白名单+本表双重门控，
 #   防止未知 NPC/杂鱼被走近+CALL 空转。词缀类（"初出茅庐地煞星"）按类别子串归级。
-# 2026-08-29 用户定案：优先级档位常量（数字越小越优先）
-PRI_CAISHEN = 0      # 三界财神爷：唯一能触发抢占模式
-PRI_STARLORD = 1     # 二十八星君（娄金狗等 28 名）：公告点名，瞬移追击
-PRI_TOULING = 2      # *头领（前缀不定，后缀匹配） / 妖魔统领 —— 2026-08-29 用户定案：与知了王并列 P2
-PRI_ZHILIAO = 2      # 知了王 —— 2026-08-29 用户定案：由原 P2 降为与 *头领 并列 P2
-PRI_WHITELIST = 3    # 其余白名单：灵猴 / 十二生肖 / 天罡星 / 地煞星（2026-08-29：原 P4 → P3）
-PRI_TRASH = 4        # 妖族杂鱼：妖魔鬼怪 / 妖魔 / 鬼怪，垫底（2026-08-29：原 P5 → P4）
-
 BOSS_PRIORITY = {
-    "三界财神爷": PRI_CAISHEN,
-    "知了王": PRI_ZHILIAO,
-    "妖魔头领": PRI_TOULING,
-    "妖魔统领": PRI_TOULING,
+    "三界财神爷": 0,
+    "知了王": 1,
+    "天降灵猴": 1,
+    "下凡的灵猴": 1,
+    "地煞星": 1,
+    "天罡星": 1,
+    "妖魔头领": 2,
+    "妖魔统领": 2,
+    "妖魔鬼怪": 3,
+    "妖魔": 3,
+    "鬼怪": 3,
 }
-# 二十八星君 / 二十八星宿 28 个具体名（娄金狗等）：财神爷之后、头领/知了王之前
 for _n in _28_STAR_BOSSES:
-    BOSS_PRIORITY[_n] = PRI_STARLORD
-# 其余白名单：灵猴 / 新型冠状病毒 / 十二生肖 / 天罡地煞
-for _n in ("天降灵猴", "下凡的灵猴", "新型冠状病毒", "天罡星", "地煞星"):
-    BOSS_PRIORITY[_n] = PRI_WHITELIST
+    BOSS_PRIORITY[_n] = 1
 for _n in _12_ZODIAC_BOSSES:
-    BOSS_PRIORITY[_n] = PRI_WHITELIST
-# 妖族杂鱼：每小时 :10 常刷、数量多，垫底——打不完不用抢
-for _n in ("妖魔鬼怪", "妖魔", "鬼怪"):
-    BOSS_PRIORITY[_n] = PRI_TRASH
-
-# 顶级目标阈值：优先级 <= 此值属"顶级目标"——三界财神爷在场或公告出现即进入
-# 抢占模式，期间只打顶级目标；顶级目标全无才回落普通模式打白名单(P3)/杂鱼(P4)。
-# 顶级链：P0 财神爷 ＞ P1 二十八星君 ＞ P2 *头领 = 知了王
-TOP_TIER_PRIORITY = PRI_TOULING
-TOP_TIER_BOSS_NAMES = tuple(sorted(n for n, p in BOSS_PRIORITY.items()
-                                   if p <= TOP_TIER_PRIORITY))
+    BOSS_PRIORITY[_n] = 1
 
 # 2026-08-28 五定案：这批公告词/实体名视为"杂鱼"——公告不触发跨图，
 # 场景内排序永远垫底（其他 BOSS 打完才轮到它们）。
 LOW_PRIORITY_BOSSES = {"妖魔鬼怪", "妖魔", "鬼怪"}
 
-# 2026-08-29 用户定案重写：顶级目标抢占模式（原"财神爷独占抢占"升级）。
-#   优先级链：三界财神爷(P0) ＞ 二十八星宿(P1) ＞ 头领 = 统领 = 知了王(P2)
-#             ＞ 其余白名单(P3) ＞ 妖族杂鱼(P4)。
-#   触发：本图实扫到财神爷，或聊天公告出现财神爷 → 抢占并（必要时）瞬移到该图；
-#   抢占期间只打顶级目标（P0~P2），顺序同上；顶级全无 → 解除抢占，回落普通模式。
+# 2026-08-28 用户定案：三界财神爷"最最最优先"抢占模式。
+# 公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，期间绝不 CALL 其他怪；
+# 财神爷没了/被人锁定 → 解除抢占回落普通模式。普通模式除财神爷外无优先级。
 CAISHEN_BOSS = "三界财神爷"
-# 解除抢占的宽容度：顶级目标连扫这么多次仍为空才回落（2 次×0.5s 只容忍场景加载瞬间），
-# 绝不多轮干等——旧版"财神爷一没就立刻回落"会漏掉同图的知了王/妖魔头领。
+# 2026-08-28 用户四定案：财神爷图扫不到财神 → 立即回落（本图 CALL 其他 BOSS，
+# 没有其他再换图），绝不多轮干等。2 次×0.5s 间隔只容忍场景加载瞬间。
 CAISHEN_SCAN_MISS_LIMIT = 2
 CAISHEN_SCAN_MISS_GAP = 0.5
-
-
-# 2026-08-29 目标名单运行期登记：供 _boss_priority 对"名单内但未映射档位"的名字兜底为白名单档
-_RUN_TARGET_BOSSES = frozenset()
 
 
 def _boss_priority(name: str):
@@ -637,85 +560,7 @@ def _boss_priority(name: str):
     for cls in ("地煞星", "天罡星"):
         if cls in n:
             return BOSS_PRIORITY[cls]
-    # 后缀匹配（2026-08-29）："避世头领""净神头领"… 前缀每次刷新都变，
-    # 只有后缀恒定 → 归到该后缀代表类别的优先级（*_头领 = 妖魔头领档）。
-    for suf in SUFFIX_MATCH_BOSSES:
-        if n.endswith(suf):
-            return BOSS_PRIORITY[BOSS_SUFFIX_CATEGORY.get(suf, suf)]
-    # 2026-08-29 追加：本次运行目标名单内的未登记名 → 默认白名单档，避免被 _live_bosses 剔除非目标漏打
-    if n in _RUN_TARGET_BOSSES:
-        return PRI_WHITELIST
     return None
-
-
-def _is_top_tier(name: str) -> bool:
-    """是否"顶级目标"：P0 三界财神爷 / P1 二十八星宿 / P2 头领 = 统领 = 知了王。
-
-    顶级目标触发抢占模式——只要任一在场（或财神爷公告出现），就只打这一类，
-    绝不浪费轮次在 P3 白名单怪 / P4 妖族杂鱼上。
-    """
-    p = _boss_priority(name)
-    return p is not None and p <= TOP_TIER_PRIORITY
-
-
-def _dist2(x: Dict[str, Any], gx0: float, gy0: float) -> float:
-    """目标到角色 (gx0, gy0) 的距离平方。"""
-    return (x["gx"] - gx0) ** 2 + (x["gy"] - gy0) ** 2
-
-
-def _pick_target(live: List[Dict[str, Any]], gx0: float = 0.0, gy0: float = 0.0,
-                 only_top: bool = False, last_name: str = None):
-    """从候选里按 (优先级, 距离平方) 选目标。
-
-    :param only_top: True = 只在顶级目标(P0~P2)中选；顶级目标全无返回 None，
-        调用方据此判断"该解除抢占回落普通模式了"。
-    :param last_name: 2026-08-29 平级交叉攻击：上一次选中目标的名字，用于同级共享时
-        优先切换更近的异名目标（脚边异名优先），避免反复找同一只怪漏打其他目标。
-    """
-    pool = [x for x in live if _is_top_tier(x["name"])] if only_top else list(live)
-    if not pool:
-        return None
-    # 求本池最低优先级档（最优先的档）
-    minp = min(_boss_priority(x["name"]) for x in pool)
-    tier = [x for x in pool if _boss_priority(x["name"]) == minp]
-    if len(tier) <= 1:
-        return tier[0] if tier else None
-    # 同档多目标：先按名字分组，每组取距离平方(_dist2)最近代表
-    groups = {}
-    for x in tier:
-        groups.setdefault(x["name"], []).append(x)
-    reps = [min(g, key=lambda q: _dist2(q, gx0, gy0)) for g in groups.values()]
-    if len(reps) == 1 or last_name is None:
-        # 距离优先（原行为）
-        return min(tier, key=lambda q: _dist2(q, gx0, gy0))
-    # 把代表分成与 last_name 同名组 same 与异名组 diff
-    same = [x for x in reps if x["name"] == last_name]
-    diff = [x for x in reps if x["name"] != last_name]
-    if diff:
-        best_diff = min(diff, key=lambda q: _dist2(q, gx0, gy0))
-        best_same = min(same, key=lambda q: _dist2(q, gx0, gy0)) if same else None
-        if best_same is None:
-            return best_diff
-        # 切换条件：异名目标相对同名最近目标多出的距离 ≤ 容差(格) → 异名优先；否则太远不跑冤枉路
-        if _dist2(best_diff, gx0, gy0) <= (
-                _dist2(best_same, gx0, gy0) ** 0.5 + CROSS_NAME_NEAR_DIST) ** 2:
-            return best_diff
-        return best_same
-    # diff 为空：全部同名 → 距离最小者
-    return min(tier, key=lambda q: _dist2(q, gx0, gy0))
-
-
-def _live_bosses(scanned: List[Dict[str, Any]], excluded: set) -> List[Dict[str, Any]]:
-    """扫描结果 → 可攻击目标：剔 excluded（尸体/被锁实体）+ 未登记非目标。
-
-    excluded 为函数级黑名单（跨轮生效）：无战斗选项/已消失的实体不再重试
-    （2026-08-27 23:39 修复：原来每轮重置导致对 10 只赐福星官无限走近+CALL 空转）。
-    未登记实体（_boss_priority 返回 None）= 非目标（2026-08-28 六定案），
-    不排序/不攻击，也不阻塞清图判定与换图轮换。
-    """
-    return [x for x in scanned
-            if _boss_key(x) not in excluded
-            and _boss_priority(x["name"]) is not None]
 
 # 模块元数据（任务库注册用）
 MODULE_NAME = "WORLD_BOSS"
@@ -865,8 +710,6 @@ def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0
         with _urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
 
-    import urllib.error as _urllib_err
-
     down_since = None
     last_heal = 0.0
     last_dismiss = 0.0
@@ -876,14 +719,6 @@ def _http_json(gateway: str, path: str, data: dict = None, timeout: float = 10.0
             if down_since is not None:
                 logger.info(f"网关已恢复（失联/卡死 {time.time() - down_since:.0f}s），任务继续")
             return r
-        except _urllib_err.HTTPError as e:
-            # 2026-08-29 诊断：打印网关 4xx/5xx 的状态码与响应体（含具体 error）
-            try:
-                _b = e.read().decode("utf-8", "replace")[:400]
-            except Exception:
-                _b = ""
-            logger.warning(f"_http_json 网关返回 HTTP {e.code} {path}: {_b}")
-            raise
         except Exception as e:
             reason = getattr(e, "reason", None)
             refused = isinstance(reason, ConnectionRefusedError) or "10061" in str(e)
@@ -950,42 +785,11 @@ def _is_bridge_dead(err: str) -> bool:
             or "process not found" in e.lower())
 
 
-def _maybe_prepend_gc(code: str) -> str:
-    """节流式 GC 前置（2026-08-29 23:40 根因修复配套）。
-
-    lua51 内存不足直杀 exit 的缓解：不每趟都 GC（有开销/可能干扰扫描时序），
-    而是按周期（默认每 30 秒 / 每 200 次调用）在最外层 Lua 代码块前附带
-    ``collectgarbage("collect", 0)`` 一次增量回收。已带 GC 的代码不重复加。
-    """
-    global _last_gc_ts, _lua_call_count
-    _lua_call_count += 1
-    _now = _lua_call_count
-    import time as _t
-    _elapsed = _t.time() - _last_gc_ts
-    if "collectgarbage" in code or "需要GC加在开头" in code:
-        return code
-    if _elapsed >= 20.0 and _now % 1 == 0:
-        _last_gc_ts = _t.time()
-        return "-- 节流GC\ncollectgarbage(\"collect\", 0)\n" + code
-    return code
-
-
-_lua_call_count = 0
-import time as __tm
-_last_gc_ts = __tm.time()
-
-
 def _lua(gateway: str, code: str, result_var: str = "__out") -> str:
     """经 /api/lua 执行 Lua 语句块，返回 result_var 值字符串。
 
     frida 会话死亡（游戏重开换 PID）时自动自愈网关并重试一次。
-
-    2026-08-29 23:40 根因修复：lua51 内部 "not enough memory" 会直接 exit(1)
-    杀进程（Ghidra 逆向 FUN_1001f880 实锤）。主因是高频注入 Lua + 跨图装载把
-    game state 内存堆高。这里按节流周期在每个 Lua 代码块前附带一次增量 GC，
-    从源头缓解内存累积。
     """
-    code = _maybe_prepend_gc(code)
     r = _http_json(gateway, "/api/lua", {"code": code, "result_var": result_var})
     if not r.get("ok"):
         err = str(r.get("error", r))
@@ -1170,58 +974,7 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
       2. ★ 实测链路 _HOP_CHAINS：服务器对 desc 全局查表、不校验当前图和坐标，
          链式拼接从任意位置直达目标；
       3. 旧两段式（回长安枢纽再查表）——链路表未覆盖时的兜底。
-
-    2026-08-30 00:45 修复（用户指正，参照 SYHS._wait_map_switch）：
-      跨图包发出后**轮询 `tp.当前地图` 变为 target_map 的 ID** 才认为到位，
-      替代旧逻辑"依赖网关固定 sleep(3000~3500) + 行数/宽度(旧图残留误判)"。
-      网关侧 cross_map 内部也有 wait 逻辑，这里再轮询地图 ID 双保险——
-      杜绝"旧图数据还在就瞬移→新图未加载→画面格子/点击崩溃"。
-
-    2026-08-30 用户要求：跨图方法统一用 SYBUZ2 同款（= 调 SYHS）——
-      SYHS((x,y), target_location=目标图, wait_stable=False) 内部完成
-      _ONE_HOP 一步直达（map_switch → 轮询 tp.当前地图 → teleport），
-      SYBUZ2 整套实机跑稳；SYHS 未收录 target_map（花果山/北俱芦洲/
-      傲来国/大唐境外等）时回退下方 HOP 链/传送表两步式（同款骨架）。
-      禁止修改 SYBUZ2.py / SYHS.py。
     """
-    _target_id = _MAP_NAME_TO_ID.get(target_map) if target_map else None
-
-    def _confirm_map_switch(timeout: float = 12.0) -> bool:
-        """轮询 tp.当前地图 变为目标 ID（SYHS 同款，实测切图 ~340ms）。"""
-        if not _target_id:
-            return True   # 无名可查 → 不阻塞，靠网关侧兜底
-        t0 = time.time()
-        while time.time() - t0 < timeout:
-            try:
-                cur = str(_cur_map_id(gateway) or "")
-                if str(_target_id) == cur:
-                    return True
-            except Exception:
-                pass
-            time.sleep(0.3)
-        return False
-
-    # ---- 主路径（SYBUZ2 同款跨图）：SYHS 一步直达 + 落坐标复核 ----
-    try:
-        from tasks.library.SYHS import SYHS as _SYHS_cross
-        _cx, _cy = DEFAULT_MAP_CENTER.get(target_map, (80, 80))
-        if x is not None and y is not None:
-            _cx, _cy = int(x), int(y)
-        _sr = _SYHS_cross((_cx, _cy), target_location=target_map,
-                          gateway=gateway, wait_stable=False, verbose=False)
-        if _sr.get("ok"):
-            # SYHS 返回值 map_switch 非空 = 判定需跨图并完成切图；
-            # 为空 = 同图瞬移/不跨图。均复核地图名，到位即成功返回。
-            if _map_same(_cur_map_name(gateway), target_map):
-                return {"ok": True, "error": _sr.get("message"),
-                        "via": "SYHS" if _sr.get("map_switch") else "SYHS_no_switch",
-                        "map_switch": _sr.get("map_switch"),
-                        "detail": _sr.get("detail")}
-        logger.info(f"cross_map: SYHS 未切到 {target_map} "
-                    f"(map_switch={_sr.get('map_switch')} ok={_sr.get('ok')})，回退 HOP 链")
-    except Exception as e:
-        logger.warning(f"cross_map: SYHS 跨图异常({e})，回退 HOP 链")
-
     hop = (_find_exact_hop(gateway, target_map)
            or _find_exact_hop(gateway, target_map, sep="进", prefix_match=True)
            or _find_hop_teleport(gateway, target_map))
@@ -1233,79 +986,41 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
         if note:
             logger.warning(f"cross_map 坐标守门: desc={desc} 原始=({d_x},{d_y}) "
                            f"→ ({tx},{ty}) [{note}]")
-        # ★ 2026-08-30 用户指正（参照 SYHS/DSHNPC 同款两步式跨图）：
-        #   第 1 步只切图（/api/act/map_switch 发 1003，画面不动）→
-        #   轮询 tp.当前地图 变为目标 ID（不 sleep 盲等）→
-        #   第 2 步确认切图成功后才 teleport 落坐标（防止旧图残留/新图未加载
-        #   → 画面格子 + 点击崩溃）。若跨图失败则不瞬移，返回失败。
-        ms_resp = _http_json(gateway, "/api/act/map_switch",
-                             {"desc": desc}, timeout=25.0)
-        map_ok = _confirm_map_switch()
-        if not map_ok:
-            logger.warning(f"cross_map desc={desc} 地图未切到 {target_map} "
-                           f"(目标ID={_target_id})，放弃瞬移")
-            return {"ok": False, "error": f"跨图未完成: desc={desc}",
-                    "map_switch": ms_resp.get("result", ms_resp)}
-        # 切图成功后：瞬移落坐标（复用 teleport；含 1002 同步服务端）
-        tp_r = _http_json(gateway, "/api/act/teleport",
-                          {"x": int(tx), "y": int(ty), "sync": True, "jump": True},
-                          timeout=20.0)
-        return {"ok": bool(tp_r.get("ok")), "error": tp_r.get("error"),
-                "map_switch": ms_resp.get("result", ms_resp),
-                "teleport": tp_r.get("result", tp_r), "via": "map_switch+teleport"}
+        return _http_json(gateway, "/api/act/cross_map",
+                          {"desc": desc, "x": int(tx), "y": int(ty),
+                           "wait_ms": 3500, "sync": True}, timeout=25.0)
     # 实测链路兜底（2026-08-27）：desc 全局查表 → 链式拼接从任意位置直达。
     # 2026-08-28 B6 修复：旧实现每步发完请求不查结果，链中一步被吞整链错位
     # （后续 hop 都基于错误起点）。现在每步查 HTTP ok，失败静默重发一次。
-    # 2026-08-30：每步改为"map_switch + 轮询地图 ID"，切到才算成功。
     chain = _HOP_CHAINS.get(target_map)
     if chain:
         for desc in chain:
             for _attempt in (1, 2):
-                r = _http_json(gateway, "/api/act/map_switch",
-                               {"desc": desc}, timeout=25.0)
+                r = _http_json(gateway, "/api/act/cross_map",
+                               {"desc": desc, "x": 100, "y": 100,
+                                "wait_ms": 3000, "sync": True}, timeout=25.0)
                 if isinstance(r, dict) and r.get("ok"):
                     break
                 logger.warning(f"hop 链步骤失败({'重试' if _attempt == 1 else '放弃'}): "
                                f"desc={desc} resp={r}")
                 time.sleep(1.0)
-            # ★ 2026-08-30：轮询地图 ID，切到了才进下一步
-            if _confirm_map_switch(timeout=10.0):
-                break
-            time.sleep(0.5)
-        # 链条切到目标图后：瞬移落坐标（2026-08-30 补，防止停在图入口）
-        tx, ty = (x, y) if (x is not None and y is not None) else (100, 100)
-        tx, ty, note = _norm_grid_xy(tx, ty, target_map)
-        if note:
-            logger.warning(f"hop_chain 坐标守门: ({x},{y}) → ({tx},{ty}) [{note}]")
-        tp_r = _http_json(gateway, "/api/act/teleport",
-                          {"x": int(tx), "y": int(ty), "sync": True, "jump": True},
-                          timeout=20.0)
-        return {"ok": bool(tp_r.get("ok")), "error": tp_r.get("error"),
-                "via": "hop_chain", "teleport": tp_r.get("result", tp_r)}
+            time.sleep(1.2)  # 2026-08-28 提速轮：1.8→1.2（网关 sync+wait_ms 已等主程）
+        return {"ok": True, "error": None, "via": "hop_chain"}
     # 两段式：回长安枢纽
     hub_hop = (_find_exact_hop(gateway, "长安")
                or _find_exact_hop(gateway, "长安", sep="进", prefix_match=True))
     if hub_hop:
         h_desc, h_x, h_y = hub_hop
-        # 2026-08-30：统一 map_switch + 轮询地图 ID（替换旧 cross_map+固定sleep）
-        ms1 = _http_json(gateway, "/api/act/map_switch",
-                         {"desc": h_desc}, timeout=25.0)
-        _chg1 = _confirm_map_switch(timeout=10.0)
-        if not _chg1:
-            return {"ok": False, "error": f"回长安未完成: {h_desc}",
-                    "map_switch": ms1.get("result", ms1)}
+        _http_json(gateway, "/api/act/cross_map",
+                   {"desc": h_desc, "x": int(h_x), "y": int(h_y),
+                    "wait_ms": 3500, "sync": True}, timeout=25.0)
+        time.sleep(1.5)   # 等切图稳定，长安传送表才可读
         hop2 = _find_exact_hop(gateway, target_map)
         if hop2:
             desc2, x2, y2 = hop2
-            _http_json(gateway, "/api/act/map_switch", {"desc": desc2}, timeout=25.0)
-            _chg2 = _confirm_map_switch(timeout=10.0)
-            if not _chg2:
-                return {"ok": False, "error": f"长安→{target_map} 未完成: {desc2}"}
-            tp2 = _http_json(gateway, "/api/act/teleport",
-                             {"x": int(x2), "y": int(y2), "sync": True, "jump": True},
-                             timeout=20.0)
-            return {"ok": bool(tp2.get("ok")), "error": tp2.get("error"),
-                    "via": "hub_chain", "teleport": tp2.get("result", tp2)}
+            return _http_json(gateway, "/api/act/cross_map",
+                              {"desc": desc2, "x": int(x2), "y": int(y2),
+                               "wait_ms": 3500, "sync": True}, timeout=25.0)
         return {"ok": False,
                 "error": f"长安传送表无到 '{target_map}' 的路线（需手工确认该图开放传送）"}
     return {"ok": False,
@@ -1320,17 +1035,6 @@ def _cur_map_name(gateway: str) -> str:
         return MAP_ID_TO_NAME.get(v, v)
     except Exception:
         return ""
-
-
-def _cur_map_id(gateway: str) -> Optional[int]:
-    """读取当前地图数字 ID（tp.当前地图）；失败返回 None。"""
-    try:
-        v = _lua_expr(gateway, "tostring(tp.当前地图 or '')").strip()
-        if v:
-            return int(v)
-    except Exception:
-        pass
-    return None
 
 
 def _in_battle(gateway: str) -> bool:
@@ -1571,8 +1275,7 @@ def fetch_recv_announcements(gateway: str, channel=("xt", "cw")) -> List[Dict[st
     now = time.time()
     if now - _ANN_CACHE["t"] < _ANN_CACHE_TTL:
         return _ANN_CACHE["items"]
-    chat_gw = _CHAT_GW or gateway   # 2026-08-29 分离网关：公告走独立聊天网关
-    r = _http_json(chat_gw, "/api/net/recvall", None, timeout=30.0)
+    r = _http_json(gateway, "/api/net/recvall", None, timeout=30.0)
     # 网关异常时 result 为 null（如 frida 脚本销毁），安全降级为空列表
     if not isinstance(r, dict):
         return []
@@ -1625,39 +1328,6 @@ def probe_chat_raw(gateway: str, lines: int = 200) -> List[str]:
     return msgs[-int(lines):] if lines else msgs
 
 
-def _match_map_in_text(chunk: str, extra_maps: List[str] = None) -> Optional[str]:
-    """从地点片段里挑出已知地图名（最长匹配优先）。
-
-    二十八星君公告的地点后面常跟"附近/一带"等修饰，且不保证在监控轮换表里。
-    这里对全部已知地图名（调用方监控表 + 地图包表 + MAP_ID_TO_NAME + 默认落点）
-    取最长命中，天然剔除"东海湾附近搜寻有仙缘之人"这类尾巴。
-    """
-    cands = list(extra_maps or []) + list(_MAP_MODULE_NAMES) \
-        + list(MAP_ID_TO_NAME.values()) + list(DEFAULT_MAP_CENTER)
-    hit = None
-    for mp in cands:
-        # 2026-08-29 用户定案：城镇枢纽图（长安/长安城）永不刷 BOSS，
-        # 即便已注册地图包也不作为跨图目标解析出来。
-        if mp and mp not in NO_BOSS_CITY_MAPS and mp in chunk \
-                and (hit is None or len(mp) > len(hit)):
-            hit = mp
-    return hit
-
-
-
-def _pick_boss_name(boss_names) -> str:
-    """从命中集合里挑【优先级最高】的 BOSS 名（同级按名称稳定排序）。
-
-    2026-08-29 修复：旧逻辑 sorted(...)[0] 是按字典序取，
-    “妖魔头领气得正在傲来国寻衅闹事”会同时命中「妖魔」与「妖魔头领」，
-    字典序取到「妖魔」(P5 杂鱼) → 该公告被 LOW_PRIORITY_BOSSES 过滤，
-    妖魔头领公告永远不触发跨图。改为按 _boss_priority 取最高优先级。
-    """
-    return sorted(boss_names, key=lambda b: (
-        99 if _boss_priority(b) is None else _boss_priority(b), b))[0]
-
-
-
 def parse_spawn_notification(
     text: str,
     target_bosses: List[str],
@@ -1683,27 +1353,6 @@ def parse_spawn_notification(
             if cls in m_gen.group(1):
                 boss_names.add(cls)
                 break
-    # 0.5) 二十八星君公告专用锚点（2026-08-29 新增）
-    #   句式："玉皇大帝特派二十八星君之一的娄金狗到东海湾附近……"
-    #   星君名（娄金狗）与地点（东海湾）都在句中，但地点可能不在监控轮换表里，
-    #   通用解析器（"文本里出现了哪个监控地图名"）会整条漏掉 → 专用正则提
-    #   [星君名] + [地点]，命中即返回。
-    #   注意：这里必须按调用方传入的 target_bosses 过滤——外层查财神爷公告时
-    #   传的是 [三界财神爷]，若不加过滤会把星君公告误判成财神爷公告。
-    m_sl = _STAR_LORD_SPAWN_RE.search(t)
-    if m_sl:
-        sl_name = (m_sl.group(1) or "").strip()
-        sl_map = _match_map_in_text(m_sl.group(2) or "", monitored_maps)
-        # 星君名可能夹颜色码/语气词，兜底：句中出现的二十八星宿具体名
-        if sl_name not in _28_STAR_BOSSES:
-            for _s in _28_STAR_BOSSES:
-                if _s in t:
-                    sl_name = _s
-                    break
-        if sl_map and sl_name in set(target_bosses):
-            return {"boss": sl_name, "map": sl_map, "maps": [sl_map],
-                    "text": t, "map_source": "starlord_notice"}
-
     # 1) 展开公告中的 BOSS 关键词为实体名集合
     for kw, aliases in _BOSS_ALIASES.items():
         if kw in t:
@@ -1712,25 +1361,13 @@ def parse_spawn_notification(
     for b in target_bosses:
         if b and b in t:
             boss_names.add(b)
-    # 1b) 后缀匹配（2026-08-29）：公告里的 BOSS 全名前缀不定
-    #     （"避世头领""净神头领"…），只有后缀"头领"恒定，全名进不了白名单。
-    #     按后缀抽 token 单独收集，下方跳过白名单过滤、改由 _boss_priority 校验。
-    suffix_names = set()
-    for suf, _rx in _SUFFIX_TOKEN_RES.items():
-        for m_suf in _rx.finditer(t):
-            tok = (m_suf.group(1) or "").strip()
-            if tok:
-                suffix_names.add(tok)
-    if not boss_names and not suffix_names:
+    if not boss_names:
         return None
     # 过滤到目标集
     tgt = set(target_bosses)
     boss_names = {b for b in boss_names if b in tgt}
-    # 后缀名按定义不在白名单里 → 靠后缀规则命中即放行
-    boss_names |= {b for b in suffix_names if _boss_priority(b) is not None}
     if not boss_names:
         return None
-
     # 2) 提取地图名（含别名归一）
     maps_found = []
     normalized = t
@@ -1740,12 +1377,8 @@ def parse_spawn_notification(
     for mp in monitored_maps:
         if mp in normalized and mp not in maps_found:
             maps_found.append(mp)
-    # 有地图包的图一律可定位（即使不在监控轮换表里，也能跨图去打）。
-    # 2026-08-29 用户定案：长安/长安城 是城镇枢纽、永不刷 BOSS，虽注册地图包
-    # 也不作为跨图目标（否则脚本会跑到城里空转找怪）。
+    # 有地图包的图一律可定位（即使不在监控轮换表里，也能跨图去打）
     for extra in _MAP_MODULE_NAMES:
-        if extra in NO_BOSS_CITY_MAPS:
-            continue
         if extra in normalized and extra not in maps_found:
             maps_found.append(extra)
     if not maps_found:
@@ -1758,21 +1391,11 @@ def parse_spawn_notification(
                     fallback.append(mp)
         if not fallback:
             return None
-        return {"boss": _pick_boss_name(boss_names), "map": fallback[0],
+        return {"boss": sorted(boss_names)[0], "map": fallback[0],
                 "maps": fallback, "text": t, "map_source": "spawn_table"}
-    boss = _pick_boss_name(boss_names)
-    # 2026-08-29 修复：多图公告（系统：妖魔在 A、B、C 出没）原先永远取 monitored_maps
-    # 顺序第一张（东海湾），导致多图事件永远只去同一个图。改为随机抽取一张作为
-    # 首次跨图目标，并在返回结果里标记 force_cross——多图事件属于系统召唤，
-    # 即使是妖魔/鬼怪等 LOW_PRIORITY 也应触发跨图（否则公告等于没意义）。
-    if len(maps_found) > 1:
-        chosen_map = random.choice(maps_found)
-        force_cross = True
-    else:
-        chosen_map = maps_found[0]
-        force_cross = False
-    return {"boss": boss, "map": chosen_map, "maps": maps_found,
-            "text": t, "map_source": "notice", "force_cross": force_cross}
+    boss = sorted(boss_names)[0]
+    return {"boss": boss, "map": maps_found[0], "maps": maps_found,
+            "text": t, "map_source": "notice"}
 
 
 def find_latest_spawn(
@@ -1812,9 +1435,6 @@ def scan_scene_bosses(
 ) -> List[Dict[str, Any]]:
     """扫描 tp.场景.场景人物 + tp.临时Npc，返回匹配目标 BOSS 的候选列表。"""
     code = r'''
--- 2026-08-29 23:40 根因修复（lua51 not enough memory 直杀 exit）：扫描前触发
--- 增量式 GC，释放跨图/脚本装载堆起的 Lua 内存，缓解 lua51 分配失败退出。
-collectgarbage("collect", 0)
 local out = {}
 local function scan(tbl, src)
   if type(tbl) ~= "table" then return end
@@ -1844,38 +1464,27 @@ _G.__out = table.concat(out, ";")
             continue
         uid, name, gx, gy, model, src = parts[:6]
         bsid = parts[6] if len(parts) > 6 else ""
-        hit = None
         for boss in target_bosses:
             matched = (name == boss) if boss in exact_match else ((boss in name) or (name == boss))
             if matched:
-                hit = boss
+                try:
+                    # 2026-08-28 A4 修复：格子x/格子y 可能是浮点（如 "10.5"），
+                    # 旧 int("10.5") 直接 ValueError → 实体被静默丢掉
+                    bgx, bgy = int(float(gx)), int(float(gy))
+                    # 2026-08-28 守门：实体兜底字段 u.x/u.y 可能是内部像素坐标，
+                    # >GRID_SANITY_MAX 判为像素 → ÷20 转网格，否则环带瞬移会出界
+                    if abs(bgx) > GRID_SANITY_MAX or abs(bgy) > GRID_SANITY_MAX:
+                        bgx, bgy = round(bgx / 20.0), round(bgy / 20.0)
+                        logger.warning(f"BOSS 坐标守门: {name} 原始=({gx},{gy}) → ({bgx},{bgy}) [像素→网格÷20]")
+                    cands.append({
+                        "id": uid, "name": name,
+                        "gx": bgx, "gy": bgy, "model": model,
+                        "src": src, "boss_pattern": boss,
+                        "bsid": bsid,
+                    })
+                except ValueError:
+                    pass
                 break
-        if hit is None:
-            # 后缀匹配（2026-08-29）：BOSS 全名前缀不固定（"避世头领""净神头领"…），
-            # 只有后缀"头领"恒定。若按完整名进白名单，不同前缀的实体会被整体漏掉，
-            # 这里改为 endswith 命中，不再要求全名登记。
-            for suf in SUFFIX_MATCH_BOSSES:
-                if name.endswith(suf):
-                    hit = suf
-                    break
-        if hit is not None:
-            try:
-                # 2026-08-28 A4 修复：格子x/格子y 可能是浮点（如 "10.5"），
-                # 旧 int("10.5") 直接 ValueError → 实体被静默丢掉
-                bgx, bgy = int(float(gx)), int(float(gy))
-                # 2026-08-28 守门：实体兜底字段 u.x/u.y 可能是内部像素坐标，
-                # >GRID_SANITY_MAX 判为像素 → ÷20 转网格，否则环带瞬移会出界
-                if abs(bgx) > GRID_SANITY_MAX or abs(bgy) > GRID_SANITY_MAX:
-                    bgx, bgy = round(bgx / 20.0), round(bgy / 20.0)
-                    logger.warning(f"BOSS 坐标守门: {name} 原始=({gx},{gy}) → ({bgx},{bgy}) [像素→网格÷20]")
-                cands.append({
-                    "id": uid, "name": name,
-                    "gx": bgx, "gy": bgy, "model": model,
-                    "src": src, "boss_pattern": hit,
-                    "bsid": bsid,
-                })
-            except ValueError:
-                pass
     return cands
 
 
@@ -1971,8 +1580,6 @@ def call_dialog_battle(gateway: str, keywords: List[str]) -> Tuple[bool, str]:
     原子执行零间隙。"""
     deny_lit = _lua_str_list(_BATTLE_DENY_OPTIONS)
     kw_lit = _lua_str_list(keywords)
-    soft_lit = _lua_str_list(["杀", "灭", "打", "战", "应战", "教训",
-                              "领教", "收拾", "降服", "制服"])
     code = f'''
 local deny = {deny_lit}
 local kws = {kw_lit}
@@ -1999,25 +1606,6 @@ for i = 1, 20 do
   if in_list(text, kws) and not in_list(text, deny) then
     hit_i, hit_text = i, tostring(o.基本内容 or "")
     break
-  end
-end
--- ①b 2026-08-29 宽松兜底：具体名无词条（如"新型冠状病毒"尚无实测文案）时，
---     选第一个 含战斗动作字 + 非黑名单 + 有跳转链接 的选项，保证能开战。
-if not hit_i then
-  local soft_kw = {soft_lit}
-  for i = 1, 20 do
-    local o = opts[i]
-    if type(o) ~= "table" then break end
-    local text = opt_text(o)
-    if tostring(o.跳转链接 or "") ~= "" and not in_list(text, deny) then
-      for _, w in ipairs(soft_kw) do
-        if w ~= "" and string.find(text, w, 1, true) then
-          hit_i, hit_text = i, tostring(o.基本内容 or "")
-          break
-        end
-      end
-    end
-    if hit_i then break end
   end
 end
 if not hit_i then _G.__out = "false|NOMATCH|"; return end
@@ -2055,12 +1643,6 @@ def _boss_battle_keywords(boss_name: str, fallback: List[str]) -> List[str]:
         "下凡的灵猴": ["下凡的灵猴", "天降灵猴"],
     }
     names = aliases.get(boss_name, [boss_name])
-    # 后缀匹配（2026-08-29）：实体名前缀不定（"避世头领""净神头领"…），
-    # 只有后缀固定 → 追加该后缀的代表类别，保证专用战斗文案排在最前
-    # （如"避世头领"拿到 妖魔头领 的"让我来收拾你"）。
-    for suf, cat in BOSS_SUFFIX_CATEGORY.items():
-        if boss_name != suf and boss_name.endswith(suf):
-            names.append(cat)
     kws: List[str] = []
     for n in names:
         kws.extend(BOSS_BATTLE_KEYWORDS.get(n, []))
@@ -2511,7 +2093,7 @@ def _farm_one_boss(
     流程（全程无"到达后傻等固定延迟"）：
       1) 原地立即 CALL 一次（怪在面前/近距离 → 直接命中开打，最快路径）；
       2) 超距/未中 → 走路贴近：点击地图目标坐标后 **立即关大图**，马上开 CALL，
-         每 WALK_CALL_INTERVAL(1.5s) CALL 一次，超时上限=距离/预计走路速度+余量，
+         每 WALK_CALL_INTERVAL(0.5s) CALL 一次，超时上限=距离/预计走路速度+余量，
          走完仍未中 → 落点补一次 CALL 兜底；接近即可命中，无需精确站上坐标；
       3) 走路不可用/未启动/走完仍超距 → 瞬移环带拉近（approach 内部）→ 落地补 CALL。
     CALL 成功立即进战斗，整个移动链（走路→瞬移）都在 _approach_boss 内一次完成。
@@ -2667,33 +2249,21 @@ def WORLD_BOSS_auto_farm(
 ) -> dict:
     """世界BOSS自动监控 farming 主入口。
 
-    优先级（2026-08-29 用户定案，数字越小越优先）：
-      P0 三界财神爷 ＞ P1 二十八星宿
-         ＞ P2 *头领 = 统领 = 知了王
-         ＞ P3 其余白名单(灵猴/十二生肖/天罡地煞)
-         ＞ P4 妖族杂鱼(妖魔鬼怪/妖魔/鬼怪)垫底
-      0) 顶级目标抢占（P0~P2）：
-         本图实扫到 三界财神爷，或聊天公告出现 三界财神爷 → 进入抢占；
-         抢占期间只打 财神爷 ＞ 二十八星宿 ＞ *头领 = 知了王，绝不碰 P3/P4；
-         顶级全无（连扫 CAISHEN_SCAN_MISS_LIMIT 次）→ 解除抢占；
-      1) 解除抢占后：先按优先级清本图其余白名单 BOSS（不被公告拉走），
-         本图清空才响应聊天公告跨图；
-      2) 聊公告天（入口信号） > 到图 Lua 实扫白名单怪（权威）；
-      3) 本图实扫无任何白名单 BOSS → 立即瞬移换图，换图后仍按上述优先级链打；
-      4) 妖族杂鱼(P4)公告不触发跨图（LOW_PRIORITY_BOSSES 过滤），
-         只在场景内顺手清；未登记实体（_boss_priority=None）=
-         非目标，不排序不攻击（六定案）；
-      5) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
+    优先级（2026-08-28 五定案）：
+      0) 三界财神爷抢占：公告出现（未进战斗/刚离战）→ 立即瞬移财神爷图，
+         期间绝不 CALL 其他怪；财神爷没了/被锁定 → 回落普通模式；
+      1) 聊天公告（入口信号） > 到图 Lua 实扫白名单怪（权威）；
+      2) 普通模式按 BOSS_PRIORITY 排序：稀有(1) > 头领/统领(2) >
+         妖魔鬼怪/妖魔/鬼怪(3)垫底；同优先级距离近先打。
+         妖族杂鱼公告不触发跨图（LOW_PRIORITY_BOSSES 过滤），
+         只在场景轮换时顺手清——其他 BOSS 打完才轮到它们；
+         未登记实体（优先级 None）=非目标，不排序不攻击（六定案）；
+      3) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
     """
     monitored_maps = monitored_maps or list(DEFAULT_MONITORED_MAPS)
     target_bosses = target_bosses or list(DEFAULT_TARGET_BOSSES)
     spawn_patterns = spawn_patterns or list(DEFAULT_SPAWN_PATTERNS)
     battle_keywords = battle_keywords or list(DEFAULT_BATTLE_KEYWORDS)
-    # 2026-08-29 平级交叉攻击配套：登记本次运行目标名单，供 _boss_priority 对
-    # "名单内但未映射档位"的名字兜底为白名单档（如用户新增"新型冠状病毒"类），
-    # 避免被 _live_bosses 当"未登记非目标"剔除漏打。
-    global _RUN_TARGET_BOSSES
-    _RUN_TARGET_BOSSES = frozenset(target_bosses)
     # 2026-08-28 B8 修复：监控表去重——同图双名（如 建邺城/宝象国 同为 1501）
     # 只保留首个，否则轮换会在两名之间空转切图（_map_same 归一后再判重）。
     _deduped: List[str] = []
@@ -2701,10 +2271,6 @@ def WORLD_BOSS_auto_farm(
         if not any(_map_same(_m, _k) for _k in _deduped):
             _deduped.append(_m)
     monitored_maps = _deduped
-    # 2026-08-29 用户定案：剔除“永不刷 BOSS 的城镇枢纽图”——既不进 farming 轮换、
-    # 也不作公告跨图目标（长安城实测无怪物 BOSS，跑过去只空转）。双名归一防漏判。
-    monitored_maps = [m for m in monitored_maps
-                      if not any(_map_same(m, c) for c in NO_BOSS_CITY_MAPS)]
 
     # 0) 启动自绑：走路通道必须先于任何 BOSS 交互就绪
     _ensure_walker_bound(gateway, verbose)
@@ -2721,11 +2287,10 @@ def WORLD_BOSS_auto_farm(
     ann_cleared = False     # 该公告对应的图是否已被判清图
     unreachable = {}        # 跨图失败的图 -> 冷却截止时间戳（2026-08-28）
     recent_maps = _deque(maxlen=3)  # 近期去过的图（换图避让，2026-08-28 实扫定案配套）
-    # 2026-08-29 用户定案：顶级目标（P0 财神爷 / P1 星宿 / P2 头领=知了王）抢占状态
-    caishen_pinned = None       # {"map","text","src"}：抢占激活中（期间只打 P0~P2）
-    top_ann_seen = set()        # 已消费的顶级目标公告原文（防同一条反复抢占）
-    caishen_scan_miss = 0       # 抢占图内连续无顶级目标的复扫计数
-    last_name = None   # 2026-08-29 平级交叉攻击：上一次选中目标的名字
+    # 2026-08-28 三界财神爷抢占模式状态
+    caishen_pinned = None       # {"map","text"}：抢占激活中（期间只打财神爷）
+    caishen_seen_texts = set()  # 已消费的财神爷公告原文（防同一条反复抢占）
+    caishen_scan_miss = 0       # 财神爷图连续无实体复扫计数
     print("=== WORLD_BOSS_auto_farm 开始 ===", flush=True)
     print(f"  监控地图={monitored_maps}", flush=True)
     print(f"  目标BOSS={target_bosses[:10]}{'...' if len(target_bosses)>10 else ''}", flush=True)
@@ -2746,10 +2311,12 @@ def WORLD_BOSS_auto_farm(
                 break
             continue
 
-        just_unpinned = False    # 本轮是否刚解除顶级抢占（解除后先清本图）
-        # 0.4) 战斗态守门（2026-08-28 A3 修复）：战斗超时退出后角色可能仍在战斗中，
-        #      主循环此前无守门，会在战斗态跨图/瞬移（瞬移包被服务器丢弃还浪费轮次）。
-        #      战斗中等待自然结束。
+        # 0.4) 战斗态守门 + 财神爷在场直接领取（2026-08-28 用户四定案，最高优先）：
+        #      三界财神爷已出现在当前场景（就在面前）→ 最优先动作是直接 CALL 领取，
+        #      绝不跨图、绝不先去"查看公告"/响应其他公告——"查看"只是信息动作，
+        #      永远低于"目标在场直接领取"。
+        # 2026-08-28 A3 修复：战斗超时退出后角色可能仍在战斗中，主循环此前无守门，
+        # 会在战斗态跨图/瞬移（瞬移包被服务器丢弃还浪费轮次）。战斗中等待自然结束。
         # 2026-08-28 B5 修复：每轮只做一次全量场景扫描，0.4 与 step2 共享结果
         # （旧逻辑 0.4 扫一次 + step2 再扫一次，双倍 Lua dump 开销）。
         in_battle = _in_battle(gateway)
@@ -2762,114 +2329,91 @@ def WORLD_BOSS_auto_farm(
                 break
             continue
         scanned = scan_scene_bosses(gateway, target_bosses)
-        live_here = _live_bosses(scanned, excluded)
+        cs_here = [x for x in scanned
+                   if x["name"] == CAISHEN_BOSS and _boss_key(x) not in excluded]
+        if cs_here:
+            b = cs_here[0]
+            if verbose:
+                print(f"[{int(time.time()-t0)}s] ⚡ 财神爷就在面前（{cur_map or '?'} "
+                      f"{b['gx']},{b['gy']}）→ 直接领取，不切图", flush=True)
+            kw = _boss_battle_keywords(b["name"], list(battle_keywords))
+            real_map = _cur_map_name(gateway) or cur_map or ""
+            res = _farm_one_boss(gateway, b, kw, battle_timeout,
+                                 walk_background, verbose, real_map)
+            if res.get("ok") and res.get("battle_ended"):
+                farmed_total += 1
+                print(f"  ✓ 击杀 三界财神爷（累计 {farmed_total}）", flush=True)
+            else:
+                reason = res.get("reason") or "failed"
+                print(f"  ✗ 三界财神爷 跳过: {reason} {res.get('msg')}", flush=True)
+                excluded.add(_boss_key(b))
+            continue
 
-        # 0.5) 顶级目标抢占模式（2026-08-29 用户定案，全局最高优先级）
-        #   优先级链：三界财神爷(P0) ＞ 知了王(P1) ＞ 妖魔头领(P2)
-        #             ＞ 其余白名单(P3) ＞ 妖族杂鱼(P4)
-        #   进入条件（满足任一）：
-        #     A) 本图实扫到 三界财神爷 实体 → 就地抢占，绝不切图；
-        #     B) 聊天公告出现 三界财神爷 → 抢占并瞬移到公告图；
-        #     C) 已抢占中且图内仍有 P0~P2 顶级目标 → 维持抢占。
-        #   抢占期间只打 P0~P2（财神爷 ＞ 星宿 ＞ 头领=知了王），三者全无 →
-        #   解除抢占，回落普通模式：本图其余白名单 BOSS 按 P3/P4 优先级打。
-        if caishen_pinned is None:
-            cs_here = [x for x in live_here if x["name"] == CAISHEN_BOSS]
-            if cs_here:
-                # A) 财神爷就在面前：就地抢占
-                caishen_pinned = {"map": _cur_map_name(gateway) or cur_map or "",
-                                  "text": None, "src": "scene"}
+        # 0.5) 三界财神爷抢占模式（2026-08-28 用户定案：最最最优先）。
+        #      未进战斗时财神爷公告出现 → 立即瞬移财神爷图，期间绝不 CALL 其他怪；
+        #      财神爷没了/被人锁定 → 解除抢占回落普通模式（该图其他怪照常打）。
+        #      2026-08-28 四定案：公告随时查看；财神爷图没财神 → 本图 CALL 其他
+        #      BOSS，没有其他再换图（复扫上限已收紧为 2×0.5s）。
+        # 0.5 抢占检查复用 0.4 的 in_battle（战斗中已在上面 continue，此处必为 False）
+        if caishen_pinned is None and not in_battle:
+            cs_ann = find_latest_spawn(gateway, [CAISHEN_BOSS],
+                                       monitored_maps, spawn_patterns)
+            if cs_ann and cs_ann.get("text") not in caishen_seen_texts:
+                caishen_seen_texts.add(cs_ann.get("text"))
+                caishen_pinned = {"map": cs_ann["map"], "text": cs_ann.get("text")}
                 caishen_scan_miss = 0
                 if verbose:
-                    print(f"[{int(time.time()-t0)}s] ⚡ 财神爷就在面前（{cur_map or '?'}）"
-                          f" → 进入抢占模式，就地打顶级目标", flush=True)
-            else:
-                # B) 聊天公告
-                cs_ann = find_latest_spawn(gateway, [CAISHEN_BOSS],
-                                           monitored_maps, spawn_patterns)
-                if cs_ann and cs_ann.get("text") not in top_ann_seen:
-                    top_ann_seen.add(cs_ann.get("text"))
-                    caishen_pinned = {"map": cs_ann["map"], "text": cs_ann.get("text"),
-                                      "src": "chat"}
-                    caishen_scan_miss = 0
-                    if verbose:
-                        print(f"[{int(time.time()-t0)}s] ⚡ 财神爷公告抢占 → {cs_ann['map']}",
-                              flush=True)
-
+                    print(f"[{int(time.time()-t0)}s] ⚡ 财神爷公告抢占 → {cs_ann['map']}",
+                          flush=True)
         if caishen_pinned:
             cs_map = caishen_pinned["map"]
             if cs_map in unreachable and time.time() < unreachable[cs_map]:
                 if verbose:
-                    print(f"  ⚡ 财神爷图 {cs_map} 跨图冷却中 → 放弃抢占，回落普通模式",
-                          flush=True)
+                    print(f"  ⚡ 财神爷图 {cs_map} 跨图冷却中 → 判放弃，回落普通模式", flush=True)
                 caishen_pinned = None
                 continue
-            # 已在本图则不重复跨图（_map_same 归一：建邺城 == 宝象国）
-            real_now = _cur_map_name(gateway) or ""
-            if not (real_now and _map_same(real_now, cs_map)):
-                if not _ensure_on_map(gateway, cs_map, None, None):
-                    unreachable[cs_map] = time.time() + 600
-                    if verbose:
-                        print(f"  ⚡ 跨图到财神爷图 {cs_map} 失败 → 放弃抢占", flush=True)
-                    caishen_pinned = None
-                    continue
-                cur_map = cs_map
-                recent_maps.append(cur_map)
-                scanned = None
-                live_here = _live_bosses(scan_scene_bosses(gateway, target_bosses), excluded)
-            # 抢占期间：只打顶级目标，同优先级取距离近的
-            rg = _role_grid(gateway)
-            gx0, gy0 = (rg[0], rg[1]) if rg else (0.0, 0.0)
-            b = _pick_target(live_here, gx0, gy0, only_top=True, last_name=last_name)
-            if b is not None:
-                last_name = b["name"]
-                caishen_scan_miss = 0
+            # 跨图（jump 链，0.3s 级）；失败入冷却并放弃抢占
+            if not _ensure_on_map(gateway, cs_map, None, None):
+                unreachable[cs_map] = time.time() + 600
                 if verbose:
-                    print(f"[{int(time.time()-t0)}s] ⚡ 抢占模式 → {b['name']}"
-                          f"(P{_boss_priority(b['name'])}) @ {cur_map} {b['gx']},{b['gy']}",
-                          flush=True)
-                real_map = _cur_map_name(gateway) or cur_map or ""
+                    print(f"  ⚡ 跨图到财神爷图 {cs_map} 失败 → 放弃抢占", flush=True)
+                caishen_pinned = None
+                continue
+            cur_map = cs_map
+            cs_list = scan_scene_bosses(gateway, [CAISHEN_BOSS])
+            if cs_list:
+                caishen_scan_miss = 0
+                b = cs_list[0]
                 kw = _boss_battle_keywords(b["name"], list(battle_keywords))
                 res = _farm_one_boss(gateway, b, kw, battle_timeout,
-                                     walk_background, verbose, real_map)
+                                     walk_background, verbose, cur_map)
                 if res.get("ok") and res.get("battle_ended"):
                     farmed_total += 1
-                    print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）", flush=True)
+                    print(f"  ✓ 击杀 三界财神爷 @ {cur_map}（累计 {farmed_total}）", flush=True)
                 else:
-                    # gone = 没了；no_battle_option = 被人锁定/占领 → 拉黑，下轮换目标
-                    print(f"  ✗ {b['name']} 跳过: {res.get('reason')} {res.get('msg')}",
-                          flush=True)
-                    excluded.add(_boss_key(b))
-                if not _sleep_stoppable(0.3):
-                    stopped = True
-                    break
-                continue      # 维持抢占：回外层重扫，再判顶级目标是否还在
-            # 顶级三目标全无：公告先到怪未刷 / 已被击杀 / 被人锁定 → 复扫几轮再判
-            caishen_scan_miss += 1
-            if caishen_scan_miss >= CAISHEN_SCAN_MISS_LIMIT:
-                if verbose:
-                    print(f"  ⚡ 财神爷/知了王/妖魔头领 均无（连扫 {caishen_scan_miss} 次）"
-                          f" → 解除抢占，回落普通模式打本图其余白名单 BOSS", flush=True)
-                caishen_pinned = None
-                just_unpinned = True   # 本轮先清本图，不被公告拉走
+                    # gone = 没了；no_battle_option = 被人锁定/占领 → 都解除抢占
+                    print(f"  ✗ 三界财神爷 跳过: {res.get('reason')} {res.get('msg')}", flush=True)
+                caishen_pinned = None  # 打完/没打成 → 回落普通模式
             else:
-                if not _sleep_stoppable(CAISHEN_SCAN_MISS_GAP):
-                    stopped = True
-                    break
-                continue
-        # 未抢占 / 刚解除抢占 → 落到 step1(公告跨图) / step2(本图按优先级清怪)
+                # 公告先到怪未刷 / 已被击杀消失：复扫几轮再判，绝不顺手打其他怪
+                caishen_scan_miss += 1
+                if caishen_scan_miss >= CAISHEN_SCAN_MISS_LIMIT:
+                    if verbose:
+                        print(f"  ⚡ 财神爷图 {caishen_scan_miss} 扫无财神实体 → "
+                              f"本图 CALL 其他 BOSS，没有再换图（回落普通模式）", flush=True)
+                    caishen_pinned = None
+                else:
+                    if not _sleep_stoppable(CAISHEN_SCAN_MISS_GAP):
+                        stopped = True
+                        break
+            continue  # 抢占期间不走普通公告/换图逻辑
 
         # 1) 聊天公告 → 目标地图
         # 2026-08-28 修复"过期公告拉扯"：recv 缓存里的老公告没有时间戳，
         # find_latest_spawn 永远返回它 → 跨图去打→12s 清图→又被拉回，无限打转。
         # 记忆机制：同一条公告对应的图已被判清图（ann_cleared=True）后，
         # 这条公告作废，直到缓存里出现新文本才重新生效。
-        # 2026-08-29 用户定案 3：刚解除顶级抢占且本图仍有白名单 BOSS →
-        # 先按优先级清完本图，不被公告拉走；本图清空后才响应公告跨图。
-        if just_unpinned and live_here:
-            spawn = None
-        else:
-            spawn = find_latest_spawn(gateway, target_bosses, monitored_maps, spawn_patterns)
+        spawn = find_latest_spawn(gateway, target_bosses, monitored_maps, spawn_patterns)
         if spawn and spawn.get("text") == last_ann_text and ann_cleared:
             spawn = None  # 过期公告：对应图已清过，不再拉回
         elif spawn:
@@ -2877,9 +2421,8 @@ def WORLD_BOSS_auto_farm(
                 last_ann_text = spawn.get("text")
                 ann_cleared = False
         # 2026-08-28 五定案：妖魔鬼怪/妖魔/鬼怪=最低优先级——公告不再为它们跨图。
-        # 2026-08-29 补充：多图系统公告（如“妖魔在 A、B、C 出没，前往剿灭”）
-        # 属于系统召唤事件，force_cross=True，即便 BOSS 是 LOW_PRIORITY 也触发跨图。
-        if spawn and spawn.get("boss") in LOW_PRIORITY_BOSSES and not spawn.get("force_cross"):
+        # 其他 BOSS 的公告照常响应；杂鱼只在场景轮换时顺手清（全场只剩杂鱼照打）。
+        if spawn and spawn.get("boss") in LOW_PRIORITY_BOSSES:
             spawn = None
         if spawn:
             if cur_map != spawn["map"]:
@@ -2907,24 +2450,15 @@ def WORLD_BOSS_auto_farm(
                     no_boss_since = None
                     scanned = None  # 跨图后 0.4 的扫描属旧图，作废（B5 共享扫描配套）
         elif cur_map is None:
-            # 2026-08-29 修复（桩测试实锤）：旧逻辑一上来就随机切图，两个后果——
-            #   1) 启动首轮盲跳：角色身边站着知了王也会被传送走，白丢一轮跨图；
-            #   2) 抢占模式下 cur_map 始终为 None（0.5 分支 continue 永远到不了这里），
-            #      解除抢占后本图还有 P3/P4 白名单怪，却被当成"未指派地图"随机跳走。
-            # 新逻辑：先认领角色当前真实地图，本轮照常走 step2 实扫按优先级打；
-            # 本图真的没有白名单 BOSS 时，才由 step3 负责换图。
-            cur_map = _cur_map_name(gateway) or None
-            if cur_map is None:
-                # 连真实地图名都读不到（网关异常/场景未加载）→ 退化成原逻辑随机待命
-                cur_map = _pick_random_map(None, monitored_maps, tuple(recent_maps))
-                no_boss_since = None
-                # 2026-08-28：初始切图也要核实——失败则以真实地图名为准（防标签说谎）
-                if _ensure_on_map(gateway, cur_map, None, None):
-                    recent_maps.append(cur_map)
-                else:
-                    unreachable[cur_map] = time.time() + 600
-                    cur_map = _cur_map_name(gateway) or cur_map
-                scanned = None  # 跨图后 0.4 的扫描属旧图，作废
+            # 暂无公告：随机切一张监控地图扫描（保持在线待命）
+            cur_map = _pick_random_map(None, monitored_maps, tuple(recent_maps))
+            no_boss_since = None
+            # 2026-08-28：初始切图也要核实——失败则以真实地图名为准（防标签说谎）
+            if not _ensure_on_map(gateway, cur_map, None, None):
+                unreachable[cur_map] = time.time() + 600
+                cur_map = _cur_map_name(gateway) or cur_map
+            recent_maps.append(cur_map)
+            scanned = None  # 同上：跨图后旧扫描作废
 
         # 1.5) 每 10 分钟清理一次网关 recv 缓存（防膨胀拖慢 dumpRecvAll，
         #      用户 2026-08-27 定案）；失败静默跳过，不影响主流程。
@@ -2942,7 +2476,9 @@ def WORLD_BOSS_auto_farm(
             scanned = scan_scene_bosses(gateway, target_bosses)
         # 2026-08-28 六定案：未登记实体（_boss_priority=None）=非目标，
         # 直接剔除——不排序/不攻击，也不再阻塞清图判定/轮换。
-        bosses = _live_bosses(scanned, excluded)
+        bosses = [x for x in scanned
+                  if _boss_key(x) not in excluded
+                  and _boss_priority(x["name"]) is not None]
         if bosses:
             no_boss_since = None
             if verbose:
@@ -2958,35 +2494,20 @@ def WORLD_BOSS_auto_farm(
                     break
                 if not _captcha_solve(gateway, verbose):
                     break
-                # 0.5) 顶级目标(P0~P2)公告抢占检查：每打一只前查一次（单扫覆盖
-                #      财神爷/知了王/妖魔头领）——
-                #      财神爷公告 → 立即 pin，交外层瞬移；
-                #      知了王/妖魔头领公告且不在本图 → 放弃本图杂鱼，交外层 step1
-                #      跨图（防 P3/P4 杂鱼把高优先级目标饿死）。
-                _ann = find_latest_spawn(gateway, list(TOP_TIER_BOSS_NAMES),
-                                         monitored_maps, spawn_patterns)
-                _ann_text = (_ann or {}).get("text")
-                _ann_boss = (_ann or {}).get("boss")
-                if _ann and _ann_text and _ann_text not in top_ann_seen:
-                    top_ann_seen.add(_ann_text)
-                    if len(top_ann_seen) > 500:
-                        top_ann_seen.clear()      # 防长跑无界膨胀
-                    if _ann_boss == CAISHEN_BOSS:
-                        caishen_pinned = {"map": _ann["map"], "text": _ann_text,
-                                          "src": "chat"}
-                        caishen_scan_miss = 0
-                        if verbose:
-                            print(f"  ⚡ 财神爷公告抢占: {_ann['map']} → 放弃当前目标",
-                                  flush=True)
-                        break
-                    if not _map_same(_ann.get("map") or "", cur_map or ""):
-                        if verbose:
-                            print(f"  ⚡ 顶级目标公告 {_ann_boss} @ {_ann['map']}"
-                                  f"（非本图）→ 放弃本图杂鱼", flush=True)
-                        break
-                # 每击杀一只后重扫：战斗后场景人物槽位/实例会重排（SYBUZ2 同款坑），
-                # 静态列表的 id/bsid 会错位导致 CALL 错实体（2026-08-27 实测）。
-                live = _live_bosses(scan_scene_bosses(gateway, target_bosses), excluded)
+                # 0.5) 财神爷抢占检查（2026-08-28 用户定案）：每打一只前都查，
+                #      未进战斗时公告出现 → 立刻放弃本图杂鱼，交外层瞬移去财神爷图
+                cs_ann = find_latest_spawn(gateway, [CAISHEN_BOSS],
+                                           monitored_maps, spawn_patterns)
+                if cs_ann and cs_ann.get("text") not in caishen_seen_texts:
+                    caishen_seen_texts.add(cs_ann.get("text"))
+                    caishen_pinned = {"map": cs_ann["map"], "text": cs_ann.get("text")}
+                    caishen_scan_miss = 0
+                    if verbose:
+                        print(f"  ⚡ 财神爷公告抢占: {cs_ann['map']} → 放弃当前杂鱼", flush=True)
+                    break
+                live = [x for x in scan_scene_bosses(gateway, target_bosses)
+                        if _boss_key(x) not in excluded
+                        and _boss_priority(x["name"]) is not None]
                 if not live:
                     break
                 try:
@@ -2994,17 +2515,18 @@ def WORLD_BOSS_auto_farm(
                     gx0, gy0 = (rg0[0], rg0[1]) if rg0 else (0.0, 0.0)
                 except Exception:
                     gx0, gy0 = 0.0, 0.0
-                # 2026-08-29 用户定案：普通模式严格按 BOSS_PRIORITY 排序
-                #   P1 二十八星宿 ＞ P2 头领=统领=知了王 ＞ P3 其余白名单
-                #   （灵猴/十二生肖/天罡地煞）＞ P4 妖族杂鱼垫底；
-                #   同优先级取距离近的。P0 财神爷由 0.5 抢占模式独占，
-                #   走到这里说明顶级三目标已被判定不在场。
-                #   未登记实体 = _boss_priority 返回 None = 非目标，已由 _live_bosses 剔除。
-                b = _pick_target(live, gx0, gy0, last_name=last_name)
-                if b is not None:
-                    last_name = b["name"]
-                if b is None:          # 理论不可达（live 非空必有目标），防御性兜底
-                    break
+                # 2026-08-28 五定案：普通模式恢复优先级排序——财神爷独立抢占外，
+                # BOSS_PRIORITY 小者先打：稀有(1) > 头领/统领(2) >
+                # 妖魔鬼怪/妖魔/鬼怪(3)垫底；未登记=_boss_priority 返回 None=非目标已剔除。同优先级距离近先打。
+                # 同坐标白名单怪全类型都可攻击（不限一种）。
+                cs_live = [x for x in live if x["name"] == CAISHEN_BOSS]
+                if cs_live:
+                    b = cs_live[0]
+                    if verbose:
+                        print("  ⚡ 财神爷在场 → 直接领取（优先于优先级/距离排序）", flush=True)
+                else:
+                    b = min(live, key=lambda x: (_boss_priority(x["name"]),
+                                                 (x["gx"] - gx0) ** 2 + (x["gy"] - gy0) ** 2))
                 this_keywords = _boss_battle_keywords(b["name"], list(battle_keywords))
                 # 2026-08-28：走路/校准一律用实读地图名——cur_map 标签万一错了
                 # （跨图未到达），拿错图的校准数据点屏幕会全错（长寿郊外点花果山像素事故）
@@ -3036,7 +2558,8 @@ def WORLD_BOSS_auto_farm(
                 if not _sleep_stoppable(0.8):
                     stopped = True
                     break
-                re = _live_bosses(scan_scene_bosses(gateway, target_bosses), excluded)
+                re = [x for x in scan_scene_bosses(gateway, target_bosses)
+                      if _boss_key(x) not in excluded]
                 if re:
                     continue
                 # 复扫仍空 → 立即轮换（公告记忆同步作废，防老公告拉回）
@@ -3198,8 +2721,7 @@ def WORLD_BOSS_chat_maintenance(gateway: str = DEFAULT_GATEWAY, verbose: bool = 
          网关重启重新注入后才生效；老脚本会返回 ok=False，调用方安全降级。
     """
     try:
-        chat_gw = _CHAT_GW or gateway   # 2026-08-29 分离网关：缓存清理走独立聊天网关
-        r = _http_json(chat_gw, "/api/net/clear", None, timeout=15.0)
+        r = _http_json(gateway, "/api/net/clear", None, timeout=15.0)
         if verbose:
             cleared = (r.get("result") or {}).get("cleared")
             print(f"[WORLD_BOSS] 聊天缓存清理: ok={r.get('ok')}"

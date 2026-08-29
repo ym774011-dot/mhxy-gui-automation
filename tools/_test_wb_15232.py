@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-"""WORLD_BOSS_auto_farm 实测跑批入口（2026-08-28，用户指定）。
+"""WORLD_BOSS_auto_farm 实测跑批入口（2026-08-29，Diagnose 诊断轮）。
 
-绑定：PID 19576 / 网关 http://127.0.0.1:18082
-纪律：绝不触碰 PID 23584 / 网关 18083（用户正在跑任务）。
+绑定：PID 15232 / 网关 http://127.0.0.1:18082
+纪律：绝不触碰其他实例的网关（18083 等）。
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-GAME_PID = 2992
+GAME_PID = 15232
 GATEWAY = "http://127.0.0.1:18082"
 
 from core.window_manager import window_manager

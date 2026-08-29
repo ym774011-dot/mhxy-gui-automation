@@ -138,23 +138,23 @@ class WindowManager:
             if m:
                 matched.append(m)
 
-        if matched:
-            return
-
-        # 第 2 轮：子窗口回退（多开器容器结构）
+        # ★ 2026-08-29 修复走路通道绑错窗口根因：多开器结构下第 1 轮只能看到
+        #   "聊天窗口"等附属顶层窗口（早退导致永远绑不到真正的游戏主视图），
+        #   故第 1 轮命中后【不早退】，继续扫描各顶层窗口的子窗口（多开器容器
+        #   内嵌的 Galaxy2DEngine 主视图，归属游戏 PID），两轮结果去重合并，
+        #   由 find_by_pid 按客户区面积择大 —— 主视图(1000×620) 必压过聊天窗口。
+        seen = {m[0] for m in matched}
         for parent in top_hwnds:
             def _enum_child(child, _lp):
                 m = _match_one(child, allow_child=True)
-                if m:
+                if m and m[0] not in seen:
                     matched.append(m)
+                    seen.add(m[0])
                 return True
             try:
                 win32gui.EnumChildWindows(parent, WNDENUMPROC(_enum_child), 0)
             except Exception:
                 continue
-            if matched:
-                # 同一容器的子树已找到目标，无需继续扫描其余容器
-                break
 
     def find_by_title(self, title):
         """
