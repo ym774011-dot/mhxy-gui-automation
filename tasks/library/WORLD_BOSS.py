@@ -1515,7 +1515,9 @@ if not u and "{uid or ""}" ~= "" then
   if n then u = t[n] end
   if not u then u = t["{uid}"] or (tp.临时Npc or {{}})["{uid}"] end
 end
-if not u then _G.__out = "NOTFOUND"; return end
+if not u or type(u) ~= "table" then _G.__out = "NOTFOUND"; return end
+-- 2026-08-29 类型守卫：uid 兜底路径取到的槽位可能是数字/字符串残值，
+-- 非法实体喂给 事件开始 会触发引擎原生错误，先验再 CALL
 local mt = getmetatable(u)
 local ev = (mt and mt.__index and mt.__index.事件开始) or u["事件开始"]
 if type(ev) ~= "function" then _G.__out = "NOFN"; return end
@@ -1556,34 +1558,69 @@ _G.__out = table.concat(out, "\n")
     return opts
 
 
+def _lua_str_list(items) -> str:
+    """把 Python 字符串列表序列化成 Lua table 字面量（转义双引号/反斜杠）。"""
+    def esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+    return "{" + ", ".join(f'"{esc(str(x))}"' for x in items) + "}"
+
+
 def call_dialog_battle(gateway: str, keywords: List[str]) -> Tuple[bool, str]:
     """在对话栏选项中匹配战斗关键词并 CALL 事件解析(跳转链接)。
 
     黑名单优先：含“你认错人了”等拒绝措辞的选项绝不点
-    （2026-08-27 星官实测：选错=拒绝赐福，白跑一趟）。"""
-    opts = get_dialog_options(gateway)
-    if not opts:
-        return False, "对话栏无选项"
-    for o in opts:
-        text = f"{o['text']}|{o['label']}|{o['link']}"
-        if any(deny in text for deny in _BATTLE_DENY_OPTIONS):
-            continue
-        for kw in keywords:
-            if kw in text:
-                code = f'''
--- 2026-08-29 预防：读选项与点击之间对话栏可能已被关掉（边走边CALL节拍密集），
--- 拿失效链接喂 事件解析 会触发引擎原生致命错误（this arg is not a userdata!）
-if not (tp.窗口.对话栏 and tp.窗口.对话栏.可视) then
-  _G.__out = "false|NODLG"; return
+    （2026-08-27 星官实测：选错=拒绝赐福，白跑一趟）。
+
+    ★ 2026-08-29 原子化重写（堵 0xC0000005 崩溃）：旧版“chunk1 读链接 →
+    Python 匹配 → chunk2 事件解析”两次 Lua 往返之间存在 TOCTOU——边走边CALL
+    节拍密集时对话栏可能在间隙被关掉/重渲染，失效链接喂给 事件解析 会触发
+    引擎原生致命错误（this arg is not a userdata! → 0xC0000005，crash 命中
+    lua51+0x339d）。pcall 兜不住访问违例，唯一正解是让坏调用永不发生：
+    “读选项→黑名单→关键词→取链接→事件解析”全部并入同一个 Lua chunk，
+    原子执行零间隙。"""
+    deny_lit = _lua_str_list(_BATTLE_DENY_OPTIONS)
+    kw_lit = _lua_str_list(keywords)
+    code = f'''
+local deny = {deny_lit}
+local kws = {kw_lit}
+local dlg = tp.窗口.对话栏
+if not (dlg and dlg.可视) then _G.__out = "false|NODLG|"; return end
+local opts = dlg.选项
+if type(opts) ~= "table" then _G.__out = "false|NOOPTS|"; return end
+local function opt_text(o)
+  return tostring(o.基本内容 or "") .. "|" .. tostring(o.文字 or o.标签 or "")
+    .. "|" .. tostring(o.跳转链接 or "")
 end
-local link = "{o['link']}"
-local ok, ret = pcall(function() return tp.窗口.对话栏:事件解析(link) end)
-_G.__out = tostring(ok) .. "|" .. tostring(ret or "")
+local function in_list(text, list)
+  for _, w in ipairs(list) do
+    if w ~= "" and string.find(text, w, 1, true) then return true end
+  end
+  return false
+end
+-- ① 先按选项顺序找第一个非黑名单、命中关键词的选项（保持旧版优先级语义）
+local hit_i, hit_text = nil, nil
+for i = 1, 20 do
+  local o = opts[i]
+  if type(o) ~= "table" then break end
+  local text = opt_text(o)
+  if in_list(text, kws) and not in_list(text, deny) then
+    hit_i, hit_text = i, tostring(o.基本内容 or "")
+    break
+  end
+end
+if not hit_i then _G.__out = "false|NOMATCH|"; return end
+-- ② 原子内二次确认：选项仍挂在当前对话栏上，链接非空才允许喂给引擎
+local link = tostring(opts[hit_i].跳转链接 or "")
+if link == "" then _G.__out = "false|EMPTYLINK|" .. hit_text; return end
+local ok, ret = pcall(function() return dlg:事件解析(link) end)
+_G.__out = tostring(ok) .. "|" .. hit_text .. "|" .. tostring(ret or "")
 '''
-                raw = _lua(gateway, code)
-                parts = raw.split("|", 1)
-                return parts[0] == "true", f"选项[{o['text']}] 关键词[{kw}] ok={parts[0]}"
-    return False, f"无匹配关键词，选项={[o['text'] for o in opts]}"
+    raw = _lua(gateway, code)
+    parts = raw.split("|", 2)
+    ok = parts[0] == "true" if parts else False
+    tag = parts[1] if len(parts) > 1 else ""
+    detail = parts[2] if len(parts) > 2 else ""
+    return ok, f"选项[{tag}] ok={ok} {detail}".strip()
 
 
 def close_dialog(gateway: str) -> None:
@@ -1686,6 +1723,13 @@ def _map_same(a: str, b: str) -> bool:
     return _MAP_ALIAS_CANON.get(a, a) == _MAP_ALIAS_CANON.get(b, b)
 
 
+# hop 落地冷却（2026-08-29，治标双保险）：地图名刷新 ≠ 场景重建完成，
+# 立即扫描/事件 Lua 会撞 "this arg is not a userdata!" 致命分支
+#（08:16/08:22 两场事故时序实锤：hop 后 0.3~0.5s 内高频 Lua 调用触发）。
+# 根治靠 gateway fatal_guard（运行时补丁），这里只兜底。
+HOP_SETTLE_S = 1.5
+
+
 def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) -> bool:
     """确保角色在 target_map；不在则跨图，在则落地图中心/指定坐标。返回是否到位。
 
@@ -1706,6 +1750,8 @@ def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) 
         for _p in range(5):
             time.sleep(0.3)
             if _map_same(_cur_map_name(gateway), target_map):
+                # 2026-08-29 hop 后冷却（治标双保险）：落地静默等场景重建完
+                _sleep_stoppable(HOP_SETTLE_S)
                 return True
     return False
 
