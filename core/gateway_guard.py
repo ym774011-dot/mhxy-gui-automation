@@ -93,6 +93,27 @@ def _extract_role_id(title: str):
     return m.group(1) if m else None
 
 
+def _role_id_of_binding(wm) -> str:
+    """取当前绑定对应的角色 ID（如 '701529'），两级回退。
+
+    ★ 2026-08-29 实锤坑：window_manager 的 window_title 不一定是游戏主窗口
+    标题——find_by_pid 在多开器场景下命中的是 **GGESUB 聊天窗口**（title 就是
+    ' 聊天窗口'），里面根本没有 '[角色ID]'，只取它会导致重绑永远失败
+    （日志表现："无法确定游戏 PID（window_manager 未绑定）"）。
+    第二级改读 config window.title —— bind() 持久化的是游戏主窗口标题
+    （'鲜衣怒马 - 怀旧江南版 - (鲜衣怒马 - 然学[701529]) - ...'），稳定含角色 ID。
+    """
+    rid = _extract_role_id(getattr(wm, "window_title", "") or "")
+    if rid:
+        return rid
+    try:
+        from config.config import config
+        rid = _extract_role_id(config.get("window.title") or "")
+    except Exception:
+        rid = None
+    return rid
+
+
 def _auto_rebind(old_pid: int):
     """绑定的游戏进程已死（游戏重启换 PID）→ 按角色 ID 自动重绑 window_manager。
 
@@ -100,9 +121,9 @@ def _auto_rebind(old_pid: int):
     游戏重启后 farm/ensure_gateway 自愈循环永远 attach 死 PID，每 ~40s 拉起
     网关即秒退（gateway_run_<port>.log 刷屏 VirtualAllocEx 0x5），永不自愈。
 
-    锚点：旧绑定标题里的角色 ID（如 701529）。成功绑定后 bind() 会同步
-    持久化 config window.pid/title，monitor/下次启动恢复全部跟上。
-    返回新 PID（int）或 None。
+    锚点：角色 ID（如 701529），取 _role_id_of_binding()（运行时标题 → 持久化标题）。
+    成功绑定后 bind() 会同步持久化 config window.pid/title，monitor/下次启动
+    恢复全部跟上。返回新 PID（int）或 None。
     """
     try:
         from core.window_manager import WindowManager
@@ -110,7 +131,7 @@ def _auto_rebind(old_pid: int):
         # 进程还活着且是游戏实例 → 无需重绑
         if _pid_alive(old_pid) and _is_game_process(old_pid):
             return int(old_pid)
-        role_id = _extract_role_id(getattr(wm, "window_title", "") or "")
+        role_id = _role_id_of_binding(wm)
         if not role_id:
             return None
         token = f"[{role_id}]"
@@ -160,8 +181,17 @@ def _bound_pid():
         pid = int(pid) if pid else None
     except Exception:
         return None
-    if pid and _is_game_process(pid):
-        return pid
+    if pid and _pid_alive(pid) and _is_game_process(pid):
+        return int(pid)
+    # 持久化 PID 也已死（GUI 未启动、或 wm.pid 为 0 的纯脚本场景）→
+    # 同样按角色 ID 找回新实例，避免整条 farm 链因 no_pid 直接瘫掉。
+    if pid:
+        try:
+            new_pid = _auto_rebind(int(pid))
+        except Exception:
+            new_pid = None
+        if new_pid:
+            return new_pid
     return None
 
 

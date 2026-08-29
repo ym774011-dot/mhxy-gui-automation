@@ -499,6 +499,32 @@ TELEPORT_RETRY_RANGE = (2.0, 4.0)
 # 注意：扫描时“天降灵猴”的公告名可能对应场景实体“下凡的灵猴”，需同时注册。
 EXACT_MATCH_BOSSES = ("知了王", "妖魔统领", "天降灵猴", "下凡的灵猴", "三界财神爷")
 
+# 2026-08-29 新增：后缀匹配表——BOSS 全名前缀不固定、只有后缀固定。
+#   实测妖魔头领的实体名是"避世头领""净神头领"等，前缀每次刷新都变，
+#   只有"头领"二字恒定。若按完整名进白名单，不同前缀的实体会被整体漏掉。
+#   匹配方式统一为 name.endswith(后缀)，同时作用于场景扫描 / 公告文本 / 优先级。
+SUFFIX_MATCH_BOSSES: Tuple[str, ...] = ("头领",)
+# 后缀 → 代表类别（用于取战斗关键词），保证"避世头领"拿到"让我来收拾你"。
+BOSS_SUFFIX_CATEGORY: Dict[str, str] = {"头领": "妖魔头领"}
+
+# 2026-08-29 新增：二十八星君 / 二十八星宿 公告专用锚点。
+#   句式："玉皇大帝特派二十八星君之一的娄金狗到东海湾附近……"
+#   兼容"二十八星宿"写法，以及"下凡至 / 降临 / 出现 / 到"等多种动词。
+#   星君名用惰性匹配（靠动词分词），地点段放宽到 20 字后在 Python 侧
+#   按已知地图名取最长命中（再长的修饰语如"附近一带"都会被自然剔除）。
+_STAR_LORD_SPAWN_RE = re.compile(
+    r"二十八星(?:君|宿)\s*(?:之)?\s*(?:一)?\s*(?:的)?\s*"
+    r"([^\s，,。、]{2,10}?)"
+    r"\s*(?:下凡至|下凡到|降临至|降临于|降临|出现在了|出现在|出现于|出现|到达|到|至|去往|前往|赶往)"
+    r"\s*([^\s，,。、]{2,20})"
+)
+# 公告文本里按后缀切 token：取后缀前 1~2 字作前缀。
+#   限制 2 字的原因：放宽到 3+ 字会把"听说避世头领"的"听说"一起吞进来。
+_SUFFIX_TOKEN_RES = {
+    suf: re.compile(r"([^\s，,。、]{1,2}" + re.escape(suf) + r")")
+    for suf in SUFFIX_MATCH_BOSSES
+}
+
 # 击杀优先级（2026-08-28 用户修订）：数字越小越优先。
 # 根因修复：旧表只有财神爷/知了王，星宿/灵猴/生肖全落默认 2 与妖魔鬼怪同级，
 # 妖魔鬼怪数量多+距离近永远赢 → "偏向打妖魔鬼怪"。现在稀有怪全部压过普通怪。
@@ -516,30 +542,36 @@ EXACT_MATCH_BOSSES = ("知了王", "妖魔统领", "天降灵猴", "下凡的灵
 # 2026-08-28 六定案（用户 21:02）：未登记(默认 2) 从 _boss_priority 移除——
 #   未登记实体一律视为非目标（不排序/不攻击），白名单+本表双重门控，
 #   防止未知 NPC/杂鱼被走近+CALL 空转。词缀类（"初出茅庐地煞星"）按类别子串归级。
-BOSS_PRIORITY = {
-    # P0 最高：限时事件怪，公告/在场即触发抢占模式
-    "三界财神爷": 0,
-    # P1
-    "知了王": 1,
-    # P2 公告点名的大怪
-    "妖魔头领": 2,
-    "妖魔统领": 2,
-}
-# P3 其余白名单：公告/活动稀有怪，排在妖魔头领之后（用户 2026-08-29 定案）
-for _n in ("天降灵猴", "下凡的灵猴", "天罡星", "地煞星"):
-    BOSS_PRIORITY[_n] = 3
-for _n in _28_STAR_BOSSES:
-    BOSS_PRIORITY[_n] = 3
-for _n in _12_ZODIAC_BOSSES:
-    BOSS_PRIORITY[_n] = 3
-# P4 妖族杂鱼：每小时 :10 常刷、数量多，垫底——打不完不用抢
-for _n in ("妖魔鬼怪", "妖魔", "鬼怪"):
-    BOSS_PRIORITY[_n] = 4
+# 2026-08-29 用户定案：优先级档位常量（数字越小越优先）
+PRI_CAISHEN = 0      # 三界财神爷：唯一能触发抢占模式
+PRI_STARLORD = 1     # 二十八星君（娄金狗等 28 名）：公告点名，瞬移追击
+PRI_ZHILIAO = 2      # 知了王
+PRI_TOULING = 3      # *头领（前缀不定，后缀匹配） / 妖魔统领
+PRI_WHITELIST = 4    # 其余白名单：灵猴 / 十二生肖 / 天罡星 / 地煞星
+PRI_TRASH = 5        # 妖族杂鱼：妖魔鬼怪 / 妖魔 / 鬼怪，垫底
 
-# 顶级目标阈值：优先级 <= 此值的 BOSS 属于"顶级目标"(P0~P2)。
-# 三界财神爷在场或公告出现 → 进入抢占模式，期间只打顶级目标
-# （财神爷 ＞ 知了王 ＞ 妖魔头领）；三者全无才回落普通模式打 P3/P4。
-TOP_TIER_PRIORITY = 2
+BOSS_PRIORITY = {
+    "三界财神爷": PRI_CAISHEN,
+    "知了王": PRI_ZHILIAO,
+    "妖魔头领": PRI_TOULING,
+    "妖魔统领": PRI_TOULING,
+}
+# 二十八星君 / 二十八星宿 28 个具体名（娄金狗等）：财神爷之后、知了王之前
+for _n in _28_STAR_BOSSES:
+    BOSS_PRIORITY[_n] = PRI_STARLORD
+# 其余白名单：灵猴 / 十二生肖 / 天罡地煞
+for _n in ("天降灵猴", "下凡的灵猴", "天罡星", "地煞星"):
+    BOSS_PRIORITY[_n] = PRI_WHITELIST
+for _n in _12_ZODIAC_BOSSES:
+    BOSS_PRIORITY[_n] = PRI_WHITELIST
+# 妖族杂鱼：每小时 :10 常刷、数量多，垫底——打不完不用抢
+for _n in ("妖魔鬼怪", "妖魔", "鬼怪"):
+    BOSS_PRIORITY[_n] = PRI_TRASH
+
+# 顶级目标阈值：优先级 <= 此值属"顶级目标"——三界财神爷在场或公告出现即进入
+# 抢占模式，期间只打顶级目标；顶级目标全无才回落普通模式打 P4/P5。
+# 顶级链：P0 财神爷 ＞ P1 二十八星君 ＞ P2 知了王 ＞ P3 *头领
+TOP_TIER_PRIORITY = PRI_TOULING
 TOP_TIER_BOSS_NAMES = tuple(sorted(n for n, p in BOSS_PRIORITY.items()
                                    if p <= TOP_TIER_PRIORITY))
 
@@ -570,6 +602,11 @@ def _boss_priority(name: str):
     for cls in ("地煞星", "天罡星"):
         if cls in n:
             return BOSS_PRIORITY[cls]
+    # 后缀匹配（2026-08-29）："避世头领""净神头领"… 前缀每次刷新都变，
+    # 只有后缀恒定 → 归到该后缀代表类别的优先级（*_头领 = 妖魔头领档）。
+    for suf in SUFFIX_MATCH_BOSSES:
+        if n.endswith(suf):
+            return BOSS_PRIORITY[BOSS_SUFFIX_CATEGORY.get(suf, suf)]
     return None
 
 
@@ -1375,6 +1412,36 @@ def probe_chat_raw(gateway: str, lines: int = 200) -> List[str]:
     return msgs[-int(lines):] if lines else msgs
 
 
+def _match_map_in_text(chunk: str, extra_maps: List[str] = None) -> Optional[str]:
+    """从地点片段里挑出已知地图名（最长匹配优先）。
+
+    二十八星君公告的地点后面常跟"附近/一带"等修饰，且不保证在监控轮换表里。
+    这里对全部已知地图名（调用方监控表 + 地图包表 + MAP_ID_TO_NAME + 默认落点）
+    取最长命中，天然剔除"东海湾附近搜寻有仙缘之人"这类尾巴。
+    """
+    cands = list(extra_maps or []) + list(_MAP_MODULE_NAMES) \
+        + list(MAP_ID_TO_NAME.values()) + list(DEFAULT_MAP_CENTER)
+    hit = None
+    for mp in cands:
+        if mp and mp in chunk and (hit is None or len(mp) > len(hit)):
+            hit = mp
+    return hit
+
+
+
+def _pick_boss_name(boss_names) -> str:
+    """从命中集合里挑【优先级最高】的 BOSS 名（同级按名称稳定排序）。
+
+    2026-08-29 修复：旧逻辑 sorted(...)[0] 是按字典序取，
+    “妖魔头领气得正在傲来国寻衅闹事”会同时命中「妖魔」与「妖魔头领」，
+    字典序取到「妖魔」(P5 杂鱼) → 该公告被 LOW_PRIORITY_BOSSES 过滤，
+    妖魔头领公告永远不触发跨图。改为按 _boss_priority 取最高优先级。
+    """
+    return sorted(boss_names, key=lambda b: (
+        99 if _boss_priority(b) is None else _boss_priority(b), b))[0]
+
+
+
 def parse_spawn_notification(
     text: str,
     target_bosses: List[str],
@@ -1400,6 +1467,27 @@ def parse_spawn_notification(
             if cls in m_gen.group(1):
                 boss_names.add(cls)
                 break
+    # 0.5) 二十八星君公告专用锚点（2026-08-29 新增）
+    #   句式："玉皇大帝特派二十八星君之一的娄金狗到东海湾附近……"
+    #   星君名（娄金狗）与地点（东海湾）都在句中，但地点可能不在监控轮换表里，
+    #   通用解析器（"文本里出现了哪个监控地图名"）会整条漏掉 → 专用正则提
+    #   [星君名] + [地点]，命中即返回。
+    #   注意：这里必须按调用方传入的 target_bosses 过滤——外层查财神爷公告时
+    #   传的是 [三界财神爷]，若不加过滤会把星君公告误判成财神爷公告。
+    m_sl = _STAR_LORD_SPAWN_RE.search(t)
+    if m_sl:
+        sl_name = (m_sl.group(1) or "").strip()
+        sl_map = _match_map_in_text(m_sl.group(2) or "", monitored_maps)
+        # 星君名可能夹颜色码/语气词，兜底：句中出现的二十八星宿具体名
+        if sl_name not in _28_STAR_BOSSES:
+            for _s in _28_STAR_BOSSES:
+                if _s in t:
+                    sl_name = _s
+                    break
+        if sl_map and sl_name in set(target_bosses):
+            return {"boss": sl_name, "map": sl_map, "maps": [sl_map],
+                    "text": t, "map_source": "starlord_notice"}
+
     # 1) 展开公告中的 BOSS 关键词为实体名集合
     for kw, aliases in _BOSS_ALIASES.items():
         if kw in t:
@@ -1408,13 +1496,25 @@ def parse_spawn_notification(
     for b in target_bosses:
         if b and b in t:
             boss_names.add(b)
-    if not boss_names:
+    # 1b) 后缀匹配（2026-08-29）：公告里的 BOSS 全名前缀不定
+    #     （"避世头领""净神头领"…），只有后缀"头领"恒定，全名进不了白名单。
+    #     按后缀抽 token 单独收集，下方跳过白名单过滤、改由 _boss_priority 校验。
+    suffix_names = set()
+    for suf, _rx in _SUFFIX_TOKEN_RES.items():
+        for m_suf in _rx.finditer(t):
+            tok = (m_suf.group(1) or "").strip()
+            if tok:
+                suffix_names.add(tok)
+    if not boss_names and not suffix_names:
         return None
     # 过滤到目标集
     tgt = set(target_bosses)
     boss_names = {b for b in boss_names if b in tgt}
+    # 后缀名按定义不在白名单里 → 靠后缀规则命中即放行
+    boss_names |= {b for b in suffix_names if _boss_priority(b) is not None}
     if not boss_names:
         return None
+
     # 2) 提取地图名（含别名归一）
     maps_found = []
     normalized = t
@@ -1438,9 +1538,9 @@ def parse_spawn_notification(
                     fallback.append(mp)
         if not fallback:
             return None
-        return {"boss": sorted(boss_names)[0], "map": fallback[0],
+        return {"boss": _pick_boss_name(boss_names), "map": fallback[0],
                 "maps": fallback, "text": t, "map_source": "spawn_table"}
-    boss = sorted(boss_names)[0]
+    boss = _pick_boss_name(boss_names)
     return {"boss": boss, "map": maps_found[0], "maps": maps_found,
             "text": t, "map_source": "notice"}
 
@@ -1511,27 +1611,38 @@ _G.__out = table.concat(out, ";")
             continue
         uid, name, gx, gy, model, src = parts[:6]
         bsid = parts[6] if len(parts) > 6 else ""
+        hit = None
         for boss in target_bosses:
             matched = (name == boss) if boss in exact_match else ((boss in name) or (name == boss))
             if matched:
-                try:
-                    # 2026-08-28 A4 修复：格子x/格子y 可能是浮点（如 "10.5"），
-                    # 旧 int("10.5") 直接 ValueError → 实体被静默丢掉
-                    bgx, bgy = int(float(gx)), int(float(gy))
-                    # 2026-08-28 守门：实体兜底字段 u.x/u.y 可能是内部像素坐标，
-                    # >GRID_SANITY_MAX 判为像素 → ÷20 转网格，否则环带瞬移会出界
-                    if abs(bgx) > GRID_SANITY_MAX or abs(bgy) > GRID_SANITY_MAX:
-                        bgx, bgy = round(bgx / 20.0), round(bgy / 20.0)
-                        logger.warning(f"BOSS 坐标守门: {name} 原始=({gx},{gy}) → ({bgx},{bgy}) [像素→网格÷20]")
-                    cands.append({
-                        "id": uid, "name": name,
-                        "gx": bgx, "gy": bgy, "model": model,
-                        "src": src, "boss_pattern": boss,
-                        "bsid": bsid,
-                    })
-                except ValueError:
-                    pass
+                hit = boss
                 break
+        if hit is None:
+            # 后缀匹配（2026-08-29）：BOSS 全名前缀不固定（"避世头领""净神头领"…），
+            # 只有后缀"头领"恒定。若按完整名进白名单，不同前缀的实体会被整体漏掉，
+            # 这里改为 endswith 命中，不再要求全名登记。
+            for suf in SUFFIX_MATCH_BOSSES:
+                if name.endswith(suf):
+                    hit = suf
+                    break
+        if hit is not None:
+            try:
+                # 2026-08-28 A4 修复：格子x/格子y 可能是浮点（如 "10.5"），
+                # 旧 int("10.5") 直接 ValueError → 实体被静默丢掉
+                bgx, bgy = int(float(gx)), int(float(gy))
+                # 2026-08-28 守门：实体兜底字段 u.x/u.y 可能是内部像素坐标，
+                # >GRID_SANITY_MAX 判为像素 → ÷20 转网格，否则环带瞬移会出界
+                if abs(bgx) > GRID_SANITY_MAX or abs(bgy) > GRID_SANITY_MAX:
+                    bgx, bgy = round(bgx / 20.0), round(bgy / 20.0)
+                    logger.warning(f"BOSS 坐标守门: {name} 原始=({gx},{gy}) → ({bgx},{bgy}) [像素→网格÷20]")
+                cands.append({
+                    "id": uid, "name": name,
+                    "gx": bgx, "gy": bgy, "model": model,
+                    "src": src, "boss_pattern": hit,
+                    "bsid": bsid,
+                })
+            except ValueError:
+                pass
     return cands
 
 
@@ -1690,6 +1801,12 @@ def _boss_battle_keywords(boss_name: str, fallback: List[str]) -> List[str]:
         "下凡的灵猴": ["下凡的灵猴", "天降灵猴"],
     }
     names = aliases.get(boss_name, [boss_name])
+    # 后缀匹配（2026-08-29）：实体名前缀不定（"避世头领""净神头领"…），
+    # 只有后缀固定 → 追加该后缀的代表类别，保证专用战斗文案排在最前
+    # （如"避世头领"拿到 妖魔头领 的"让我来收拾你"）。
+    for suf, cat in BOSS_SUFFIX_CATEGORY.items():
+        if boss_name != suf and boss_name.endswith(suf):
+            names.append(cat)
     kws: List[str] = []
     for n in names:
         kws.extend(BOSS_BATTLE_KEYWORDS.get(n, []))

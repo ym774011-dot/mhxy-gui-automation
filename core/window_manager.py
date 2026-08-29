@@ -23,6 +23,7 @@ client_size 约定：tuple (width, height)。
         rect = window_manager.get_client_rect()      # (left, top, right, bottom)
         size = window_manager.get_client_size()      # (width, height)
 """
+import re
 import threading
 from ctypes import WINFUNCTYPE, wintypes
 
@@ -35,6 +36,10 @@ WNDENUMPROC = WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
 from config.config import config
 from utils.logger import logger
+
+# 角色 ID 锚点：标题形如 '... (鲜衣怒马 - 然学[701529]) - 2026年08月29日 ...'
+# 游戏重启后 PID 全变，只有角色 ID 能把新实例对回旧绑定（见 bind() 的锚点保护）。
+_ROLE_ID_RE = re.compile(r"\[(\d{4,})\]")
 
 
 class WindowManager:
@@ -278,7 +283,22 @@ class WindowManager:
             # 同步到 config，便于下次启动恢复
             try:
                 if self.window_title:
-                    config.set("window.title", self.window_title)
+                    # ★ 2026-08-29 角色 ID 锚点保护。
+                    # 多开器把游戏主窗口 SetParent 进自己的 WTWindow 容器，
+                    # 主窗口变成子窗口，EnumWindows 枚举不到；find_by_pid 第 1 轮
+                    # 只能命中 GGESUB 聊天窗口（标题就是 ' 聊天窗口'），于是
+                    # window_title 里没有 '[角色ID]'。若任由它覆盖 config，
+                    # 游戏重启换 PID 后 gateway_guard._auto_rebind 将永远找不到
+                    # 角色锚点，整条 farm 链卡死在 "window_manager 未绑定"。
+                    # 规则：新标题不含角色 ID、而旧标题含有时，保留旧标题。
+                    old_title = config.get("window.title") or ""
+                    if _ROLE_ID_RE.search(self.window_title) or \
+                            not _ROLE_ID_RE.search(old_title):
+                        config.set("window.title", self.window_title)
+                    else:
+                        logger.warning(
+                            f"绑定标题 {self.window_title!r} 不含角色 ID，"
+                            f"保留原持久化标题作为角色锚点: {old_title!r}")
                 if self.pid:
                     config.set("window.pid", self.pid)
             except Exception:

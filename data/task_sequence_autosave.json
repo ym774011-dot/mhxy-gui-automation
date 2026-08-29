@@ -193,6 +193,16 @@
       "loop_delay": 1.0,
       "created_at": "2026-08-27 20:16:12",
       "updated_at": "2026-08-27 20:30:00"
+    },
+    {
+      "id": "c169fa80-7f93-44ee-af31-910e1ff81f40",
+      "name": "任务 4",
+      "description": "",
+      "events": [],
+      "loop_count": 1,
+      "loop_delay": 1.0,
+      "created_at": "2026-08-29 11:24:44",
+      "updated_at": "2026-08-29 11:24:44"
     }
   ],
   "current_task_index": 0,
