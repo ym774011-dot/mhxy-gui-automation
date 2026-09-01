@@ -41,6 +41,9 @@ from datetime import datetime as _datetime, timedelta as _timedelta
 from typing import Optional, Tuple, List, Dict, Any, Callable  # noqa: 仅注解使用；模块尾部收编为下划线，避免进 GUI 函数列表
 from urllib.request import Request as _Request, urlopen as _urlopen
 
+# ★2026-09-01 P0/P1 自我进化记忆库（可选增强：任一异常静默，绝不影响 farm）
+from tasks.library import BRAIN
+
 # 确保项目根目录在 sys.path，以便导入 library.map_packs.* 和 core.window_manager
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _PROJECT_ROOT not in sys.path:
@@ -763,6 +766,29 @@ def _pick_target(live: List[Dict[str, Any]], gx0: float = 0.0, gy0: float = 0.0,
     # 上一只名字不同（异名交叉攻击）时不再切换到稍远的异名怪，避免地图东跑西跑。
     # 距离即选目标：同档多目标直接取 _dist2（角色坐标 gx0,gy0）最小者。
     return min(tier, key=lambda q: _dist2(q, gx0, gy0))
+
+
+def _filter_blacklisted(live: List[Dict[str, Any]], brain, map_name: str = "",
+                        verbose: bool = False) -> List[Dict[str, Any]]:
+    """P1 坑位黑名单过滤：剔除已被拉黑（fail>=3）的坐标（2026-09-01）。
+
+    只过滤"已确认拉黑"的坐标；未达门槛的观察条目放行继续尝试（成功会抵消）。
+    扫描结果不含 map 字段，必须由调用方传当前地图名（map_name）。
+    """
+    if not brain or not live:
+        return live
+    try:
+        out = []
+        for x in live:
+            if brain.black_blacklisted(map_name, x.get("gx"), x.get("gy")):
+                if verbose:
+                    print(f"    [BRAIN] 跳过拉黑坑位 {x.get('name')} @ {x.get('gx')},{x.get('gy')}"
+                          f"（历史多次失败）", flush=True)
+                continue
+            out.append(x)
+        return out
+    except Exception:
+        return live
 
 
 def _live_bosses(scanned: List[Dict[str, Any]], excluded: set) -> List[Dict[str, Any]]:
@@ -3745,10 +3771,20 @@ def _pick_random_map(cur_map: Optional[str], monitored_maps: List[str],
     2026-08-28 用户定案：实扫权威——瞬移到图后 Lua 扫白名单怪，没有就换图。
     配套改进：换图时优先排除 recent（最近去过的图，函数内 deque 维护），
     避免在刚清过的图之间来回打转；排除后为空才放宽。
+    ★2026-09-01 P2 效率加权：有历史数据时按 hot_weighted_pick 加权（效率高的图
+    更大概率被选），无历史数据退化为纯随机（与原行为一致）。
     """
     pool = [m for m in monitored_maps if m != cur_map and m not in recent]
     if not pool:
         pool = [m for m in monitored_maps if m != cur_map] or list(monitored_maps)
+    if not pool:
+        return ""
+    try:
+        _w = BRAIN.bm.hot_weighted_pick(pool)
+        if _w:
+            return _w
+    except Exception:
+        pass
     return random.choice(pool)
 
 
@@ -4084,6 +4120,8 @@ def WORLD_BOSS_auto_farm(
         cross_map = False
     # ★2026-08-30 本图模式（闭包辅助，不用局部 def 覆盖全局名——会触发 UnboundLocalError）：
     #   跨图禁用时 _go_map 短路（同图直判成功、异图不跨返 False）；开启时转真实 _ensure_on_map。
+    # ★2026-09-01 P0/P1 自我进化记忆库（提前定义供 _go_map 闭包使用；单例）
+    brain = BRAIN.bm
     def _go_map(gw, _name, _x, _y):
         if not cross_map:
             _cur = _cur_map_name(gw) or ""
@@ -4092,7 +4130,14 @@ def WORLD_BOSS_auto_farm(
             if verbose:
                 print(f"[本图模式] 跳过跨图 → {_name}（当前 {_cur or '?'}）", flush=True)
             return False
-        return _ensure_on_map(gw, _name, _x, _y)
+        _ok = _ensure_on_map(gw, _name, _x, _y)
+        # ★2026-09-01 P2：跨图成功 → 记一次该图跨图统计（后续效率榜用）
+        if _ok and _name:
+            try:
+                brain.hot_record_cross(_name)
+            except Exception:
+                pass
+        return _ok
     # ★2026-08-30 摄妖香定时（GUI 可配置 xiang_enabled / xiang_interval_min）：
     #   启用 → 每 xiang_interval_min 分钟补香（挂机启动先补一次），
     #   在"战斗结束+结算对齐后、挑下一目标前"暂停补香再继续；禁用 → 永不触发。
@@ -4170,7 +4215,21 @@ def WORLD_BOSS_auto_farm(
     t0 = time.time()
     cur_map = None           # 当前正在 farming 的地图
     no_boss_since = None     # 最近一次在 cur_map 扫到 BOSS 的时刻
-    farmed_total = 0
+    # ★2026-09-01 P4 断点恢复：异常中断（GUI停止/崩溃）保留断点 → 上次进度计数
+    #   延续（跨会话累计），并写入启动会话。正常结束会 session_reset 清空。
+    _resume0 = BRAIN.bm.session_resume()
+    _resume_age = (time.time() - _resume0.get("last_ts", 0)) if _resume0.get("last_ts") else 10 ** 9
+    _resume_kills = int(_resume0.get("kills", 0) or 0)
+    farmed_total = _resume_kills if (_resume_kills > 0 and _resume_age <= 3600) else 0
+    if farmed_total:
+        print(f"[BRAIN] P4 断点续跑：继承历史击杀 {farmed_total}（上次中断于"
+              f" {int(_resume_age)}s 前，{_resume0.get('reason') or '?'}）", flush=True)
+    elif _resume0 and _resume0.get("kills", 0):
+        # 断点存在但已过期（>1h）或 kill=0 → 不续，清掉防下次误续
+        try:
+            BRAIN.bm.session_reset()
+        except Exception:
+            pass
     excluded = set()         # 函数级黑名单：确认无战斗选项/已消失的实体跨轮排除
                              # （2026-08-27 23:39 修复：原来每轮重置导致对 10 只
                              #   赐福星官无限走近+CALL 空转刷瞬移）
@@ -4187,9 +4246,16 @@ def WORLD_BOSS_auto_farm(
     # 2026-08-30 防发呆：记录当前外层轮内是否击杀过怪（战斗后不白等满
     # boss_scan_interval），纯扫描/换图轮才保留完整扫描间隔。
     _farmed_this_outer_round = False
+    # ★2026-09-01 P0/P1 自我进化记忆库（brain 已在 _go_map 上方定义，此处复用）
+    _brain_stats = brain.stats()
     print("=== WORLD_BOSS_auto_farm 开始 ===", flush=True)
     print(f"  监控地图={monitored_maps}", flush=True)
     print(f"  目标BOSS={target_bosses[:10]}{'...' if len(target_bosses)>10 else ''}", flush=True)
+    if _brain_stats:
+        print(f"  [BRAIN] 记忆库加载：坑位{_brain_stats.get('black_entries',0)}处×{_brain_stats.get('black_maps',0)}图 "
+              f"热点{_brain_stats.get('hot_maps',0)}图 参数{_brain_stats.get('param_keys',0)}项"
+              f"{' 断点' if _brain_stats.get('session') else ''}", flush=True)
+    # P4 断点续跑已在 farmed_total 初始化处完成（进度继承/过期清理），此处不再重复
 
     stopped = False
     _just_battle_ended = False   # 2026-08-30 提速：战斗确认结束后轮顶跳过冗余战斗态查询
@@ -4302,6 +4368,10 @@ def WORLD_BOSS_auto_farm(
             # 抢占期间：只打顶级目标，同优先级取距离近的
             rg = _role_grid(gateway)
             gx0, gy0 = (rg[0], rg[1]) if rg else (0.0, 0.0)
+            # ★2026-09-01 P1 黑名单过滤（拉黑坑位直接跳过）
+            live_here = _filter_blacklisted(live_here, brain,
+                                            _cur_map_name(gateway) or cur_map or "",
+                                            verbose)
             b = _pick_target(live_here, gx0, gy0, only_top=True, last_name=last_name)
             if b is not None:
                 last_name = b["name"]
@@ -4330,11 +4400,28 @@ def WORLD_BOSS_auto_farm(
                              if isinstance(_g, (int, float)) else "")
                     print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）{_gstr}", flush=True)
                     _last_kill_ts = time.time()
+                    # ★2026-09-01 P1/P2：成功击杀 → 抵消历史坑位 + 记热点耗时
+                    #  （跨图计数由 _go_map 统一记，此处只记本场耗时）
+                    try:
+                        brain.black_success(cur_map, b.get("gx"), b.get("gy"))
+                        if isinstance(_g, (int, float)):
+                            brain.hot_kill(cur_map, _g)
+                            # P3 参数自适应观测：战间间隔（绩效=间隔本身，越小越好）
+                            brain.param_observe("gap_between_battles", _g, metric=_g)
+                    except Exception:
+                        pass
                 else:
                     # gone = 没了；no_battle_option = 被人锁定/占领 → 拉黑，下轮换目标
                     print(f"  ✗ {b['name']} 跳过: {res.get('reason')} {res.get('msg')}",
                           flush=True)
                     excluded.add(_boss_key(b))
+                    # ★2026-09-01 P1：目标坑位失败记录（被锁/走失败都先暂存观察，
+                    #   达 3 次才拉黑；成功会抵消）
+                    try:
+                        brain.black_add(cur_map, b.get("gx"), b.get("gy"),
+                                        reason=str(res.get("reason") or ""))
+                    except Exception:
+                        pass
                 continue      # 维持抢占：零等待直接回外层重扫，按优先级切下一目标
             # 顶级三目标全无：公告先到怪未刷 / 已被击杀 / 被人锁定 → 复扫几轮再判
             caishen_scan_miss += 1
@@ -4497,6 +4584,8 @@ def WORLD_BOSS_auto_farm(
                 #   同优先级一律按"距角色坐标由近到远"取最近（平级交叉战斗，
                 #   战斗结束只对最近 BOSS CALL一次，失败马上走路/瞬移贴近）。
                 #   未登记实体 = _boss_priority 返回 None = 非目标，已由 _live_bosses 剔除。
+                # ★2026-09-01 P1 黑名单过滤（拉黑坑位直接跳过）
+                live = _filter_blacklisted(live, brain, real_map, verbose)
                 b = _pick_target(live, gx0, gy0, last_name=last_name)
                 if b is not None:
                     last_name = b["name"]
@@ -4526,11 +4615,26 @@ def WORLD_BOSS_auto_farm(
                              if isinstance(_g, (int, float)) else "")
                     print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）{_gstr}", flush=True)
                     _last_kill_ts = time.time()
+                    # ★2026-09-01 P1/P2：成功击杀 → 抵消历史坑位 + 记热点耗时
+                    try:
+                        brain.black_success(real_map, b.get("gx"), b.get("gy"))
+                        if isinstance(_g, (int, float)):
+                            brain.hot_kill(real_map, _g)
+                            # P3 参数自适应观测：战间间隔（绩效=间隔本身，越小越好）
+                            brain.param_observe("gap_between_battles", _g, metric=_g)
+                    except Exception:
+                        pass
                 else:
                     # battle_ended=False = 根本没进战斗（假触发），同样按失败处理
                     reason = res.get("reason") or ("no_battle_start" if res.get("ok") else "failed")
                     print(f"  ✗ {b['name']} 跳过: {reason} {res.get('msg')}", flush=True)
                     excluded.add(_boss_key(b))
+                    # ★2026-09-01 P1：目标坑位失败记录（达 3 次拉黑，成功抵消）
+                    try:
+                        brain.black_add(real_map, b.get("gx"), b.get("gy"),
+                                        reason=str(reason))
+                    except Exception:
+                        pass
                 if not _sleep_stoppable(0.1):  # 2026-08-30 提速轮：1.0→0.3→0.2→0.1，连续击杀不间断
                     stopped = True
                     break
@@ -4595,8 +4699,35 @@ def WORLD_BOSS_auto_farm(
     result = {"ok": True, "farmed_total": farmed_total, "elapsed": int(time.time() - t0)}
     if stopped:
         result["stopped"] = True
+    # ★2026-09-01 P1/P4：记忆落盘 + 断点（异常停止保留断点，正常结束清掉）
+    try:
+        if stopped:
+            brain.session_begin(cur_map or _cur_map_name(gateway) or "",
+                                *(_role_grid(gateway) if _role_grid(gateway) else (None, None)),
+                                kills=farmed_total, reason="stopped")
+        else:
+            brain.session_reset()
+        brain.done(force=True)
+    except Exception:
+        pass
     print(f"=== WORLD_BOSS_auto_farm 结束：累计击杀 {farmed_total}，耗时 {int(time.time()-t0)}s"
           f"{'（GUI 停止）' if stopped else ''} ===", flush=True)
+    # ★2026-09-01 P3：会话结束打印自适应建议（供用户/GUI 参考，非强制）
+    try:
+        _gap_avg, _gap_n = brain.param_current("gap_between_battles")
+        if _gap_n and _gap_n >= 3:
+            _gap_best = brain.param_best("gap_between_battles")
+            print(f"[BRAIN] 本会话战间均值 {_gap_avg:.1f}s（样本 {_gap_n}）；"
+                  f"历史最优区间参考 {_gap_best:.1f}s", flush=True)
+        _rank = brain.hot_map_rank(min_kills=5)
+        if _rank:
+            _top3 = "、".join(f"{r['map']}~{r['avg_cost']}s" for r in _rank[:3])
+            print(f"[BRAIN] 效率榜Top3: {_top3}", flush=True)
+        _bb = brain.stats().get("black_entries", 0)
+        if _bb:
+            print(f"[BRAIN] 已积累坑位 {_bb} 条（下次启动自动避让）", flush=True)
+    except Exception:
+        pass
     return result
 
 

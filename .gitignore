@@ -37,3 +37,6 @@ Thumbs.db
 *.jpg
 *.jpeg
 !assets/game_data/图片数据/*.bmp
+
+# BRAIN 自我进化记忆库（运行时数据，跨会话积累，不入库）
+data/brain_memory.json
