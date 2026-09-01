@@ -7,7 +7,7 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-GAME_PID = 6724
+GAME_PID = 12996
 GATEWAY = "http://127.0.0.1:18082"
 
 from core.window_manager import window_manager

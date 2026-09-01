@@ -347,6 +347,7 @@ MAP_ID_TO_NAME: Dict[str, str] = {
     "1203": "小西天",
     "1218": "墨家村",
     "1501": "建邺城",   # 显示名=宝象国
+    "1226": "宝象国",   # 2026-08-30 实测：宝象国真实地图 ID=1226（"碗子山传送宝象国"落点）
     "1505": "建邺杂货铺",
     "1506": "东海湾",
     "1507": "东海海底",
@@ -364,11 +365,19 @@ _MAP_NAME_TO_ID: Dict[str, str] = {v: k for k, v in MAP_ID_TO_NAME.items()}
 #   不校验坐标（x,y 随便填都能切图）。因此每条“起点传送/进终点”边都是全局传送符，
 #   链式拼接可从任意位置直达目标图。
 # 注意：1501 内部叫“建邺城”，显示名是“宝象国”——公告若报“宝象国”，hop 链用建邺城。
+# ★ 2026-08-30 宝象国链路打通（用户指路 + 实图 dump 验证）：宝象国不能从大唐境外
+#   直接传送，需经「大唐境外→(驿站对话)→碗子山(1228)→宝象国(1226)」：
+#   - 大唐境外→碗子山无 desc，靠点驿站老板"送我过去"（_STATION_DLG_ 占位，实现在
+#     _station_dialog_cross，实测成功）；碗子山传送表实测含「碗子山传送宝象国@60,3664」。
+#   - 朱紫国从大唐境外直达「大唐境外传送朱紫国@120,1080」。
+#   （旧链路「长安→江南野外→建邺城」部分时刻失败，现统一走西域链路更稳。）
 _HOP_CHAINS: Dict[str, List[str]] = {
     "长安":     ["江南野外传送长安"],
     "江南野外": ["长安传送江南野外"],
-    "建邺城":   ["长安传送江南野外", "江南野外传送建邺城"],
-    "宝象国":   ["长安传送江南野外", "江南野外传送建邺城"],
+    "建邺城":   ["长安传送大唐国境", "大唐国境传送大唐境外",
+                 "_STATION_DLG_", "碗子山传送宝象国"],
+    "宝象国":   ["长安传送大唐国境", "大唐国境传送大唐境外",
+                 "_STATION_DLG_", "碗子山传送宝象国"],
     "东海湾":   ["长安传送江南野外", "江南野外传送建邺城", "建邺城进东海湾新"],
     "东海海底": ["长安传送江南野外", "江南野外传送建邺城", "建邺城进东海湾新",
                  "东海湾进东海海底"],
@@ -450,8 +459,10 @@ BOSS_BATTLE_KEYWORDS: Dict[str, List[str]] = {
                                                     # 2026-08-29 截图：冥府头领红色选项"休得在此放肆"开战
     "天降灵猴":    ["我来瞧瞧你的啥", "瞧瞧你的啥"],
     "下凡的灵猴":  ["我来瞧瞧你的啥", "瞧瞧你的啥"],
-    "新型冠状病毒": ["消灭它们", "消灭", "消杀", "收拾你"],  # 2026-08-29 新增：无实测截图，词条为候选；
-                                                           # 主要靠 call_dialog_battle 的宽松兜底捕获
+    "新型冠状病毒": ["酒精消毒", "戴上口罩", "消灭它们", "消灭", "消杀", "收拾你"],
+    # 2026-08-30 实测实锤：CALL 后对话选项 = 「酒精消毒」「戴上口罩」（链接同文案），
+    # 旧词条(消灭/消杀/收拾)与宽松兜底(杀/灭/打/战…)全不匹配 → 无法开战（用户反馈）。
+    # 实测量到的选项已放入第一位，另保留旧词条防变体。
     "知了王":      ["知了还这么嚣张？讨打！", "讨打", "嚣张"],
     "心魔":        ["消灭他们", "消灭", "前去消灭"],
     "二十八星宿":  ["请星君赐", "那我就不客气了", "不客气"],  # "请星君赐"前缀兼
@@ -496,8 +507,28 @@ QUICK_CALL_MAX_TRIES = 3
 # 2026-08-28 C11：4→6 格。实测 CALL 命中最远 19.2 格（超距确认框阈值远比
 # 想象宽），4 格让边走边CALL多跑冤枉路；6 格在"少走路"与"防太远弹窗"间取衡。
 APPROACH_GRID_DISTANCE = 6.0
-# 2026-08-29 平级交叉攻击：异名目标相对同名最近目标的可接受额外距离（格），脚边异名可切换
-CROSS_NAME_NEAR_DIST = 6.0
+# ★ 2026-08-30 用户定案：这些图禁用走路通道，接近 BOSS 全用瞬移——图太大，
+#   跨图走路动辄几十秒纯浪费（大唐境外实测）。命中列表直接跳过 _approach_boss 的
+#   走路分支，落到随机环带瞬移兜底（3~8 格随机落点，落地稳定窗已处理）。
+_TELEPORT_ONLY_MAPS = ("大唐境外",)
+# ★ 2026-08-30 用户定案（速度优先）：目标距离超过此格数 → 直接瞬移环带贴近。
+# ★ 2026-09-01 用户再定案（拟人/防瞬移）：**>80 格才瞬移**。8→20→8 的反复
+#   源于"走路 TAB 开关大地图卡顿"与"瞬移密度高触发崩溃"两难；本次定案 80：
+#   - ≤15 格：原地 CALL（CALL_SKIP_DIST=15，实测 CALL 上限 19.2 格）
+#   - 15~80 格：真实走路 + 边走边 CALL（拟人优先，防举报；4 格/s 速度：
+#     15 格≈4s、80 格≈20s+余量，边走边CALL 接近目标即命中，不需走满）
+#   - >80 格：才瞬移（远距离瞬移价值充分，且大幅降低瞬移触发引擎崩溃概率）
+TELEPORT_FAST_DIST = 80.0
+# 2026-08-30 用户定案：走路通道"提前 CALL"——走路落点不再直接点怪坐标±2，
+# 而是落在怪周边 10±5 格的随机提前就位点；角色进入提前点就边走边 CALL
+# （call 有效距离实测 ≥19 格，10 格范围内必然可命中），无需走到怪脸上；
+# 提前点 CALL 未中 → 二次精确走到怪坐标旁再 CALL，最后才瞬移兜底。
+WALK_APPROACH_LEAD = 10.0          # 提前就位点距离基准（格）
+WALK_APPROACH_LEAD_JITTER = 5.0    # 提前就位点随机容错（±5 格）
+WALK_APPROACH_LEAD_MIN = WALK_APPROACH_LEAD - WALK_APPROACH_LEAD_JITTER  # 5
+WALK_APPROACH_LEAD_MAX = WALK_APPROACH_LEAD + WALK_APPROACH_LEAD_JITTER  # 15
+# 2026-08-30 用户定案：平级内由近到远取最近目标（异名交叉攻击已移除，防地图东跑西跑）
+# （CROSS_NAME_NEAR_DIST 已随 2026-08-30 平级选择简化删除）
 WALK_ARRIVAL_TIMEOUT = 30.0  # 走路贴近后等"离BOSS进范围"的上限（旧 90s 太长，怪在眼前干等）
 WALK_ARRIVAL_BOX = 20        # 2026-08-28 用户定案：落点 ±20 格内就算"走路到位"，
                              # 不再强制走到 4 格内才认（CALL 不中由后续补瞬移拉近）
@@ -512,9 +543,21 @@ WALK_CALL_INTERVAL = 1.5     # 边走边CALL 节拍（秒）（2026-08-29 用户
 WALK_SPEED_GRID_SEC = 4.0    # 预计走路速度（格/秒），用于估算走路超时上限
 WALK_TIME_MARGIN = 5.0       # 走路时间估算余量（秒），覆盖起步/寻路绕行开销
 # 无地图包瞬移兜底落点：BOSS 周边随机环带半径范围（格）。绝不落在 BOSS 坐标上。
-TELEPORT_OFFSET_RANGE = (3.0, 8.0)
+# 2026-08-30 用户提速：3-8格→2-4格——落点更贴近 BOSS，落地当场 CALL 即可命中
+#（实测 CALL 命中可达 19 格，2~4 格自然命中），不再"落点过远→二次补传"白等。
+TELEPORT_OFFSET_RANGE = (2.0, 4.0)
 # 第一次落点仍超距时，第二次补传用更近的半径。
-TELEPORT_RETRY_RANGE = (2.0, 4.0)
+TELEPORT_RETRY_RANGE = (1.0, 2.5)
+# ★2026-08-30 用户：远距离不原地CALL（避免超距弹窗/幽灵对话空转），
+#   先移动（走路/瞬移）到有效距离再 CALL。CALL 可直接命中实测上限 ~19 格，
+#   但自动战斗的"超距确认框"在 6 格外就可能弹出。
+# ★2026-08-31 00:25 用户再定案：8→15——CALL 实测上限 19.2 格，15 格内直接
+#   原地 CALL（留 4 格余量）。即使弹出超距确认框也只是多 1 次 Lua（_dialog_is_too_far
+#   识别后自动走近），省下 1 次瞬移（~3s + 引擎装载风险）——减操作密度防崩。
+CALL_SKIP_DIST = 15.0
+# ★2026-08-30 瞬移连发冷却（用户实锤高危点："走路没到位在目标范围瞬移2次"）：
+#   两次瞬移最小间隔，防连发 Lua/同步包冲击。
+TELEPORT_GAP = 3.0
 
 # 必须名称完全相等才匹配的 BOSS（避免“妖魔”误中普通 NPC）。
 # 注意：扫描时“天降灵猴”的公告名可能对应场景实体“下凡的灵猴”，需同时注册。
@@ -572,13 +615,13 @@ _SUFFIX_TOKEN_RES = {
 # 2026-08-28 六定案（用户 21:02）：未登记(默认 2) 从 _boss_priority 移除——
 #   未登记实体一律视为非目标（不排序/不攻击），白名单+本表双重门控，
 #   防止未知 NPC/杂鱼被走近+CALL 空转。词缀类（"初出茅庐地煞星"）按类别子串归级。
-# 2026-08-29 用户定案：优先级档位常量（数字越小越优先）
-PRI_CAISHEN = 0      # 三界财神爷：唯一能触发抢占模式
-PRI_STARLORD = 1     # 二十八星君（娄金狗等 28 名）：公告点名，瞬移追击
-PRI_TOULING = 2      # *头领（前缀不定，后缀匹配） / 妖魔统领 —— 2026-08-29 用户定案：与知了王并列 P2
-PRI_ZHILIAO = 2      # 知了王 —— 2026-08-29 用户定案：由原 P2 降为与 *头领 并列 P2
-PRI_WHITELIST = 3    # 其余白名单：灵猴 / 十二生肖 / 天罡星 / 地煞星（2026-08-29：原 P4 → P3）
-PRI_TRASH = 4        # 妖族杂鱼：妖魔鬼怪 / 妖魔 / 鬼怪，垫底（2026-08-29：原 P5 → P4）
+# 2026-08-30 用户新定案（速度/交叉战斗优化）：平级内交叉战斗，同档按距离由近到远
+PRI_CAISHEN = 0      # 三界财神爷：最高，唯一触发抢占模式
+PRI_TOULING = 1      # 妖魔头领（前缀不定，后缀匹配）= 妖魔统领 = 知了王 —— 用户新定 P1
+PRI_ZHILIAO = 1      # 知了王 —— 与 *头领 / *统领 并列 P1
+PRI_STARLORD = 2     # 二十八星宿：**不看公告**，地图识别到就打，与众怪平级 P2
+PRI_WHITELIST = 2    # 其余白名单：灵猴 / 十二生肖 / 天罡星 / 地煞星 → 平级 P2
+PRI_TRASH = 2        # 妖族杂鱼：妖魔鬼怪 / 妖魔 / 鬼怪 → 平级 P2（同层统一按距离取最近）
 
 BOSS_PRIORITY = {
     "三界财神爷": PRI_CAISHEN,
@@ -598,9 +641,9 @@ for _n in _12_ZODIAC_BOSSES:
 for _n in ("妖魔鬼怪", "妖魔", "鬼怪"):
     BOSS_PRIORITY[_n] = PRI_TRASH
 
-# 顶级目标阈值：优先级 <= 此值属"顶级目标"——三界财神爷在场或公告出现即进入
-# 抢占模式，期间只打顶级目标；顶级目标全无才回落普通模式打白名单(P3)/杂鱼(P4)。
-# 顶级链：P0 财神爷 ＞ P1 二十八星君 ＞ P2 *头领 = 知了王
+# 顶级目标阈值：优先级 <= 此值属"顶级目标"——三界财神爷出现即进入抢占模式，
+# 期间只打顶级目标。2026-08-30 用户新定案：顶级 = 财神爷(P0) + 头领/统领/知了王(P1)；
+# 二十八星宿**不再是顶级**（不看公告、不触发抢占/跨图，地图扫到按普通 P2 打）。
 TOP_TIER_PRIORITY = PRI_TOULING
 TOP_TIER_BOSS_NAMES = tuple(sorted(n for n, p in BOSS_PRIORITY.items()
                                    if p <= TOP_TIER_PRIORITY))
@@ -608,12 +651,15 @@ TOP_TIER_BOSS_NAMES = tuple(sorted(n for n, p in BOSS_PRIORITY.items()
 # 2026-08-28 五定案：这批公告词/实体名视为"杂鱼"——公告不触发跨图，
 # 场景内排序永远垫底（其他 BOSS 打完才轮到它们）。
 LOW_PRIORITY_BOSSES = {"妖魔鬼怪", "妖魔", "鬼怪"}
+# ★ 2026-08-30 用户定案：二十八星宿"不看公告"——星宿公告不触发跨图，
+#   地图场景识别到就按普通 P2 打（开着公告跨图会在各星宿公告图之间被拉扯）。
+NO_CROSS_BOSSES = frozenset(LOW_PRIORITY_BOSSES) | frozenset(_28_STAR_BOSSES)
 
-# 2026-08-29 用户定案重写：顶级目标抢占模式（原"财神爷独占抢占"升级）。
-#   优先级链：三界财神爷(P0) ＞ 二十八星宿(P1) ＞ 头领 = 统领 = 知了王(P2)
-#             ＞ 其余白名单(P3) ＞ 妖族杂鱼(P4)。
+# 2026-08-30 用户新定案重写：顶级目标抢占模式。
+#   优先级链：三界财神爷(P0) ＞ 头领 = 统领 = 知了王(P1) ＞ 其余全部（含星宿）P2。
 #   触发：本图实扫到财神爷，或聊天公告出现财神爷 → 抢占并（必要时）瞬移到该图；
-#   抢占期间只打顶级目标（P0~P2），顺序同上；顶级全无 → 解除抢占，回落普通模式。
+#   抢占期间只打顶级目标（P0~P1）；全无 → 解除抢占，回落普通模式。
+#   二十八星宿不参与抢占、不看公告，场景扫到按 P2 打。
 CAISHEN_BOSS = "三界财神爷"
 # 解除抢占的宽容度：顶级目标连扫这么多次仍为空才回落（2 次×0.5s 只容忍场景加载瞬间），
 # 绝不多轮干等——旧版"财神爷一没就立刻回落"会漏掉同图的知了王/妖魔头领。
@@ -623,6 +669,39 @@ CAISHEN_SCAN_MISS_GAP = 0.5
 
 # 2026-08-29 目标名单运行期登记：供 _boss_priority 对"名单内但未映射档位"的名字兜底为白名单档
 _RUN_TARGET_BOSSES = frozenset()
+# ★ 2026-08-30 顶级公告优先跨图：主循环设置"顶部目标（财神/星宿/头领）公告指向他图"
+#   → 本图杂鱼的第一个 CALL 立即中止、先跨图（_farm_one_boss 启动时检查）。
+_TOP_PIN_MAP: Optional[str] = None
+# ★ 2026-08-30 流畅度指标：上一场战斗结束时间戳（验证"战斗结束→下次开战"间隔，
+#   目标在附近时应 ~1s；若明显偏大说明流程里有等待点需要排查）。
+_PREV_BATTLE_END: Optional[float] = None
+_BATTLE_START_TS: float = 0.0
+_BATTLE_END_TS: float = 0.0
+# 2026-08-30 分子级诊断：farm_one_boss 入口 / 开战瞬间打点
+_FARM_START_TS: float = 0.0
+# ★2026-08-30 提速：战斗结束结算动画窗口内，立刻发起的攻击会被引擎打回（nodlg/
+#   反复重试白耗 ~8s）。统一在每场战斗结束后固定等 _POST_BATTLE_SETTLE 秒（动画
+#   收尾），让下一次攻击第一发即命中——把"8s 失败重试"换成"1.6s 一次等齐"。
+_POST_BATTLE_SETTLE = 1.6
+_POST_BATTLE_TS: float = 0.0
+
+
+def _battle_gap_metric(ended: bool) -> Optional[float]:
+    """战斗结束 → 计算"上次战斗结束→本场开战"间隔（秒）流畅度指标，并滚动状态。
+
+    :param ended: 本场战斗是否正常结束（_wait_battle_end）
+    :return: 间隔秒；首场或未正常结束返回 None
+    """
+    global _PREV_BATTLE_END, _BATTLE_START_TS, _BATTLE_END_TS, _POST_BATTLE_TS
+    if not ended:
+        return None
+    _BATTLE_END_TS = __tm.time()
+    _POST_BATTLE_TS = _BATTLE_END_TS   # 2026-08-30 结算动画窗口锚点
+    gap = (_BATTLE_START_TS - _PREV_BATTLE_END) if _PREV_BATTLE_END else None
+    if gap is not None and gap < 0:
+        gap = None
+    _PREV_BATTLE_END = _BATTLE_END_TS
+    return gap
 
 
 def _boss_priority(name: str):
@@ -649,10 +728,10 @@ def _boss_priority(name: str):
 
 
 def _is_top_tier(name: str) -> bool:
-    """是否"顶级目标"：P0 三界财神爷 / P1 二十八星宿 / P2 头领 = 统领 = 知了王。
+    """是否"顶级目标"：P0 三界财神爷 / P1 头领 = 统领 = 知了王（2026-08-30 用户新定）。
 
-    顶级目标触发抢占模式——只要任一在场（或财神爷公告出现），就只打这一类，
-    绝不浪费轮次在 P3 白名单怪 / P4 妖族杂鱼上。
+    顶级目标触发抢占模式——只要任一在场（或财神爷公告出现），就只打这一类；
+    二十八星宿不属于顶级：不看公告、不触发抢占，场景识别到按普通 P2 打。
     """
     p = _boss_priority(name)
     return p is not None and p <= TOP_TIER_PRIORITY
@@ -669,8 +748,8 @@ def _pick_target(live: List[Dict[str, Any]], gx0: float = 0.0, gy0: float = 0.0,
 
     :param only_top: True = 只在顶级目标(P0~P2)中选；顶级目标全无返回 None，
         调用方据此判断"该解除抢占回落普通模式了"。
-    :param last_name: 2026-08-29 平级交叉攻击：上一次选中目标的名字，用于同级共享时
-        优先切换更近的异名目标（脚边异名优先），避免反复找同一只怪漏打其他目标。
+    :param last_name: 兼容保留（2026-08-30 起不再用于"异名跳远"：
+        用户定案"优先级不动，平级内由近到远取最近目标"，避免地图东跑西跑）。
     """
     pool = [x for x in live if _is_top_tier(x["name"])] if only_top else list(live)
     if not pool:
@@ -680,28 +759,9 @@ def _pick_target(live: List[Dict[str, Any]], gx0: float = 0.0, gy0: float = 0.0,
     tier = [x for x in pool if _boss_priority(x["name"]) == minp]
     if len(tier) <= 1:
         return tier[0] if tier else None
-    # 同档多目标：先按名字分组，每组取距离平方(_dist2)最近代表
-    groups = {}
-    for x in tier:
-        groups.setdefault(x["name"], []).append(x)
-    reps = [min(g, key=lambda q: _dist2(q, gx0, gy0)) for g in groups.values()]
-    if len(reps) == 1 or last_name is None:
-        # 距离优先（原行为）
-        return min(tier, key=lambda q: _dist2(q, gx0, gy0))
-    # 把代表分成与 last_name 同名组 same 与异名组 diff
-    same = [x for x in reps if x["name"] == last_name]
-    diff = [x for x in reps if x["name"] != last_name]
-    if diff:
-        best_diff = min(diff, key=lambda q: _dist2(q, gx0, gy0))
-        best_same = min(same, key=lambda q: _dist2(q, gx0, gy0)) if same else None
-        if best_same is None:
-            return best_diff
-        # 切换条件：异名目标相对同名最近目标多出的距离 ≤ 容差(格) → 异名优先；否则太远不跑冤枉路
-        if _dist2(best_diff, gx0, gy0) <= (
-                _dist2(best_same, gx0, gy0) ** 0.5 + CROSS_NAME_NEAR_DIST) ** 2:
-            return best_diff
-        return best_same
-    # diff 为空：全部同名 → 距离最小者
+    # 2026-08-30 用户定案：平级内严格按"距角色坐标由近到远"取最近目标——
+    # 上一只名字不同（异名交叉攻击）时不再切换到稍远的异名怪，避免地图东跑西跑。
+    # 距离即选目标：同档多目标直接取 _dist2（角色坐标 gx0,gy0）最小者。
     return min(tier, key=lambda q: _dist2(q, gx0, gy0))
 
 
@@ -974,6 +1034,23 @@ _lua_call_count = 0
 import time as __tm
 _last_gc_ts = __tm.time()
 
+# ★2026-08-30 全局 Lua 节流器（方案A：9:07-9:30 attach 静置 23 分钟零崩溃 vs farm
+#  持续注入 1-8 分钟随机崩 → 触发源=持续 Lua 脚本活动；用户提示"走路通道一直 CALL"
+#  是最高频点之一）。WORLDBOSS_LUA_SLOW.flag 存在时，所有经 _lua/_lua_expr 的注入
+#  强制最小间隔（默认 1.0s），把走路CALL/扫描/公告的高频注入统一压平。
+_LUA_MIN_GAP = 0.0
+_lua_last_ts = 0.0
+
+
+def _lua_throttle():
+    """全局节流：距上次注入不足 _LUA_MIN_GAP 则 sleep 补齐。"""
+    global _lua_last_ts
+    if _LUA_MIN_GAP > 0:
+        _wait = _LUA_MIN_GAP - (__tm.time() - _lua_last_ts)
+        if _wait > 0:
+            __tm.sleep(_wait)
+        _lua_last_ts = __tm.time()
+
 
 def _lua(gateway: str, code: str, result_var: str = "__out") -> str:
     """经 /api/lua 执行 Lua 语句块，返回 result_var 值字符串。
@@ -986,6 +1063,7 @@ def _lua(gateway: str, code: str, result_var: str = "__out") -> str:
     从源头缓解内存累积。
     """
     code = _maybe_prepend_gc(code)
+    _lua_throttle()
     r = _http_json(gateway, "/api/lua", {"code": code, "result_var": result_var})
     if not r.get("ok"):
         err = str(r.get("error", r))
@@ -1001,6 +1079,7 @@ def _lua(gateway: str, code: str, result_var: str = "__out") -> str:
 
 def _lua_expr(gateway: str, expr: str) -> str:
     """经 /api/lua/expr 执行单个表达式，会话死亡时自动自愈重试一次。"""
+    _lua_throttle()
     r = _http_json(gateway, "/api/lua/expr", {"expr": expr})
     if not r.get("ok"):
         err = str(r.get("error", r))
@@ -1049,17 +1128,22 @@ def _norm_grid_xy(x, y, map_name: str = None):
     """把可疑坐标规约成合法网格坐标，返回 (x, y, note)。
 
     规则：
-      1. x/y 任一 > GRID_SANITY_MAX → 判为内部像素坐标，÷20 转网格；
-      2. 已知地图边界（map_ui_blocks.max_game_coord，用户实测）→ 钳制入界；
-      3. 未知地图至少保证 ≥0 且 ≤GRID_SANITY_MAX。
+      1. 已知地图边界（map_ui_blocks.max_game_coord，用户实测）→ 以该图边界×15
+         判像素（内部像素=网格×20，边界×15 能把真实像素值（如 12040）与合法
+         网格（如大唐国境 349/大唐境外 533，仅略超测量边界）清晰分开——老全局
+         GRID_SANITY_MAX=400 或"边界本身"都会把贴近边界/略超边的合法格坐标
+         误判成像素 ×÷20 → 怪物定位全错、反复落错点空转刷时间）；
+      2. 超过网格上限×15 → 判为内部像素坐标，÷20 转网格；
+      3. 钳制入界（≤0 或 ≥地图边界）。
     """
     x, y = float(x), float(y)
     note = ""
-    if abs(x) > GRID_SANITY_MAX or abs(y) > GRID_SANITY_MAX:
+    b = _load_map_bounds(map_name) if map_name else None
+    lim = (max(b) * 15.0) if b else GRID_SANITY_MAX
+    if abs(x) > lim or abs(y) > lim:
         x, y = x / 20.0, y / 20.0
         note = "像素→网格÷20"
     if map_name:
-        b = _load_map_bounds(map_name)
         if b:
             cx = int(min(max(round(x), 0), b[0]))
             cy = int(min(max(round(y), 0), b[1]))
@@ -1086,6 +1170,240 @@ def _gw_teleport(gateway: str, x: int, y: int, map_name: str = None) -> dict:
         gateway, "/api/act/teleport",
         {"x": int(nx), "y": int(ny), "sync": True, "jump": True}, timeout=15.0,
     )
+
+
+# 驿站对话跨图：无 desc 的入口（如大唐境外→碗子山）。在开阔图找"驿站老板"
+#（对话含"送我过去"的传送驿站），CALL 事件开始 → PostMessage 点选项中心 → 切图。
+# ★ 2026-08-30 实测定论：
+#   - 大唐境外有两个"驿站老板"：@205,93（野怪，对话"让我来收拾你/我只是路过"）、
+#     @13,95（真传送驿站，对话"送我过去/我还要逛逛"）——必须选后者。
+#   - 选项"送我过去"选中判断矩形 (sx=219, sy=354, w=56, h=14) = 客户区绝对坐标，
+#     中心 (247,361)。PostMessage 点击该点即触发传送（实测成功 1228 碗子山）。
+#   - 需 hwnd 做后台 PostMessage（与 _fast_foot_click 同款）。
+_STATION_DIALOG_TEXT = "送我过去"   # 传送驿站的首选项文本（区分野怪驿站）
+
+# ★ 2026-08-30 驿站定位（用户定案：大唐境外全瞬移、不走路——图太大走路太慢）：
+#   驿站对话跨图前提是角色贴近驿站（实测 CALL 距驿站 ≤~4 格才开对话栏，远了
+#   事件开始 无反应）。hop 链中间步骤角色只落在地图入口，离驿站几十~上百格 →
+#   自动链路必失败（14:14 记录）。修法：直接瞬移到驿站旁可走格 (12,95)——实测
+#   落点精确到 1 格内（大唐境外站 @13,95，另一"驿站老板"@205,93 贴近后同样是
+#   [送我过去|我还要逛逛]）。注意跨图刚完成立刻瞬移会被 snap 到远处，须等落地稳定。
+_STATION_POINTS: Dict[str, Tuple[int, int]] = {
+    "大唐境外": (12, 95),
+    # ★2026-09-01 建邺城→江南野外：建邺守卫（称谓"传送江南野外"）网格坐标 (9,141)
+    #   （用户 00:40 提供；柔和 CALL 后点"传送江南野外"实测 1501→1193 成功）
+    "建邺城": (9, 141),
+}
+
+
+def _close_dialog(gateway: str) -> None:
+    """关闭当前打开的对话栏（驿站/商店等窗口通用）。"""
+    try:
+        code = r'''
+local d = tp.窗口.对话栏
+if d then
+  local cm = d.关闭 or d.关 or (getmetatable(d) and getmetatable(d).__index and getmetatable(d).__index.关闭)
+  if cm then pcall(cm, d) end
+end
+_G.__out = (d ~= nil) and "closed" or "none"
+'''
+        _lua(gateway, code)
+    except Exception:
+        pass
+
+
+def _station_dialog_cross(gateway: str, verbose: bool = True,
+                          opt_text: str = None) -> bool:
+    """点击当前图「传送 NPC」的传送选项实现跨图（无 desc 时用）。
+
+    通用化（2026-09-01 实测）：
+      - 驿站老板（大唐境外）→ 选项「送我过去」（opt_text=None 默认）
+      - 建邺守卫（建邺城）→ 选项「传送江南野外」（opt_text="传送江南野外"）
+      候选实体 = 名称含「驿站老板/守卫」且其 称谓/对话 含目标子串的 NPC。
+
+    ★2026-09-01 「柔和 CALL」定案（用户指出"CALL 太快会崩"）：
+      引擎装载对话脚本需要时间，CALL 后立即读选项/点击会撞未就绪状态 → 触发
+      「this arg is not a userdata!」致命弹窗 → 游戏崩溃退选服界面（00:29 实锤
+      PID 17784→23220）。柔和节奏 = CALL 后等 2s 装载 + 点击间隔 0.3~0.4s +
+      MOUSEMOVE 前置，实测建邺守卫 CALL+点传送 全链路无崩溃、成功切图到江南野外。
+
+    :param opt_text: 要点击的传送选项文本；None=默认「送我过去」（驿站）
+    :return: True 切图成功（地图 ID 与发起时不同） / False 失败
+    """
+    target_opt = opt_text or _STATION_DIALOG_TEXT   # 默认驿站"送我过去"
+    from library.common.win_utils import locate_game_window as _lgw
+    try:
+        import ctypes as _ct
+    except Exception:
+        return False
+    pid = _get_bound_pid()
+    hwnd = 0
+    if pid > 0:
+        _h = _lgw(pid, verbose=False)
+        hwnd = _h[0] if isinstance(_h, tuple) else _h
+    if not hwnd:
+        if verbose:
+            print("  ! 传送NPC跨图：未定位游戏窗口", flush=True)
+        return False
+    # ★ 2026-08-30 用户定案：大唐境外全用瞬移（图太大，走路太慢）。定位驿站同样
+    #   直接瞬移到驿站旁可走格——实测 (12,95) 瞬移落点精确到 1 格内（落地稳定后
+    #   CALL 必开"送我过去"）。瞬移落地后短等稳定窗，坐标还在跳动期 CALL 会扑空。
+    cur_map = _cur_map_name(gateway)
+    st = _STATION_POINTS.get(cur_map)
+    if st:
+        rg = _role_grid(gateway)
+        near = (rg is not None and abs(rg[0] - st[0]) < 5.0
+                and abs(rg[1] - st[1]) < 5.0)
+        if not near:
+            if verbose:
+                print(f"  → 传送NPC跨图：瞬移到驿站旁 {cur_map}({st[0]},{st[1]})"
+                      f"（当前 {rg}）", flush=True)
+            for _tp in range(2):   # 落地抖动重试一次
+                _gw_teleport(gateway, st[0], st[1], map_name=cur_map)
+                time.sleep(1.2)
+                rg = _role_grid(gateway)
+                if (rg is not None and abs(rg[0] - st[0]) < 5.0
+                        and abs(rg[1] - st[1]) < 5.0):
+                    break
+            if verbose:
+                print(f"  → 传送NPC跨图：落地 {rg}", flush=True)
+    # 1)~5) 找含目标选项的传送 NPC CALL → 点选项 → 等切图。
+    # ★ 2026-08-30 实测修订：大唐境外两个"驿站老板"@13,95 与 @205,93 贴近后
+    #   都会开 [送我过去|我还要逛逛]（此前误判 @205,93 为野怪）。逐个 CALL 后检查
+    #   对话栏是否出现目标选项，不出现就右键关掉继续试下一个——绝不只凭 ok 就
+    #   break（CALL 成功 ≠ 开了目标对话）。
+    # ★ 2026-09-01 柔和定案：CALL 后必须短等装载（见 docstring），读选项也要
+    #   逐次间隔拉长，避免高密 Lua 往返触发引擎战斗脚本装载崩溃。
+    code = r'''
+local out = ""
+local target = "TARGET_OPT"
+for _, pool in ipairs({tp.场景.场景人物, tp.临时Npc}) do
+  if type(pool) == "table" then
+    for k, e in pairs(pool) do
+      if type(e) == "table" then
+        local nm = tostring(e.名称 or e.名字 or "")
+        local sub = tostring(e.称谓 or e.子类 or "")
+        -- 驿站老板 OR 传送守卫（称谓含目标图/传送字样的 NPC 都可能是入口）
+        if nm:find("驿站") or nm:find("守卫") or sub:find("传送") then
+          local mt = getmetatable(e)
+          local ev = (mt and mt.__index and mt.__index.事件开始) or e["事件开始"]
+          if type(ev) == "function" then
+            local ok, er = pcall(function() return ev(e) end)
+            if ok then out = tostring(k) break end
+          end
+        end
+      end
+    end
+  end
+  if out ~= "" then break end
+end
+_G.__out = out
+'''
+    code = code.replace("TARGET_OPT", target_opt)
+    for _att in range(2):
+        if _att > 0:
+            _close_dialog(gateway)   # 清理上一个 attempt 残留的对话栏
+            time.sleep(0.6)
+        uid = _lua(gateway, code)
+        if not uid:
+            if verbose:
+                print(f"  ! 传送NPC跨图：找不到含'{target_opt}'的传送NPC", flush=True)
+            continue
+        # ★2026-09-01 柔和定案：CALL NPC 后必须等 2s 让引擎装载对话脚本
+        #   （0s 就操作会撞未就绪 → this arg is not a userdata → 崩游戏退选服）
+        time.sleep(2.0)
+        # 2) 柔和等对话栏装载完成（再兜底轮询）
+        dlg_ok = False
+        for _ in range(12):
+            time.sleep(0.5)
+            d = _read_dialog_bar(gateway)
+            if any(target_opt in x for x in d):
+                dlg_ok = True
+                break
+        if not dlg_ok:
+            if verbose:
+                print(f"  ! 传送NPC跨图：CALL 后无选项（uid={uid}），尝试直接点击", flush=True)
+        # 3) 读目标选项选中判断矩形（客户区绝对坐标）
+        sel = _read_dialog_sel_rect(gateway, target_opt)
+        if not sel:
+            if verbose:
+                print(f"  ! 传送NPC跨图：读不到'{target_opt}'矩形", flush=True)
+            continue
+        cx, cy = (sel[0] + sel[2]) // 2, (sel[1] + sel[3]) // 2
+        if verbose:
+            print(f"  → 传送NPC跨图：点'{target_opt}' 客户区({cx},{cy})", flush=True)
+        # 4) 柔和 PostMessage 点击（MOUSEMOVE → 0.35s → down → 0.35s → up）
+        user32 = _ct.windll.user32
+        lp = (int(cy) << 16) | (int(cx) & 0xFFFF)
+        time.sleep(0.8)
+        user32.PostMessageW(hwnd, 0x0200, 0, lp); time.sleep(0.35)
+        user32.PostMessageW(hwnd, 0x0201, 1, lp); time.sleep(0.35)
+        user32.PostMessageW(hwnd, 0x0202, 0, lp)
+        # 5) 等地图变化（发起时的地图 ID）
+        cur0 = _cur_map_id(gateway)
+        for _ in range(20):
+            time.sleep(1.0)
+            now = _cur_map_id(gateway)
+            if now is not None and now != cur0:
+                if verbose:
+                    print(f"  ✓ 传送NPC跨图成功：地图 {cur0} → {now}", flush=True)
+                return True
+        if verbose:
+            print(f"  ! 传送NPC跨图：点后 20s 地图未变（{cur0}→{_cur_map_id(gateway)}），重试",
+                  flush=True)
+    return False
+
+
+def _read_dialog_bar(gateway: str) -> List[str]:
+    """读对话栏选项文本列表。"""
+    code = r'''
+local out = {}
+local d = tp.窗口.对话栏
+if d and d.选项 then
+  for i = 1, 16 do
+    local e = d.选项[i]
+    if type(e) == "table" then
+      out[#out+1] = tostring(e.基本内容 or e.跳转链接 or "")
+    end
+  end
+end
+_G.__out = table.concat(out, ";")
+'''
+    raw = _lua(gateway, code)
+    return [x for x in (raw or "").split(";") if x]
+
+
+def _read_dialog_sel_rect(gateway: str, opt_text: str) -> Optional[tuple]:
+    """读对话栏指定选项的选中判断矩形 (x, y, x2, y2)（客户区绝对坐标）。"""
+    code = r'''
+local out = ""
+local d = tp.窗口.对话栏
+if d and d.选项 then
+  for i = 1, 16 do
+    local e = d.选项[i]
+    if type(e) == "table" then
+      local t = tostring(e.基本内容 or e.跳转链接 or "")
+      if t == OPT_TEXT then
+        local s = e.选中判断
+        if s then
+          out = tostring(s.x) .. "," .. tostring(s.y) .. "," ..
+                tostring(s.x2) .. "," .. tostring(s.y2)
+        end
+        break
+      end
+    end
+  end
+end
+_G.__out = out
+'''.replace("OPT_TEXT", '"%s"' % opt_text)
+    raw = _lua(gateway, code)
+    if not raw:
+        return None
+    try:
+        xs = [int(float(v)) for v in raw.split(",")]
+        return tuple(xs) if len(xs) == 4 else None
+    except Exception:
+        return None
 
 
 def _find_hop_teleport(gateway: str, target_name: str):
@@ -1162,6 +1480,360 @@ def _find_exact_hop(gateway: str, dest_name: str, sep: str = "传送",
     return None
 
 
+# ============================================================
+# 飞行符跨图（2026-09-01 用户定案：减少瞬移动作）
+# ============================================================
+# 原理：目标图在飞行符可传列表（长安/建邺城/傲来国/长寿村/西梁女国/宝象国/
+# 朱紫国，校准文件 data/fly_map_calib.json）→ 行囊右键飞行符道具 → 弹出传送
+# 地图界面 → 左键点目标图按钮（校准坐标）→ 等地图切换 → 瞬移落点。
+# 相对 hop 链：单次界面点击直达目标图，代替多段瞬移 hop（跨图密集瞬移是
+# 引擎战斗脚本装载崩溃的触发器之一）。
+#
+# 关键实测（2026-09-01 00:0x）：
+#   - 行囊物品表在"刚打开瞬间"可能未加载（读到 nil）→ 先关包再开包强制刷新；
+#   - Lua 资源组按钮坐标与实际渲染有偏差（长安差 ~58px）→ 点击用校准坐标；
+#   - 右键=打开飞行符道具；左键=传送界面里直接传送（无确认按钮）。
+
+# 飞行符可传地图 → 校准文件键名（长安=长安城, 建邺=建邺城, 西梁女国=西凉女国）
+_FLY_MAP_KEYS: Dict[str, str] = {
+    "长安": "长安",
+    "建邺城": "建邺",
+    "傲来国": "傲来国",
+    "长寿村": "长寿村",
+    "西梁女国": "西梁女国",
+    "宝象国": "宝象国",
+    "朱紫国": "朱紫国",
+}
+_FLY_CALIB_FILE = os.path.join(_PROJECT_ROOT, "data", "fly_map_calib.json")
+
+# ★2026-09-01 飞行符二级中转：目标图不在飞行符直达 7 键，但可 飞行符→中转图 →
+#   守卫/驿站对话传送 到达。值 = (中转图, 对话框选项文本, 守卫网格坐标 or None)
+#   实测链路（00:40~00:44）：
+#     - 江南野外：飞行符→建邺城→建邺守卫"传送江南野外"(9,141) 1501→1193 ✓ 无崩溃
+#   用户提供的中转辐射关系（2026-09-01 00:45，守卫入口待逐图实测后补坐标）：
+#     - 长寿村 → 方寸山、长寿郊外 → 大唐境外
+#     - 朱紫国 → 大唐境外 → 大唐国境 ←→ 长安城
+#     - 傲来国 → 花果山 → 北俱芦洲
+#   opt 为 None 时用 _station_dialog_cross 默认「送我过去」（驿站入口）
+_FLY_TRANSIT: Dict[str, Tuple[str, str, Optional[Tuple[int, int]]]] = {
+    "江南野外": ("建邺城", "传送江南野外", (9, 141)),
+    # 以下为规划项（守卫坐标/选项待实测后激活；None 守卫 = 由 hop 链兜底）
+    "方寸山":   ("长寿村", None, None),
+    "长寿郊外": ("长寿村", None, None),
+    "大唐境外": ("朱紫国", None, None),
+    "大唐国境": ("朱紫国", None, None),
+    "花果山":   ("傲来国", None, None),
+    "北俱芦洲": ("傲来国", None, None),
+}
+
+
+def _fly_calib() -> Dict[str, tuple]:
+    """载入飞行符按钮校准坐标 {地图名: (cx, cy)}；缺失/损坏返回 {}。"""
+    try:
+        with open(_FLY_CALIB_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        out = {}
+        for k, v in (data.get("maps") or {}).items():
+            try:
+                out[k] = (int(v["cx"]), int(v["cy"]))
+            except Exception:
+                continue
+        return out
+    except Exception:
+        return {}
+
+
+def _fly_supported(target_map: str) -> bool:
+    """目标图是否可由飞行符直达（校准文件存在且该图已校准）。"""
+    key = _FLY_MAP_KEYS.get(str(target_map))
+    if not key:
+        return False
+    return key in _fly_calib()
+
+
+def _open_bag_by_icon(gateway: str, verbose: bool = True) -> bool:
+    """后台鼠标点击背包图标打开行囊（用户 2026-09-01 定案：不用 Lua CALL 开包，
+    只 LUA 查背包是否开启）。图标客户区坐标 = (695,601)（用户提供，屏幕 766,672
+    换算客户区后微调）。
+
+    ★2026-09-01 用户补充：背包图标下方可能有怪物/NPC，点击会触发对话/战斗弹窗
+    —— 每次点击后检测弹窗（对话栏可视/引擎错误弹窗），有则关闭弹窗后重新点击，
+    直到背包成功打开或重试上限。返回是否开包成功。"""
+    def _vis():
+        try:
+            return _lua_expr(gateway,
+                             "tostring(tp.窗口.道具行囊 and tp.窗口.道具行囊.可视 or false)") == "true"
+        except Exception:
+            return False
+
+    def _dialog_open() -> bool:
+        try:
+            return _lua_expr(gateway,
+                             "tostring(tp.窗口.对话栏 and tp.窗口.对话栏.可视 or false)") == "true"
+        except Exception:
+            return False
+
+    if _vis():
+        return True
+    pid = _get_bound_pid()
+    if pid <= 0:
+        return False
+    from library.common.win_utils import locate_game_window as _l
+    _h = _l(pid, verbose=False)
+    hwnd = _h[0] if isinstance(_h, tuple) else _h
+    if not hwnd:
+        return False
+    import ctypes as _ct
+    user32 = _ct.windll.user32
+    # ★ 2026-09-01 用户实锤场景：背包图标正下方有常驻商人/NPC，固定点(695,601)
+    #   每次点击必命中 NPC → 弹对话窗 → 关掉重试又点回原位 → 4 次全败 → 飞行符
+    #   跨图全退 hop 链（角色看起来"一直在等瞬移"）。修复：多档点位轮换——
+    #   主点(695,601)偏上是背包按钮本体；命中 NPC 后换"左偏上"副点，避开下方
+    #   场景 NPC 的碰撞体积；仍失败再换"右上"点，最后才判失败交 hop 链兜底。
+    _CLICK_SPOTS = [(695, 601), (677, 585), (712, 590), (695, 570)]
+    for _i in range(4):
+        # 点击前若有残留对话栏（上次误点留下的）→ 先关
+        if _dialog_open():
+            _close_dialog(gateway)
+            __tm.sleep(0.4)
+        # 后台点击背包图标（带抖动，模拟真实点击；命中 NPC 后轮换避让点位）
+        _spot = _CLICK_SPOTS[_i % len(_CLICK_SPOTS)]
+        jx = _spot[0] + random.randint(-2, 2)
+        jy = _spot[1] + random.randint(-2, 2)
+        lp = (int(jy) << 16) | (int(jx) & 0xFFFF)
+        user32.PostMessageW(_ct.c_void_p(hwnd), 0x0200, 0, lp)   # MOUSEMOVE 先到
+        __tm.sleep(0.06)
+        user32.PostMessageW(_ct.c_void_p(hwnd), 0x0201, 1, lp)   # 左键 down
+        __tm.sleep(0.08)
+        user32.PostMessageW(_ct.c_void_p(hwnd), 0x0202, 0, lp)   # 左键 up
+        __tm.sleep(0.7)
+        # 点后优先看行囊是否打开
+        if _vis():
+            return True
+        # 未打开且出现对话栏（点到图标下方怪物/NPC）→ 关闭弹窗，下一轮重试
+        if _dialog_open():
+            if verbose:
+                print("[开包] 点击触发对话弹窗（图标下有NPC/怪物），关闭后重试", flush=True)
+            _close_dialog(gateway)
+            _dismiss_engine_error_dialog()
+            __tm.sleep(0.5)
+            continue
+        # 未开包也无对话栏：可能是坐标点偏/引擎弹窗 → 检查并重试
+        _dismiss_engine_error_dialog()
+        __tm.sleep(0.4)
+    return _vis()
+
+
+def _fly_open_bag_refresh(gateway: str) -> bool:
+    """确保行囊打开（飞行符使用前置条件）：已开则保持，未开则**后台点背包图标**
+    打开（用户 2026-09-01 定案：不用 Lua CALL 开包，避免 CALL 崩溃风险）。
+    仅 Lua 查开包状态（可视=true）。"""
+    return _open_bag_by_icon(gateway)
+
+
+def _fly_find_charm_cell(gateway: str) -> Optional[tuple]:
+    """在行囊物品表里找「飞行符」格子中心（客户区坐标）。找不到返回 None。"""
+    code = r'''
+local out = ""
+local B = tp.窗口.道具行囊
+if type(B) == "table" and type(B.物品) == "table" then
+  for i = 1, #B.物品 do
+    local c = B.物品[i]
+    if type(c) == "table" then
+      local nm = tostring((c.物品 and c.物品.名称) or "")
+      if nm:find("飞行符") then
+        out = tostring(c.x) .. "," .. tostring(c.y)
+        break
+      end
+    end
+  end
+end
+_G.__out = out
+'''
+    try:
+        raw = _lua(gateway, code)
+    except Exception:
+        return None
+    if raw and "," in raw:
+        x, y = raw.split(",", 1)
+        try:
+            return int(x) + 26, int(y) + 26
+        except Exception:
+            return None
+    return None
+
+
+def _fly_open_panel(gateway: str, verbose: bool = True) -> Optional[tuple]:
+    """打开飞行符界面：行囊右键「飞行符」格子。
+    :return: (hwnd, charm_cell_客户区) 或 None（打开失败/无飞行符）
+    """
+    pid = _get_bound_pid()
+    if pid <= 0:
+        if verbose:
+            print("[飞行符] 未绑定游戏 PID，无法打开界面", flush=True)
+        return None
+    from library.common.win_utils import locate_game_window as _l
+    _h = _l(pid, verbose=False)
+    hwnd = _h[0] if isinstance(_h, tuple) else _h
+    if not hwnd:
+        if verbose:
+            print("[飞行符] 找不到游戏窗口", flush=True)
+        return None
+    # 前置：打开行囊（用户 2026-09-01 要求：用飞行符前必须确认背包打开；
+    # 且不用 Lua CALL 开包，改后台点背包图标）
+    if not _fly_open_bag_refresh(gateway):
+        if verbose:
+            print("[飞行符] 行囊打不开，无法使用飞行符", flush=True)
+        return None
+    # 图标开包后物品表已加载；若仍读不到（首次打开瞬间），稍等重读一次即可
+    cell = _fly_find_charm_cell(gateway)
+    if not cell:
+        __tm.sleep(1.0)
+        cell = _fly_find_charm_cell(gateway)
+    if not cell:
+        if verbose:
+            print("[飞行符] 行囊里没有飞行符（请确认背包有飞行符道具）", flush=True)
+        return None
+    cx, cy = cell
+    import ctypes as _ct
+    user32 = _ct.windll.user32
+    lp = (int(cy) << 16) | (int(cx) & 0xFFFF)
+    user32.PostMessageW(_ct.c_void_p(hwnd), 0x0200, 0, lp)   # MOUSEMOVE
+    __tm.sleep(0.05)
+    user32.PostMessageW(_ct.c_void_p(hwnd), 0x0204, 0, lp)   # 右键 down（打开飞行符）
+    __tm.sleep(0.08)
+    user32.PostMessageW(_ct.c_void_p(hwnd), 0x0205, 0, lp)   # 右键 up
+    __tm.sleep(1.2)
+    ok = False
+    try:
+        ok = _lua_expr(gateway,
+                       "tostring(tp.窗口.飞行符 and tp.窗口.飞行符.可视 or false)") == "true"
+    except Exception:
+        ok = False
+    if not ok and verbose:
+        print("[飞行符] 右键飞行符后界面未弹出", flush=True)
+    return (hwnd, cell) if ok else None
+
+
+def _fly_tap_map(hwnd, key: str, verbose: bool = True) -> bool:
+    """在飞行符界面左键点击目标图按钮（校准坐标，无确认按钮直接传送）。"""
+    calib = _fly_calib()
+    pt = calib.get(key)
+    if not pt:
+        return False
+    cx, cy = pt
+    import ctypes as _ct
+    user32 = _ct.windll.user32
+    lp = (int(cy) << 16) | (int(cx) & 0xFFFF)
+    user32.PostMessageW(_ct.c_void_p(hwnd), 0x0200, 0, lp)   # MOUSEMOVE 先到
+    __tm.sleep(0.06)
+    user32.PostMessageW(_ct.c_void_p(hwnd), 0x0201, 1, lp)   # 左键 down
+    __tm.sleep(0.08)
+    user32.PostMessageW(_ct.c_void_p(hwnd), 0x0202, 0, lp)   # 左键 up
+    if verbose:
+        print(f"[飞行符] 左键点 {key} @ 客户区({cx},{cy})", flush=True)
+    return True
+
+
+def _fly_cross_map(gateway: str, target_map: str, x: int = None, y: int = None,
+                   verbose: bool = True) -> dict:
+    """飞行符直达目标图（目标图必须在飞行符可传列表）。
+    成功后瞬移落点（已知坐标直达 / 无则地图随机）。失败返回 ok=False（调用方回退 hop 链）。
+    """
+    key = _FLY_MAP_KEYS.get(str(target_map))
+    if not key:
+        return {"ok": False, "error": f"目标图 {target_map} 不在飞行符可传列表", "via": "fly_none"}
+    calib = _fly_calib()
+    if key not in calib:
+        return {"ok": False, "error": f"飞行符校准缺 {key}（运行 calibrate_fly_map.py）", "via": "fly_nocalib"}
+    opened = _fly_open_panel(gateway, verbose=verbose)
+    if not opened:
+        return {"ok": False, "error": "飞行符界面打开失败（行囊无飞行符/右键无效）", "via": "fly_open_fail"}
+    hwnd, _cell = opened
+    # 左键点目标图（界面刚弹出可能还在加载 → 短等再点）
+    __tm.sleep(0.3)
+    _fly_tap_map(hwnd, key, verbose=verbose)
+
+    # 等地图切换（轮询目标图 ID；清掉飞行符/行囊窗口光线遮蔽问题靠 hop 后冷却）
+    try:
+        start_id = _cur_map_id(gateway)
+    except Exception:
+        start_id = None
+    target_id = _MAP_NAME_TO_ID.get(MAP_ID_TO_NAME.get(str(target_map), target_map))
+    changed = False
+    for _ in range(20):   # 最长 ~10s
+        __tm.sleep(0.5)
+        try:
+            cur = _cur_map_id(gateway)
+        except Exception:
+            cur = None
+        if verbose:
+            print(f"  [飞行符] 等切图 地图={cur} (目标={target_id})", flush=True)
+        if cur is not None and target_id is not None:
+            if int(cur) == int(target_id):
+                changed = True
+                break
+        elif cur is not None and start_id is not None and cur != start_id:
+            changed = True
+            break
+    # 兜底：按地图名判定（ID 映射缺失时）
+    if not changed:
+        try:
+            if _map_same(_cur_map_name(gateway), target_map):
+                changed = True
+        except Exception:
+            pass
+    if not changed:
+        if verbose:
+            print(f"[飞行符] 点 {key} 后 10s 地图未变（可能是误点/界面卡住），回退 hop 链", flush=True)
+        _fly_close_panel(gateway)
+        return {"ok": False, "error": "飞行符传送未切图", "via": "fly_no_switch"}
+    __tm.sleep(HOP_SETTLE_S if False else 0.9)   # 落地静默窗（对齐 hop 后冷却）
+    # ★2026-09-01 用户定案顺序：切图后**先关行囊/飞行符界面**，再瞬移落点——
+    #   行囊窗口残留会挡瞬移落点/后续扫描战斗（此前顺序反了：先瞬移后关包）。
+    _fly_close_panel(gateway)
+    # ★2026-09-01 用户追问"为什么飞行符后又瞬移到别处再瞬移到BOSS附近"：
+    #   飞行符落地本身已把角色放到目标图的固定落点——**除非调用方明确给了
+    #   目标坐标（公告带坐标/指名落点），否则不再做随机落点瞬移**，直接交
+    #   后续主循环扫描打怪（避免每图白瞬移一次拖延节奏；201 的"1145→长寿村"
+    #   实例：飞行符落点后多余随机瞬移 → 用户要求去掉）。
+    if x is not None and y is not None:
+        tx, ty = int(x), int(y)
+        tx, ty, note = _norm_grid_xy(tx, ty, target_map)
+        if note:
+            logger.warning(f"飞行符落点坐标守门: ({x},{y}) → ({tx},{ty}) [{note}]")
+        tp_r = _http_json(gateway, "/api/act/teleport",
+                          {"x": int(tx), "y": int(ty), "sync": True, "jump": True},
+                          timeout=20.0)
+        return {"ok": bool(tp_r.get("ok")), "error": tp_r.get("error"),
+                "via": "fly_charm+teleport", "teleport": tp_r.get("result", tp_r),
+                "land": (tx, ty)}
+    return {"ok": True, "error": None, "via": "fly_charm",
+            "land": None, "note": "飞行符已落点，未指定坐标不额外瞬移"}
+
+
+def _fly_close_panel(gateway: str) -> None:
+    """关闭飞行符界面 + 道具行囊（用户 2026-09-01 要求：使用飞行符成功后
+    关闭背包，避免残留窗口挡后续扫描/战斗操作）。"""
+    try:
+        _lua(gateway, "local F=tp.窗口.飞行符; if F then F.可视=false end")
+    except Exception:
+        pass
+    try:
+        _lua(gateway, r'''
+local w = tp.窗口.道具行囊
+if w then
+  pcall(function()
+    if type(w.关闭) == "function" then w:关闭()
+    elseif type(w.关) == "function" then w:关() end
+  end)
+  w.可视 = false
+end
+''')
+    except Exception:
+        pass
+
+
 def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -> dict:
     """跨图传送到目标地图（2026-08-27 BFS 实测终版）：
 
@@ -1186,6 +1858,52 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
     """
     _target_id = _MAP_NAME_TO_ID.get(target_map) if target_map else None
 
+    # ★ 2026-09-01 用户定案：目标图在飞行符可传列表 → 优先飞行符直达
+    #   （单次界面点击代替多段瞬移 hop；跨图密集瞬移是战斗脚本装载崩溃触发器之一）。
+    #   飞行符失败（无道具/界面未开/未切图）→ 静默回退下方 hop 链 / SYHS。
+    if _fly_supported(target_map):
+        _fr = _fly_cross_map(gateway, target_map, x, y, verbose=True)
+        if _fr.get("ok") and _map_same(_cur_map_name(gateway), target_map):
+            return _fr
+        if not _fr.get("ok"):
+            logger.warning(f"飞行符跨 {target_map} 失败（{_fr.get('via')}: {_fr.get('error')}），回退 hop 链")
+        _fly_close_panel(gateway)   # 失败也确保关掉背包窗口
+
+    # ★ 2026-09-01 飞行符二级中转：目标图不在飞行符直达，但可 飞行符→中转图 →
+    #   守卫/驿站对话 或 hop 链 到达（如 建邺城守卫→江南野外，实测 1501→1193 成功）。
+    #   守卫已实测的（opt 非空）：飞中转图 → 守卫对话直达 → return。
+    #   守卫未实测的（opt 为空）：飞中转图后交棒下方 hop 链（基于中转图找路，
+    #   比从任意位置多段瞬移更稳；飞行符落地=软跨图，规避高密瞬移触发崩溃）。
+    _trans = _FLY_TRANSIT.get(str(target_map))
+    if _trans and not _fly_supported(target_map):
+        _hub, _opt, _guard = _trans
+        if _fly_supported(_hub) and _cur_map_name(gateway) != target_map:
+            if _guard:
+                _STATION_POINTS.setdefault(_hub, _guard)
+            _fok = _fly_cross_map(gateway, _hub, verbose=False).get("ok", False) \
+                and _map_same(_cur_map_name(gateway), _hub)
+            if _fok and _opt:
+                # 守卫对话直达（柔和 CALL → 点传送选项 → 切图）
+                _ok2 = _station_dialog_cross(gateway, verbose=True, opt_text=_opt)
+                if _ok2 and _map_same(_cur_map_name(gateway), target_map):
+                    print(f"  ✓ 飞行符中转跨图：{_hub}→{target_map}（守卫对话）", flush=True)
+                    return {"ok": True, "via": "fly_charm+station",
+                            "hub": _hub, "target": target_map,
+                            "result": "对话传送到位"}
+                logger.warning(f"飞行符中转 {_hub}→{target_map} 守卫对话未切图，回退 hop 链")
+            elif _fok:
+                logger.info(f"飞行符中转：已到 {_hub}（守卫入口未配置），交棒 hop 链找路到 {target_map}")
+            else:
+                logger.warning(f"飞行符中转 {_hub} 落点失败，回退 hop 链")
+
+    # ★ 2026-08-30 提速（用户实锤"站着不动/速度不理想"）：目标图在 _HOP_CHAINS 内 →
+    #   **跳过 SYHS 直接走链路**。原因：SYHS 内表把 长寿村/长寿郊外 都归为 ID 1070、
+    #   one_hop desc 也仅指向郊外 → 去长寿村必先白等 15~20s 失败再回退（16:03 实测
+    #   map_changed_ms=20178）；其余图 SYHS 多数也 no-op（ok=True 但未切图）白耗一次
+    #   网关往返。而 HOP 链 desc 实测全局直达（不受来源图校验），长安→大唐国境→
+    #   大唐境外→驿站→… 已覆盖全部监控图，链式 5~15s 即可到图。
+    _chain_skip_syhs = bool(target_map and _HOP_CHAINS.get(target_map))
+
     def _confirm_map_switch(timeout: float = 12.0) -> bool:
         """轮询 tp.当前地图 变为目标 ID（SYHS 同款，实测切图 ~340ms）。"""
         if not _target_id:
@@ -1202,25 +1920,27 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
         return False
 
     # ---- 主路径（SYBUZ2 同款跨图）：SYHS 一步直达 + 落坐标复核 ----
-    try:
-        from tasks.library.SYHS import SYHS as _SYHS_cross
-        _cx, _cy = DEFAULT_MAP_CENTER.get(target_map, (80, 80))
-        if x is not None and y is not None:
-            _cx, _cy = int(x), int(y)
-        _sr = _SYHS_cross((_cx, _cy), target_location=target_map,
-                          gateway=gateway, wait_stable=False, verbose=False)
-        if _sr.get("ok"):
-            # SYHS 返回值 map_switch 非空 = 判定需跨图并完成切图；
-            # 为空 = 同图瞬移/不跨图。均复核地图名，到位即成功返回。
-            if _map_same(_cur_map_name(gateway), target_map):
-                return {"ok": True, "error": _sr.get("message"),
-                        "via": "SYHS" if _sr.get("map_switch") else "SYHS_no_switch",
-                        "map_switch": _sr.get("map_switch"),
-                        "detail": _sr.get("detail")}
-        logger.info(f"cross_map: SYHS 未切到 {target_map} "
-                    f"(map_switch={_sr.get('map_switch')} ok={_sr.get('ok')})，回退 HOP 链")
-    except Exception as e:
-        logger.warning(f"cross_map: SYHS 跨图异常({e})，回退 HOP 链")
+    # （2026-08-30：链内目标图 _chain_skip_syhs=True 时跳过，直接走下方 HOP 链）
+    if not _chain_skip_syhs:
+        try:
+            from tasks.library.SYHS import SYHS as _SYHS_cross
+            _cx, _cy = DEFAULT_MAP_CENTER.get(target_map, (80, 80))
+            if x is not None and y is not None:
+                _cx, _cy = int(x), int(y)
+            _sr = _SYHS_cross((_cx, _cy), target_location=target_map,
+                              gateway=gateway, wait_stable=False, verbose=False)
+            if _sr.get("ok"):
+                # SYHS 返回值 map_switch 非空 = 判定需跨图并完成切图；
+                # 为空 = 同图瞬移/不跨图。均复核地图名，到位即成功返回。
+                if _map_same(_cur_map_name(gateway), target_map):
+                    return {"ok": True, "error": _sr.get("message"),
+                            "via": "SYHS" if _sr.get("map_switch") else "SYHS_no_switch",
+                            "map_switch": _sr.get("map_switch"),
+                            "detail": _sr.get("detail")}
+            logger.info(f"cross_map: SYHS 未切到 {target_map} "
+                        f"(map_switch={_sr.get('map_switch')} ok={_sr.get('ok')})，回退 HOP 链")
+        except Exception as e:
+            logger.warning(f"cross_map: SYHS 跨图异常({e})，回退 HOP 链")
 
     hop = (_find_exact_hop(gateway, target_map)
            or _find_exact_hop(gateway, target_map, sep="进", prefix_match=True)
@@ -1257,9 +1977,19 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
     # 2026-08-28 B6 修复：旧实现每步发完请求不查结果，链中一步被吞整链错位
     # （后续 hop 都基于错误起点）。现在每步查 HTTP ok，失败静默重发一次。
     # 2026-08-30：每步改为"map_switch + 轮询地图 ID"，切到才算成功。
+    # 2026-08-30 驿站对话跨图：某些入口无 desc（如大唐境外→碗子山只能点驿站
+    # 老板"送我过去"），hop 链里用特殊标记 __STATION_DIALOG__ 占位，走到该步时
+    # 点驿站老板对话（CALL 事件开始 → PostMessage 点"送我过去"即切图）。
     chain = _HOP_CHAINS.get(target_map)
     if chain:
-        for desc in chain:
+        _chain_len = len(chain)
+        for _ci, desc in enumerate(chain):
+            _is_last = (_ci == _chain_len - 1)
+            if desc == "_STATION_DLG_":
+                if not _station_dialog_cross(gateway, verbose=False):
+                    return {"ok": False, "error": "驿站对话跨图失败",
+                            "via": "station_dialog"}
+                continue
             for _attempt in (1, 2):
                 r = _http_json(gateway, "/api/act/map_switch",
                                {"desc": desc}, timeout=25.0)
@@ -1268,12 +1998,44 @@ def _gw_cross_map(gateway: str, target_map: str, x: int = None, y: int = None) -
                 logger.warning(f"hop 链步骤失败({'重试' if _attempt == 1 else '放弃'}): "
                                f"desc={desc} resp={r}")
                 time.sleep(1.0)
-            # ★ 2026-08-30：轮询地图 ID，切到了才进下一步
-            if _confirm_map_switch(timeout=10.0):
-                break
-            time.sleep(0.5)
+            if _is_last:
+                # ★ 最后一步：轮询地图 ID 变到目标图（2026-08-30 提速：目标 ID 判定
+                #   保留——必须确认到位才能瞬移落点，防未到图就瞬移崩格子）
+                if _confirm_map_switch(timeout=6.0):
+                    break
+                _bid = _cur_map_id(gateway)
+                _chg = False
+                for _p in range(6):   # 最长 3s
+                    time.sleep(0.5)
+                    _now = _cur_map_id(gateway)
+                    if _now is not None and _now != _bid:
+                        _chg = True
+                        break
+                if _confirm_map_switch(timeout=2.0):
+                    break
+                if not _chg:
+                    logger.warning(f"hop 链末步未切图: desc={desc} 地图未变"
+                                   f"({_bid}→{_cur_map_id(gateway)})")
+            else:
+                # ★ 2026-08-30 22:59 用户提速：中间跳【不轮询 Lua】——服务器全局查表、
+                #   不校验当前图，中间 map_switch 连发即可（上一步是否到位不影响下一步）。
+                #   只留固定 1.2s 客户端切图渲染静默窗（无 Lua 往返），到目的地才 Lua。
+                time.sleep(1.2)
         # 链条切到目标图后：瞬移落坐标（2026-08-30 补，防止停在图入口）
-        tx, ty = (x, y) if (x is not None and y is not None) else (100, 100)
+        # ★ 2026-08-30 用户定案：默认落点改**地图范围内随机**（不再固定 100,100
+        #   或地图中心）——落点分散不扎堆，且随机点通常比中心更靠近某片怪物刷新区；
+        #   已知目标坐标（x,y 传入）仍直达，不随机。
+        if x is not None and y is not None:
+            tx, ty = int(x), int(y)
+        else:
+            _bnds = _load_map_bounds(target_map)
+            if _bnds:
+                _ix = max(2, int(_bnds[0] * 0.08))
+                _iy = max(2, int(_bnds[1] * 0.08))
+                tx = random.randint(_ix, max(_ix + 1, _bnds[0] - _ix))
+                ty = random.randint(_iy, max(_iy + 1, _bnds[1] - _iy))
+            else:
+                tx, ty = random.randint(5, 100), random.randint(5, 100)
         tx, ty, note = _norm_grid_xy(tx, ty, target_map)
         if note:
             logger.warning(f"hop_chain 坐标守门: ({x},{y}) → ({tx},{ty}) [{note}]")
@@ -1364,13 +2126,34 @@ def _captcha_solve(gateway: str, verbose: bool = False) -> bool:
     try:
         from core.captcha_v7 import solve_v7
         from core.window_manager import window_manager
+        # ★2026-08-30 21:57 实锤修复：window_manager 未绑定会让 hwnd=0，
+        #   solve_v7 的 PostMessage 点击发到 0 句柄必然失败 → 验证码一直解不掉
+        #   → 游戏端验证码超时强制下线。与 MPCG._bind_hwnd 同思路：
+        #   直解前先按网关 PID 强制重绑窗口，保证 hwnd 有效。
         hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
-        ok, detail = solve_v7(hwnd, gateway=gateway)
-        if ok:
-            if verbose:
-                print(f"  验证码 V7 直解成功 答案={detail.get('answer')}", flush=True)
-            return True
-        if detail.get("reason") != "no_captcha" and verbose:
+        if hwnd <= 0:
+            try:
+                _ensure_walker_bound(gateway, verbose=False)
+            except Exception:
+                pass
+            hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
+        # ★2026-08-30 21:57 加固：引擎被致命弹窗卡死刚恢复的瞬间，Lua 读答案/
+        #   按钮坐标（captcha_v7._lua 无挂起重试，4s 超时即弃）会失败一次；
+        #   失败（非 no_captcha）时短歇后重试一轮，避免卡死瞬点丢弹窗。
+        for attempt in (1, 2):
+            ok, detail = solve_v7(hwnd, gateway=gateway)
+            if ok:
+                if verbose:
+                    print(f"  验证码 V7 直解成功 答案={detail.get('answer')}", flush=True)
+                return True
+            if detail.get("reason") == "no_captcha":
+                return False
+            if attempt == 1:
+                if verbose:
+                    print(f"  验证码 V7 首轮未解成功({detail.get('reason')})，1.5s 后重试...",
+                          flush=True)
+                _sleep_stoppable(1.5)
+        if verbose:
             print(f"  验证码 V7 未解成功({detail.get('reason')})，等待人工/monitor...", flush=True)
         return False
     except Exception as e:
@@ -1465,6 +2248,86 @@ def _calibrated_walk(map_name: str, gx: int, gy: int, pid: int,
     if verbose:
         print(f"  {msg}")
     return {"ok": True, "message": msg, "target_pixel": (px, py)}
+
+
+def _fast_foot_click(map_name: str, gx: int, gy: int, pid: int = None,
+                     background: bool = True, verbose: bool = False) -> dict:
+    """轻量寻路点击：换算像素 → 单发左键 → 立即返回（走路通道专用）。
+
+    ★2026-08-30 用户定案："打开地图点击坐标之后马上关闭地图，不要到位置再关闭"——
+      旧实现 `_walk_to` 走的是地图包 `_click_background`：点击后 `sleep(2.0)寻路 +
+      sleep(2.0)到达 + sleep(0.5)` ≈ **4.7s 阻塞等待**，期间大地图一直开着，
+      等到位时才由 `_close_big_map` 关图再 CALL——白白耽误 CALL 时机。
+      本函数：TAB 开图（由调用方预同步保证状态）→ 单发左键寻路 → 立即返回，
+      调用方随即关图并启动"边走边CALL"——走路的同时图已关闭，CALL 提前开始。
+      寻路由游戏侧寻路系统完成，无需本地等待到达；到达判定由 _walk_and_call
+      的"移动检测"轮询接管（命中即 CALL，未中就边走边补）。
+    :return: {"ok": True, "message": ...} 或 {"ok": False, "message": ...}
+    """
+    try:
+        from library.common.win_utils import locate_game_window as _lgw
+        from library.map_packs.DHW import _press_tab as _ptab
+        import ctypes as _ct
+        from ctypes import wintypes as _wt
+    except Exception as e:
+        return {"ok": False, "message": f"轻量寻路点击导入失败: {e}"}
+    pid = pid or _get_bound_pid()
+    if pid <= 0:
+        return {"ok": False, "message": "未绑定游戏 PID，无法走路"}
+    # 与 _walk_to 一致的 UI 避让（防点击被 UI 面板遮挡）
+    try:
+        from core.map_ui_block import map_coord_ui_avoid
+        _gx, _gy, _ui = map_coord_ui_avoid(map_name, int(gx), int(gy))
+        if (_gx, _gy) != (int(gx), int(gy)):
+            if verbose:
+                print(f"  [UI避让] {map_name} ({gx},{gy}) → ({_gx:.0f},{_gy:.0f})（{_ui}）")
+            gx, gy = int(_gx), int(_gy)
+    except Exception:
+        pass
+    hwnd, _title = _lgw(pid, verbose=False)
+    if not hwnd:
+        return {"ok": False, "message": f"未找到游戏窗口 (PID={pid})"}
+    # ★ 2026-08-30 修复：像素换算必须与 _walk_to 同源——不同地图包/校准图
+    #   的 origin/scale 各不相同（DHW:359,199/2.36，CSC:393,200/1.34 等）。
+    #   旧版硬编码 DHW.game_to_pixel 会把点算到错误位置导致走路未启动。取
+    #   对应地图包模块的 game_to_pixel；无地图包则用校准数据 origin/scale。
+    _gtp = None
+    _walker_mod = _get_map_walker(map_name)
+    if _walker_mod is not None:
+        try:
+            _mod = __import__(f"library.map_packs.{_walker_mod.__name__.rsplit('.', 1)[-1]}",
+                              fromlist=["game_to_pixel"])
+            _gtp = getattr(_mod, "game_to_pixel", None)
+        except Exception:
+            _gtp = None
+    if _gtp is None:
+        calib = _load_calibration(map_name)
+        if calib is not None:
+            _ox, _oy = calib["origin"]
+            _sx, _sy = calib["scale"]
+            _gtp = lambda ggx, ggy: (_ox + int(ggx) * _sx, _oy + int(ggy) * _sy)  # noqa: E731
+    if _gtp is None:
+        return {"ok": False, "message": f"地图 '{map_name}' 无地图包且无校准数据"}
+    px, py = _gtp(int(gx), int(gy))
+    _ptab(hwnd, background=background)   # 开图
+    # 单发左键寻路（后台 PostMessage，不抢焦点、光标不动）
+    user32 = _ct.windll.user32
+    lp = (int(py) << 16) | (int(px) & 0xFFFF)
+    user32.PostMessageW(hwnd, 0x0200, 0, lp)                  # WM_MOUSEMOVE
+    time.sleep(0.05)
+    user32.PostMessageW(hwnd, 0x0201, 1, lp)                  # WM_LBUTTONDOWN
+    time.sleep(0.05)
+    user32.PostMessageW(hwnd, 0x0202, 0, lp)                  # WM_LBUTTONUP
+    # ★ 2026-08-30 修复：点击后给游戏 ~0.6s 落地窗处理寻路点击，再让调用方 TAB 关图。
+    #   旧版点击后立即返回→外面马上 TAB 关图，两条消息几乎同时到达，TAB 会冲掉
+    #   刚发出的寻路点击（实测第一段走路"6s 未启动"）。0.6s 仅为处理点击的窗口，
+    #   远小于原地图包 4.7s（2s寻路+2s到达+0.5s），仍大幅提前关图与 CALL。
+    time.sleep(0.6)
+    # 立即返回，不等寻路/到达（调用方随即关图 + 边走边CALL 接管）
+    if verbose:
+        print(f"  → 轻量寻路点击 {map_name} ({gx},{gy}) → 像素({px:.1f},{py:.1f})"
+              f"（点完提前关图开CALL）", flush=True)
+    return {"ok": True, "message": f"轻量寻路点击 ({gx},{gy})"}
 
 
 def _walk_to(map_name: str, gx: int, gy: int, pid: int = None,
@@ -1810,24 +2673,58 @@ def scan_scene_bosses(
     target_bosses: List[str],
     exact_match: Tuple[str, ...] = EXACT_MATCH_BOSSES,
 ) -> List[Dict[str, Any]]:
-    """扫描 tp.场景.场景人物 + tp.临时Npc，返回匹配目标 BOSS 的候选列表。"""
-    code = r'''
+    """扫描 tp.场景.场景人物 + tp.临时Npc，返回匹配目标 BOSS 的候选列表。
+
+    ★2026-08-30 瘦身（方案A，用户实锤"存活时长∝扫描频率倒数"的累积注入模型）：
+      Lua 侧按白名单先过滤，只输出命中实体（旧版把全场 80+ 实体全部拼串输出，
+      Python 再过滤——实体密集图单次注入体积巨大）。另设输出条数上限防单图过载。
+      行为保持：Lua 用宽松匹配（exact全等 / substring / 后缀），Python 侧仍做
+      原有严格判定兜底，不会漏。"""
+    tlist_lit = _lua_str_list(list(target_bosses))
+    exact_lit = _lua_str_list(list(exact_match))
+    suf_lit = _lua_str_list(list(SUFFIX_MATCH_BOSSES))
+    code = f'''
 -- 2026-08-29 23:40 根因修复（lua51 not enough memory 直杀 exit）：扫描前触发
 -- 增量式 GC，释放跨图/脚本装载堆起的 Lua 内存，缓解 lua51 分配失败退出。
 collectgarbage("collect", 0)
-local out = {}
+local tlist = {tlist_lit}
+local exact = {exact_lit}
+local sufs  = {suf_lit}
+local function hit(name)
+  for _, b in ipairs(tlist) do
+    if b ~= "" then
+      local eq = false
+      for _, e in ipairs(exact) do if e == b then eq = true break end end
+      if eq then
+        if name == b then return true end
+      else
+        if string.find(name, b, 1, true) then return true end
+      end
+    end
+  end
+  for _, s in ipairs(sufs) do
+    if s ~= "" and #name >= #s and name:sub(-#s) == s then return true end
+  end
+  return false
+end
+local out = {{}}
+local scan_n = 0
 local function scan(tbl, src)
   if type(tbl) ~= "table" then return end
   for id, u in pairs(tbl) do
     if type(u) == "table" then
       local name = tostring(u.名称 or u.名字 or "")
-      local model = tostring(u.模型 or u.模型名 or "")
-      -- 2026-08-28 量纲修复：格子x/格子y 本身是网格；兜底字段 u.x/u.y 是内部像素(×20)，在源头÷20
-      local gx = tonumber(u.格子x) or ((tonumber(u.x) or -20) / 20)
-      local gy = tonumber(u.格子y) or ((tonumber(u.y) or -20) / 20)
-      local bsid = tostring(u.标识 or "")   -- 全场唯一且跨槽位重排稳定，实测 2026-08-27
-      if #name > 0 then
-        out[#out+1] = string.format("%s|%s|%s|%s|%s|%s|%s", tostring(id), name, gx, gy, model, src, bsid)
+      if hit(name) then
+        -- 2026-08-30 上限 30 条：防白名单密集图（长寿郊外 80+ 新冠）单次注入过载
+        if scan_n >= 30 then return end
+        scan_n = scan_n + 1
+        local model = tostring(u.模型 or u.模型名 or "")
+        -- 2026-08-28 量纲修复：格子x/格子y 本身是网格；兜底字段 u.x/u.y 是内部像素(×20)，在源头÷20
+        local gx = tonumber(u.格子x) or ((tonumber(u.x) or -20) / 20)
+        local gy = tonumber(u.格子y) or ((tonumber(u.y) or -20) / 20)
+        local bsid = tostring(u.标识 or "")
+        out[#out+1] = string.format("%s|%s|%s|%s|%s|%s|%s",
+          tostring(id), name, gx, gy, model, src, bsid)
       end
     end
   end
@@ -1864,8 +2761,13 @@ _G.__out = table.concat(out, ";")
                 # 旧 int("10.5") 直接 ValueError → 实体被静默丢掉
                 bgx, bgy = int(float(gx)), int(float(gy))
                 # 2026-08-28 守门：实体兜底字段 u.x/u.y 可能是内部像素坐标，
-                # >GRID_SANITY_MAX 判为像素 → ÷20 转网格，否则环带瞬移会出界
-                if abs(bgx) > GRID_SANITY_MAX or abs(bgy) > GRID_SANITY_MAX:
+                # >网格上限×15 判为像素（内部=网格×20）→ ÷20 转网格，否则环带瞬移会出界。
+                # 2026-08-30 二修：老逻辑拿"边界本身/全局 400"当阈值，会把贴边/略超边的
+                #   合法格坐标（大唐国境 349>344、大唐境外 533、y330 等）误判成像素 ÷20
+                #   → 东/南半图怪物定位全错、反复落错点空转（实测 38s 等待根因之一）。
+                _bnd = _load_map_bounds(_cur_map_name(gateway) or "")
+                _lim = (max(_bnd) * 15.0) if _bnd else GRID_SANITY_MAX
+                if abs(bgx) > _lim or abs(bgy) > _lim:
                     bgx, bgy = round(bgx / 20.0), round(bgy / 20.0)
                     logger.warning(f"BOSS 坐标守门: {name} 原始=({gx},{gy}) → ({bgx},{bgy}) [像素→网格÷20]")
                 cands.append({
@@ -1972,7 +2874,8 @@ def call_dialog_battle(gateway: str, keywords: List[str]) -> Tuple[bool, str]:
     deny_lit = _lua_str_list(_BATTLE_DENY_OPTIONS)
     kw_lit = _lua_str_list(keywords)
     soft_lit = _lua_str_list(["杀", "灭", "打", "战", "应战", "教训",
-                              "领教", "收拾", "降服", "制服"])
+                              "领教", "收拾", "降服", "制服",
+                              "消毒", "口罩"])   # 2026-08-30 补：新冠实测选项 酒精消毒/戴上口罩
     code = f'''
 local deny = {deny_lit}
 local kws = {kw_lit}
@@ -2035,6 +2938,120 @@ _G.__out = tostring(ok) .. "|" .. hit_text .. "|" .. tostring(ret or "")
     return ok, f"选项[{tag}] ok={ok} {detail}".strip()
 
 
+def _call_and_fight(gateway: str, boss: dict, keywords: List[str]):
+    """★2026-09-01 柔和 CALL（用户定案：CALL 太快会崩，BOSS 同理）：
+    拆为两步 Lua + 中间 2s 装载等待，替代旧"单次原子 Lua 连续
+    查战斗→CALL→读对话→点击"（CALL 后 0 等待撞引擎装载未就绪 →
+    this arg is not a userdata → 崩游戏，00:47 整夜启动 8s 即崩实锤）。
+
+    第一步（call chunk）：查战斗 + 找实体 + CALL 事件开始，返回就绪状态。
+    第二步（dlg chunk）：等待 2s 后读对话 + 匹配 + 事件解析点击。
+
+    :return: ("battle", None) 已在战斗中 / ("gone", None) 目标消失 /
+             ("clicked", text) 已点战斗选项（等战斗态确认） /
+             ("nodlg", None) 对话未弹出（可短等重试） / ("miss", info) 无匹配可点
+    """
+    uid_lit = (str(boss.get("id") or "")).replace('"', "")
+    bsid_lit = (str(boss.get("bsid") or "")).replace('"', "")
+    deny_lit = _lua_str_list(_BATTLE_DENY_OPTIONS)
+    kw_lit = _lua_str_list(keywords)
+    soft_lit = _lua_str_list(["杀", "灭", "打", "战", "应战", "教训",
+                              "领教", "收拾", "降服", "制服",
+                              "消毒", "口罩"])
+
+    # ---- 第一步：查战斗 + CALL 事件开始（只 CALL，不读对话）----
+    call_code = f'''
+local u = nil
+if tp.战斗中 then _G.__out = "battle"; return end
+if "{bsid_lit}" ~= "" then
+  local pools = {{tp.场景.场景人物, tp.临时Npc}}
+  for _, t in ipairs(pools) do
+    if type(t) == "table" then
+      for _, e in pairs(t) do
+        if type(e) == "table" and tostring(e.标识 or "") == "{bsid_lit}" then u = e; break end
+      end
+      if u then break end
+    end
+  end
+end
+if not u and "{uid_lit}" ~= "" then
+  local n = tonumber("{uid_lit}")
+  local t = tp.场景.场景人物 or {{}}
+  if n then u = t[n] end
+  if not u then u = t["{uid_lit}"] or (tp.临时Npc or {{}})["{uid_lit}"] end
+end
+if not u or type(u) ~= "table" then _G.__out = "gone"; return end
+local mt = getmetatable(u)
+local ev = (mt and mt.__index and mt.__index.事件开始) or u["事件开始"]
+if type(ev) ~= "function" then _G.__out = "miss|nofn"; return end
+local okc = pcall(function() return ev(u) end)
+-- CALL 后不立即读对话：交给第二步（Python 侧等 2s 装载，柔和防崩）
+_G.__out = "called"
+'''
+    raw = _lua(gateway, call_code)
+    if raw == "battle":
+        return "battle", None
+    if raw == "gone":
+        return "gone", None
+    if raw == "miss|nofn":
+        return "miss", "nofn"
+
+    # ---- 柔和呼吸：CALL 后等引擎装载对话脚本（2026-09-01 用户定案 2s；0s 崩）----
+    time.sleep(2.0)
+
+    # ---- 第二步：读对话 + 匹配 + 点击（无 CALL，纯读+点）----
+    dlg_code = f'''
+local kws = {kw_lit}
+local deny = {deny_lit}
+local soft = {soft_lit}
+local dlg = tp.窗口.对话栏
+if not (dlg and dlg.可视) then _G.__out = "nodlg"; return end
+local opts = dlg.选项
+local function opt_text(o)
+  return tostring(o.基本内容 or "") .. "|" .. tostring(o.文字 or o.标签 or "") .. "|" .. tostring(o.跳转链接 or "")
+end
+local function in_list(text, list)
+  for _, w in ipairs(list) do
+    if w ~= "" and string.find(text, w, 1, true) then return true end
+  end
+  return false
+end
+local hit_i = nil
+for i = 1, 20 do
+  local o = opts[i]
+  if type(o) ~= "table" then break end
+  local text = opt_text(o)
+  if in_list(text, kws) and not in_list(text, deny) then hit_i = i; break end
+end
+if not hit_i then
+  for i = 1, 20 do
+    local o = opts[i]
+    if type(o) ~= "table" then break end
+    local text = opt_text(o)
+    if tostring(o.跳转链接 or "") ~= "" and not in_list(text, deny) then
+      local sf = false
+      for _, w in ipairs(soft) do
+        if string.find(text, w, 1, true) then sf = true; break end
+      end
+      if sf then hit_i = i; break end
+    end
+  end
+end
+if not hit_i then _G.__out = "miss|nomatch"; return end
+local hit = opts[hit_i]
+local link = tostring(hit.跳转链接 or "")
+if link == "" then _G.__out = "miss|emptylink"; return end
+local okr, ret = pcall(function() return dlg:事件解析(link) end)
+_G.__out = (okr and "clicked|" or "miss|execfail|") .. tostring(hit.基本内容 or "")
+'''
+    raw2 = _lua(gateway, dlg_code)
+    if raw2 == "nodlg":
+        return "nodlg", None
+    if raw2.startswith("clicked|"):
+        return "clicked", raw2.split("|", 1)[1]
+    return "miss", raw2 or ""
+
+
 def close_dialog(gateway: str) -> None:
     """右键关闭当前对话栏。"""
     try:
@@ -2080,13 +3097,13 @@ def _boss_battle_keywords(boss_name: str, fallback: List[str]) -> List[str]:
     return unique + [k for k in fallback if k not in seen]
 
 
-def _wait_battle_start(gateway: str, timeout: float = 3.0, poll: float = 0.25) -> bool:
+def _wait_battle_start(gateway: str, timeout: float = 3.0, poll: float = 0.5) -> bool:
     """点了战斗选项后，等待 tp.战斗中 变 true（真进战斗的权威验证）。
 
     pcall(事件解析) 返回 ok 不代表进战斗（2026-08-27 实测假击杀 14 连：
     pcall ok=true 但战斗根本没触发）。必须以 tp.战斗中 为准。
-    2026-08-28：15s→4s、poll 1.0→0.4；再压 4s→3s、0.4→0.25（提速轮）。
-    真触发时战斗态 1~2s 内就会出现；没触发就是超距，早失败早走近重试。
+    2026-09-01 柔和轮：poll 0.25 → 0.5（降低战斗态轮询 Lua 密度，防引擎
+    装载期高频往返触发崩溃；真触发时战斗态 1~2s 内出现，0.5s 粒度足够）。
     误判成超距的代价只是一次廉价走近重试，且下一轮 _in_battle 守门能兜住
     战斗态迟到的情况。"""
     t0 = time.time()
@@ -2145,7 +3162,7 @@ def _map_same(a: str, b: str) -> bool:
 # 立即扫描/事件 Lua 会撞 "this arg is not a userdata!" 致命分支
 #（08:16/08:22 两场事故时序实锤：hop 后 0.3~0.5s 内高频 Lua 调用触发）。
 # 根治靠 gateway fatal_guard（运行时补丁），这里只兜底。
-HOP_SETTLE_S = 1.5
+HOP_SETTLE_S = 0.9   # 2026-08-30 压缩：1.5→0.9（跨图落地静默窗，链后续 teleport 自带生效）
 
 
 def _ensure_on_map(gateway: str, target_map: str, x: int = None, y: int = None) -> bool:
@@ -2354,6 +3371,16 @@ def _walk_and_call(gateway: str, boss_gx: int, boss_gy: int,
                 return "walked_call_ok"
             if r == "gone":
                 return "gone"
+            if r == "miss":
+                # ★2026-09-01 用户定案：读到对话但无战斗选项 = 被他人锁定 →
+                #   立即放弃本怪（不再继续走路/重CALL浪费时间），交给外层换目标
+                if verbose:
+                    print(f"  ! 边走边CALL miss（{time.time()-t0:.1f}s）→ 锁定/无战斗选项，"
+                          f"立即放弃本怪", flush=True)
+                return "miss"
+            if r == "fail" and _dialog_is_too_far(gateway):
+                # far 信号：超距确认框 → 继续走（靠近后自动命中）
+                pass
         time.sleep(0.1)
     # 走完/超时（≈已到落点）或卡住 → 补一次 CALL 兜底（用户定案）
     if verbose:
@@ -2377,93 +3404,150 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
     → 仍不中再走瞬移环带兜底。全程无"到达后傻等固定延迟"。
     :param call_fn: 单次 CALL 尝试（返回 "battle"/"gone"/"far"/"fail"），见 _farm_one_boss
     :return: "close" 已在阈值内 / "walked_call_ok" 途中/兜底CALL已命中 /
-             "walked" 走完仍未中 / "gone" 目标消失 / "teleported" 瞬移兜底 /
-             "far" 全部手段失败
+             "walked" 走完仍未中 / "gone" 目标消失 / "miss" 锁定/无战斗选项（立即放弃）/
+             "teleported" 瞬移兜底 / "far" 全部手段失败
     """
     rg = _role_grid(gateway)
     if rg is not None and _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
         return "close"
+    _d0 = _grid_dist(rg, boss_gx, boss_gy) if rg else 99.0
 
+    # ★ 2026-08-30 用户定案：大唐境外禁用走路通道，全瞬移——图太大，跨图走路动辄
+    #   几十秒纯浪费。命中列表直接跳过下方整段"真实走路"，落到瞬移环带兜底。
+    #   ★ 2026-08-30 提速（用户：速度优先）：目标过远（>TELEPORT_FAST_DIST）同样
+    #   直接瞬移环带贴近——"战斗结束→只CALL一次最近BOSS→失败马上瞬移/走路"。
+    if cur_map in _TELEPORT_ONLY_MAPS or _d0 > TELEPORT_FAST_DIST:
+        if verbose and cur_map not in _TELEPORT_ONLY_MAPS:
+            print(f"  → 距离 {_d0:.0f} 格过远（>TELEPORT_FAST_DIST={TELEPORT_FAST_DIST:.0f}），"
+                  f"不走路直接瞬移贴近 BOSS", flush=True)
     # 1) 有地图包或校准数据 → 真实走路（拟人优先，防举报）
-    if _get_map_walker(cur_map) or _load_calibration(cur_map):
+    elif _get_map_walker(cur_map) or _load_calibration(cur_map):
         # lazy-bind：未绑定 PID 时现场绑定（farm 主流程已绑，独立调用/重连后兜底），
         # 否则走路必然报"未绑定 PID"退化成瞬移（2026-08-28 实测暴露）。
         if _get_bound_pid() <= 0:
             _ensure_walker_bound(gateway, verbose=verbose)
-        jx = max(0, int(boss_gx) + random.randint(-2, 2))
-        jy = max(0, int(boss_gy) + random.randint(-2, 2))
         dist0 = _grid_dist(rg, boss_gx, boss_gy) if rg else 30.0
-        est = max(3.0, dist0 / WALK_SPEED_GRID_SEC + WALK_TIME_MARGIN)
-        if verbose:
-            print(f"  → 走路贴近 {cur_map} ({jx},{jy})（距BOSS≈{dist0:.0f}格，"
-                  f"边走边CALL上限 {est:.0f}s）", flush=True)
-        # ★ 状态感知预同步（2026-08-28 走路未启动根因修复）：
-        #   地图包/校准走路第一步都是"TAB 开图"，若大地图当前已开着，
-        #   这个 TAB 会把它关掉 → 点击落场地无效 → 走路必败。
-        #   所以走路前先检查：图开着就先 TAB 关掉，让后续 TAB 稳定开图。
-        try:
-            from library.common.win_utils import locate_game_window as _lgw
-            _pid = _get_bound_pid()
-            _hwnd = 0
-            if _pid > 0:
-                _hwnd, _ = _lgw(_pid, verbose=False)
-            if _hwnd:
-                _press_tab_if(_hwnd, False, gateway, verbose)
-        except Exception:
-            pass  # 预同步失败不阻断走路
-        walk_res = _walk_to(cur_map, jx, jy, background=walk_background, verbose=verbose)
-        if walk_res.get("ok"):
-            # ★ 用户定案：点完目标坐标立即关大地图，马上 CALL
+        rh = int(rg[0]) if rg is not None else 0
+        rv = int(rg[1]) if rg is not None else 0
+
+        def _walk_leg(tx: int, ty: int, label: str):
+            """单段"走路 + 启动门控 + 边走边CALL"。返回走完仍否未中（供二次走路）。
+            :return: "ok_hit" 命中战斗 / "gone" 目标消失 / "ok_miss" 走完未中（可二次走）/
+                     "no_walk" 走路未启动（转瞬移）
+            """
+            if verbose:
+                _d = _grid_dist((rh, rv), tx, ty) if rg is not None else -1.0
+                _est = max(3.0, _d / WALK_SPEED_GRID_SEC + WALK_TIME_MARGIN)
+                print(f"  → {label} {cur_map} ({tx},{ty})（距落点≈{_d:.0f}格，"
+                      f"边走边CALL上限 {_est:.0f}s）", flush=True)
+            # ★ 状态感知预同步：地图/校准走路第一步是 TAB 开图，开着时先 TAB 关掉
+            try:
+                from library.common.win_utils import locate_game_window as _lgw
+                _pid = _get_bound_pid()
+                _hwnd = 0
+                if _pid > 0:
+                    _hwnd, _ = _lgw(_pid, verbose=False)
+                if _hwnd:
+                    _press_tab_if(_hwnd, False, gateway, verbose)
+            except Exception:
+                pass
+            walk_res = _fast_foot_click(cur_map, tx, ty, background=walk_background,
+                                        verbose=verbose)
+            if not walk_res.get("ok"):
+                if verbose:
+                    print(f"  ! {label}未到位（{walk_res.get('message')}）", flush=True)
+                return "no_walk"
+            # ★ 点完目标坐标立即关大地图，马上 CALL
             _close_big_map(verbose, gateway=gateway)
-            # 移动启动门控：点击没生效（角色完全没动）→ 直接转瞬移兜底
+            # 移动启动门控：点击没生效（角色完全没动）→ 转瞬移兜底
+            # ★ 2026-08-30 防定身：点击有时会落在野怪/召唤兽 NPC 上（弹出"我来瞧瞧
+            #   你的啥"之类对话栏），角色被对话定身原地不动 → 每拍先关掉杂散对话，
+            #   若连续 2 拍仍无位移直接判 no_walk（不等满 6s，提前交瞬移，不傻站）。
             t0s = time.time()
             base = _role_grid(gateway)
             moving = False
+            _still_ticks = 0
             while time.time() - t0s < WALK_START_TIMEOUT:
-                rg = _role_grid(gateway)
-                if rg and base and _grid_dist(rg, base[0], base[1]) > 0.5:
+                rg2 = _role_grid(gateway)
+                if rg2 and base and _grid_dist(rg2, base[0], base[1]) > 0.5:
                     moving = True
                     break
-                if rg and base is None:
-                    base = rg
-                # 2026-08-28 提速：启动探测期不空等——每拍顺手 CALL 一次
-                # （点击可能没生效，但 CALL 零成本；中途命中战斗直接省掉瞬移兜底）
+                if rg2 and base is None:
+                    base = rg2
+                _still_ticks += 1
+                if _still_ticks >= 2 and base is not None:
+                    # 两拍坐标都没动 → 先清掉可能的杂散对话（点击落 NPC 定身）
+                    try:
+                        _close_dialog(gateway)
+                    except Exception:
+                        pass
+                    if _still_ticks >= 3:
+                        break
+                # 启动探测期不空等——每拍顺手 CALL 一次
                 if call_fn is not None:
                     r = call_fn()
                     if r == "battle":
-                        return "walked_call_ok"
+                        return "ok_hit"
                     if r == "gone":
                         return "gone"
+                    if r == "miss":
+                        return "miss"   # 2026-09-01：锁定 → 立即放弃
                 time.sleep(0.5)
             if not moving:
                 if verbose:
-                    print(f"  ! 走路未启动（{WALK_START_TIMEOUT:.0f}s 内角色坐标无变化，"
+                    print(f"  ! {label}走路未启动（{WALK_START_TIMEOUT:.0f}s 内角色坐标无变化，"
                           f"点击没生效），转瞬移兜底", flush=True)
-            elif call_fn is not None:
-                # ★ 边走边CALL：每 0.5s CALL 一次，走完补 CALL 兜底
+                return "no_walk"
+            if call_fn is not None:
+                # ★ 边走边CALL：每 WALK_CALL_INTERVAL 秒 CALL 一次，走完补 CALL 兜底
                 r = _walk_and_call(gateway, boss_gx, boss_gy, dist0, verbose, call_fn)
-                if r in ("walked_call_ok", "gone"):
-                    return r
-                # 走完仍未中 → 落点可能仍超距，走下面瞬移环带拉近兜底
-            else:
-                # 兼容旧调用（无 call_fn）：按落点 ±WALK_ARRIVAL_BOX 轮询到位
-                t0w = time.time()
-                last_rg, last_move_t = rg, time.time()
-                while time.time() - t0w < WALK_ARRIVAL_TIMEOUT:
-                    rg = _role_grid(gateway)
-                    if rg is not None:
-                        if _grid_dist(rg, last_rg[0], last_rg[1]) > 0.3:
-                            last_rg, last_move_t = rg, time.time()
-                        elif time.time() - last_move_t > WALK_STALL_TIMEOUT:
-                            break
-                        if _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
-                            return "walked"
-                        if (abs(rg[0] - jx) <= WALK_ARRIVAL_BOX
-                                and abs(rg[1] - jy) <= WALK_ARRIVAL_BOX):
-                            return "walked"
-                    time.sleep(0.4)
-        elif verbose:
-            print(f"  ! 走路未到位（{walk_res.get('message')}），转瞬移兜底", flush=True)
+                if r == "gone":
+                    return "gone"
+                if r == "miss":
+                    return "miss"   # 2026-09-01：锁定/无战斗选项 → 立即放弃本怪
+                return "ok_hit" if r == "walked_call_ok" else "ok_miss"
+            # 兼容旧调用（无 call_fn）：按落点 ±WALK_ARRIVAL_BOX 轮询到位
+            t0w = time.time()
+            last_rg, last_move_t = base, time.time()
+            while time.time() - t0w < WALK_ARRIVAL_TIMEOUT:
+                rg3 = _role_grid(gateway)
+                if rg3 is not None:
+                    if _grid_dist(rg3, last_rg[0], last_rg[1]) > 0.3:
+                        last_rg, last_move_t = rg3, time.time()
+                    elif time.time() - last_move_t > WALK_STALL_TIMEOUT:
+                        break
+                    if _grid_dist(rg3, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE:
+                        return "ok_hit"
+                    if (abs(rg3[0] - tx) <= WALK_ARRIVAL_BOX
+                            and abs(rg3[1] - ty) <= WALK_ARRIVAL_BOX):
+                        return "ok_miss"
+                time.sleep(0.4)
+            return "ok_miss"
+
+        # ★ 2026-08-30 用户定案：第一段落点 = 怪周边 10±5 格随机提前就位点
+        #   （提前就位即可 CALL，无需精确站上怪坐标；±5 容错避免每次都同一点）
+        lead = random.uniform(WALK_APPROACH_LEAD_MIN, WALK_APPROACH_LEAD_MAX)
+        ang = random.uniform(0.0, _math.tau)
+        lx = max(0, int(round(boss_gx + _math.cos(ang) * lead)))
+        ly = max(0, int(round(boss_gy + _math.sin(ang) * lead)))
+        res = _walk_leg(lx, ly, "提前就位点走路")
+        if res == "ok_hit":
+            return "walked_call_ok"
+        if res == "gone":
+            return "gone"
+        if res == "miss":
+            return "miss"   # 2026-09-01：锁定 → 立即放弃
+        # 提前点未中（ok_miss / no_walk 但走路可用）→ ★2026-08-30 二次精确走怪坐标±2
+        if _get_map_walker(cur_map) or _load_calibration(cur_map):
+            jx = max(0, int(boss_gx) + random.randint(-2, 2))
+            jy = max(0, int(boss_gy) + random.randint(-2, 2))
+            res2 = _walk_leg(jx, jy, "精确坐标走路")
+            if res2 == "ok_hit":
+                return "walked_call_ok"
+            if res2 == "gone":
+                return "gone"
+            if res2 == "miss":
+                return "miss"   # 2026-09-01：锁定 → 立即放弃
 
     # 2) 走路不可用/未启动/走完仍超距 → 随机环带落点瞬移兜底（不重叠BOSS）
     for rng in (TELEPORT_OFFSET_RANGE, TELEPORT_RETRY_RANGE):
@@ -2481,10 +3565,35 @@ def _approach_boss(gateway: str, cur_map: str, boss_gx: int, boss_gy: int,
         except Exception as e:
             logger.warning(f"瞬移失败: {e}")
             continue
-        time.sleep(0.5)  # jump 落地快（提速轮：1.0→0.5）
+        # ★2026-08-30 瞬移冷却（用户实锤："走路没到位会在目标范围瞬移2次"，两次
+        #   间隔仅 0.5s，连发瞬移是崩溃高危点）：瞬移后至少等 TELEPORT_GAP 再落下
+        #   一次（坐标落地稳定 + 减少连发 Lua/同步包冲击）。
+        last_tp_t = time.time()
+        # 2026-08-30 提速：落地稳定由"轮询坐标变化"改为**固定短等 0.9s**——坐标
+        # 轮询每拍都是 1 次节流 Lua（每拍 ≥1s），3~4 拍就把落地后的攻击拖到 3~4s；
+        # 瞬移落地本质是空间跳变，0.9s 足够同步包/坐标刷新完成（无需逐拍验证静止）。
+        time.sleep(0.9)
         rg = _role_grid(gateway)
         if rg is None or _grid_dist(rg, boss_gx, boss_gy) <= APPROACH_GRID_DISTANCE + 1:
+            # ★ 2026-08-30 提速（用户：瞬移后应马上攻击）：落地后已在可 CALL 距离
+            #   （环带 2~4 格 ≈ 命中区），立即试 CALL 一次——命中当场进战斗，
+            #   不再等外层"补 CALL 兜底"白跑一轮；未中则按 teleported 返回交兜底。
+            if call_fn is not None:
+                _rr = call_fn()
+                if _rr == "battle":
+                    return "walked_call_ok"
+                if _rr == "gone":
+                    return "gone"
+                if _rr == "miss":
+                    # ★2026-09-01：锁定/无战斗选项 → 立即放弃本怪（不再补CALL/重瞬移）
+                    if verbose:
+                        print("  ! 瞬移落地 CALL miss → 锁定/无战斗选项，放弃本怪", flush=True)
+                    return "miss"
             return "teleported"
+        # 需要第二发瞬移时，也强制冷却满 TELEPORT_GAP（2026-08-30 防连发）
+        _gap = TELEPORT_GAP - (time.time() - last_tp_t)
+        if _gap > 0:
+            time.sleep(_gap)
     return "far"
 
 
@@ -2518,42 +3627,80 @@ def _farm_one_boss(
     """
     moves = 0
 
+    # ★ 2026-08-30 用户定案：顶级公告（财神/星宿/头领）优先跨图——本图杂鱼的
+    #   第一次 CALL 不拖延跨图。主循环已设置 _TOP_PIN_MAP（指向他图），直接中止。
+    if _TOP_PIN_MAP and not _map_same(_TOP_PIN_MAP, cur_map):
+        return {"ok": False, "reason": "abort_top_ann",
+                "msg": f"顶级公告优先，先跨图 → {_TOP_PIN_MAP}"}
+    global _FARM_START_TS
+    _FARM_START_TS = __tm.time()
+    # ★2026-08-30 提速：上一场刚结束（结算动画窗口）→ 先等齐动画再开打，
+    #   避免攻击请求落在动画窗口被引擎打回、反复 nodlg 重试白耗 ~8s。
+    #   ★2026-09-01 再提速：需要走路/瞬移的目标（距离>15格）不在此处等——走路
+    #   本身耗时 3.6~10s 必然覆盖结算动画，白等 1.6s。结算等待挪到下方"原地
+    #   CALL"分支内，仅近距离目标保留（见 _d0 判定后）。
+    _post_wait_ts = _POST_BATTLE_TS
+
     def _call_once() -> str:
-        """单次完整 CALL 尝试。返回 "battle"/"gone"/"far"/"fail"。"""
-        # 上次 CALL 可能已触发战斗但窗口没探到（tp.战斗中 有延迟），先查战斗态
-        if _in_battle(gateway):
-            return "battle"
-        ok, msg = call_npc_event_start(gateway, boss.get("id"), boss.get("bsid"))
-        if not ok:
-            if "消失" in msg or "NOTFOUND" in msg:
-                return "gone"
-            return "far"  # 对象级失败（NOFN 等）：大概率距离远，边走边CALL会自然重试
-        _wait_dialog_ready(gateway)
-        bok, bmsg = call_dialog_battle(gateway, battle_keywords)
-        if bok:
-            # pcall ok ≠ 进战斗：必须等 tp.战斗中 变 true 才算真触发
-            # （2026-08-27 实测：远处 pcall 全部 ok=true 但战斗没发生 → 假击杀 14 连；
-            #   2026-08-28 实测：窗口 2.0s 偏短（tp.战斗中 有延迟）→ 恢复 3.0s）
-            if _wait_battle_start(gateway, timeout=3.0):
+        """单次完整 CALL 尝试。返回 "battle"/"gone"/"far"/"fail"。
+
+        ★2026-09-01 用户定案：找不到/怪物战斗中就**立即换目标**，不做长重试。
+        旧逻辑 nodlg 重试 3 次（每次等 1.5s）→ 一只被锁定的怪耗 ~5s+。现在：
+        nodlg 只补 1 次（2s 装载后仍无对话框 = 这怪当前打不了，快速放弃）；
+        miss（读到了对话但无战斗选项 = 被他人锁定）同样快速放弃，交外层换目标。"""
+        global _BATTLE_START_TS
+        for _t in range(2):
+            st, dt = _call_and_fight(gateway, boss, battle_keywords)
+            if st == "battle":
+                _BATTLE_START_TS = __tm.time()
                 return "battle"
-            close_dialog(gateway)
-            if verbose:
-                print(f"  [CALL] 选项已点但 3s 内未进战斗（{bmsg}），下一节拍继续 CALL",
-                      flush=True)
-            return "far"
-        far = _dialog_is_too_far(gateway)
-        close_dialog(gateway)
-        if verbose and far:
-            print("  [CALL] 超距确认框（边走边CALL中，靠近后自动命中）", flush=True)
-        return "far" if far else "fail"
+            if st == "gone":
+                return "gone"
+            if st == "clicked":
+                # ↔ 已点战斗选项：真进战斗以 tp.战斗中 为准（假击杀防御，见注释）
+                if _wait_battle_start(gateway, timeout=3.0):
+                    _BATTLE_START_TS = __tm.time()
+                    if verbose:
+                        print(f"    ⌛开战（farm入后 {__tm.time()-_FARM_START_TS:.1f}s）",
+                              flush=True)
+                    return "battle"
+                close_dialog(gateway)
+                if verbose:
+                    print(f"  [CALL] 已点选项({dt or '?'})但未进战斗，立即放弃本怪", flush=True)
+                return "far"
+            if st == "nodlg":
+                # 柔和：CALL 已等 2s 装载；补 1 次仍无对话框 = 打不了 → 快速放弃
+                __tm.sleep(1.0)
+                continue
+            return "miss"   # 读到了对话但无战斗选项 = 被锁定 → 立即放弃换目标
+        return "fail"
 
     # 1) 原地立即 CALL（怪就在面前 → 直接命中，不移动）
-    r = _call_once()
+    # ★ 2026-08-30 用户：距离过远直接跳过原地 CALL（省超距弹窗/幽灵对话空转），
+    #   交给下方移动（走路/瞬移）贴近后再 CALL。
+    _rg0 = _role_grid(gateway)
+    _d0 = _grid_dist(_rg0, boss["gx"], boss["gy"]) if _rg0 else 99.0
+    if _d0 > CALL_SKIP_DIST:
+        if verbose:
+            print(f"  [CALL] 距离 {_d0:.0f} 格过远（>{CALL_SKIP_DIST:.0f}），不原地CALL，"
+                  f"先移动过去", flush=True)
+        r = "far"
+    else:
+        # ★2026-09-01 结算等待仅限"原地CALL"近距离目标（防首击打回）；
+        #   走路/瞬移目标在上方入口已跳过（移动耗时覆盖结算动画）。
+        _post_wait = _POST_BATTLE_SETTLE - (__tm.time() - _post_wait_ts)
+        if _post_wait > 0 and _post_wait_ts > 0:
+            if verbose:
+                print(f"    ⏳ 战斗结算收尾等 {_post_wait:.1f}s（动画对齐，首击必中）",
+                      flush=True)
+            __tm.sleep(_post_wait)
+        r = _call_once()
     if r == "battle":
         ended = _wait_battle_end(gateway, timeout=battle_timeout)
-        close_dialog(gateway)
-        return {"ok": True, "battle_ended": ended, "msg": "call_ok",
-                "attempts": 1, "approached": False}
+        if not ended:
+            close_dialog(gateway)   # 战斗真结束 → 对话必然已收，跳过（省 1 个节流 Lua 位）
+        return {"ok": True, "battle_ended": ended, "gap_s": _battle_gap_metric(ended),
+                "msg": "call_ok", "attempts": 1, "approached": False}
     if r == "gone":
         return {"ok": False, "reason": "gone", "msg": "目标已消失"}
     if verbose:
@@ -2565,11 +3712,15 @@ def _farm_one_boss(
     moves += 1
     if mode == "walked_call_ok":
         ended = _wait_battle_end(gateway, timeout=battle_timeout)
-        close_dialog(gateway)
-        return {"ok": True, "battle_ended": ended, "msg": "walk_call_ok",
-                "attempts": 2, "approached": True}
+        if not ended:
+            close_dialog(gateway)   # 战斗真结束 → 对话必然已收，跳过（省 1 个节流 Lua 位）
+        return {"ok": True, "battle_ended": ended, "gap_s": _battle_gap_metric(ended),
+                "msg": "walk_call_ok", "attempts": 2, "approached": True}
     if mode == "gone":
         return {"ok": False, "reason": "gone", "msg": "目标已消失（走近途中）"}
+    if mode == "miss":
+        return {"ok": False, "reason": "no_battle_option",
+                "msg": "怪物被他人锁定/战斗中（无战斗选项），立即放弃换目标"}
     if mode == "far":
         return {"ok": False, "reason": "unreachable", "msg": "走近失败仍超距"}
 
@@ -2577,9 +3728,10 @@ def _farm_one_boss(
     r = _call_once()
     if r == "battle":
         ended = _wait_battle_end(gateway, timeout=battle_timeout)
-        close_dialog(gateway)
-        return {"ok": True, "battle_ended": ended, "msg": "final_call_ok",
-                "attempts": 3, "approached": moves > 0}
+        if not ended:
+            close_dialog(gateway)   # 战斗真结束 → 对话必然已收，跳过（省 1 个节流 Lua 位）
+        return {"ok": True, "battle_ended": ended, "gap_s": _battle_gap_metric(ended),
+                "msg": "final_call_ok", "attempts": 3, "approached": moves > 0}
     if r == "gone":
         return {"ok": False, "reason": "gone", "msg": "目标已消失"}
     return {"ok": False, "reason": "no_battle_option",
@@ -2650,6 +3802,230 @@ def WORLD_BOSS_captcha_gate(gateway: str = None, verbose: bool = True) -> dict:
     return {"ok": True, "captcha_resolved": bool(resolved)}
 
 
+# ============ 摄妖香 定时使用（2026-08-30 用户定案 A + 结果反查 + 成功重置） ============
+#   需求：启动先确保身上有摄妖香BUFF；此后每 300 分钟补一次；
+#   到点时在"战斗结束+结算对齐后、挑下一个目标前"暂停补香再继续。
+#   实现：道具无 Lua 直接"使用"接口 → 打开 道具行囊 窗口，用 PostMessage 悬停+
+#   窗口.道具行囊.提示文字 确定性定位"摄妖香"格子（无需猜坐标），然后右键使用；
+#   用 数量-1 判定成功，未-1 视为"已生效/未命中"加固。
+_XIANG_INTERVAL = 300 * 60          # 300 分钟
+_XIANG_LAST_USE = 0.0
+_XIANG_NEXT_TRY = 0.0               # 定位/使用失败后的下次重试时间戳（失败冷却）
+_XIANG_RETRY_GAP = 180.0
+# ★2026-08-30 摄妖香槽位校准：data\xiang_slot.json 存在则直接使用该客户区格子坐标
+#   （一次性真实光标校准，覆盖笨重的网格扫描；未校准则退回网格扫描兜底）。
+_XIANG_SLOT_FILE = os.path.join(_PROJECT_ROOT, "data", "xiang_slot.json")
+
+
+def _xiang_slot_calibrated() -> Optional[tuple]:
+    try:
+        if not os.path.exists(_XIANG_SLOT_FILE):
+            return None
+        with open(_XIANG_SLOT_FILE, "r", encoding="utf-8") as _f:
+            d = json.load(_f)
+        cx, cy = int(d["cx"]), int(d["cy"])
+        if cx > 0 and cy > 0:
+            return cx, cy
+    except Exception:
+        pass
+    return None
+
+# 悬停扫描网格（背包内道具区）：5 列 × 9 行，格子步距 34px，起点=窗口内左上偏移
+# （窗口中已有实测 x=80,y=140；内边距按经典 5 列背包经验值，(28,30) 内侧起点）
+_XIANG_GRID_COLS = 5
+_XIANG_GRID_ROWS = 9
+_XIANG_CELL_STEP = 34
+_XIANG_GRID_X0 = 28
+_XIANG_GRID_Y0 = 30
+
+
+def _xiang_count(gateway) -> Optional[int]:
+    """读 背包里 摄妖香 的数量（tp.道具列表 中 名称==摄妖香 的 数量；无道具返回 None）。"""
+    raw = _lua(gateway, r'''
+local n = nil
+for k, v in pairs(tp.道具列表 or {}) do
+  if type(v) == "table" and tostring(v.名称 or "") == "摄妖香" then
+    n = tonumber(v.数量) or 0
+  end
+end
+_G.__out = tostring(n)
+''')
+    try:
+        return int(float(str(raw)))
+    except Exception:
+        return None
+
+
+def _xiang_open_bag(gateway) -> bool:
+    """打开 道具行囊 窗口：**后台鼠标点背包图标**（用户 2026-09-01 定案：不用
+    Lua CALL 开包，避免 CALL 崩溃风险；只 LUA 查开包状态）。返回是否成功打开。"""
+    return _open_bag_by_icon(gateway)
+
+
+def _xiang_close_bag(gateway) -> None:
+    """关闭 道具行囊（关闭/关 方法兜底 + 可视=false）。"""
+    _lua(gateway, r'''
+local w = tp.窗口.道具行囊
+if w then
+  pcall(function()
+    if type(w.关闭) == "function" then w:关闭()
+    elseif type(w.关) == "function" then w:关()
+    end
+  end)
+  w.可视 = false
+end
+''')
+
+
+def _xiang_locate_hover(gateway) -> Optional[tuple]:
+    """悬停扫描定位"摄妖香"格子客户区中心。
+    PostMessage 移入候选格子 → 读 窗口.道具行囊.提示文字 → 含"摄妖香"即命中。
+    :return: (cx, cy) 或 None（找不到/开包失败）
+    """
+    import ctypes as _ct
+    hwnd = 0
+    pid = _get_bound_pid()
+    if pid > 0:
+        from library.common.win_utils import locate_game_window as _l
+        _h = _l(pid, verbose=False)
+        hwnd = _h[0] if isinstance(_h, tuple) else _h
+    if not hwnd:
+        return None
+    user32 = _ct.windll.user32
+    # 窗口原点（道具行囊 x=80,y=140 为窗口原点绝对客户区坐标）
+    ox, oy = 80, 140
+    for r in range(_XIANG_GRID_ROWS):
+        for c in range(_XIANG_GRID_COLS):
+            cx = ox + _XIANG_GRID_X0 + c * _XIANG_CELL_STEP
+            cy = oy + _XIANG_GRID_Y0 + r * _XIANG_CELL_STEP
+            lp = (int(cy) << 16) | (int(cx) & 0xFFFF)
+            user32.PostMessageW(hwnd, 0x0200, 0, lp)   # WM_MOUSEMOVE 悬停
+            __tm.sleep(0.10)
+            tip = _lua(gateway, r'''
+local t = tp.窗口.道具行囊 and tp.窗口.道具行囊.提示文字 or ""
+_G.__out = tostring(t)
+''')
+            if tip and "摄妖香" in tip and "右键" not in tip:
+                return cx, cy
+        # 每行后停一次，减轻持续悬停对客户端的负载
+        __tm.sleep(0.05)
+    return None
+
+
+def _xiang_find_cell(gateway) -> Optional[tuple]:
+    """动态扫描行囊物品表，按名称找「摄妖香」格子中心（客户区坐标）。
+    与飞行符 _fly_find_charm_cell 同款（2026-09-01 用户定案：随机格子可找，
+    取代校准槽位+网格悬停扫描）。找不到返回 None。"""
+    code = r'''
+local out = ""
+local B = tp.窗口.道具行囊
+if type(B) == "table" and type(B.物品) == "table" then
+  for i = 1, #B.物品 do
+    local c = B.物品[i]
+    if type(c) == "table" then
+      local nm = tostring((c.物品 and c.物品.名称) or "")
+      if nm:find("摄妖香") then
+        out = tostring(c.x) .. "," .. tostring(c.y)
+        break
+      end
+    end
+  end
+end
+_G.__out = out
+'''
+    try:
+        raw = _lua(gateway, code)
+    except Exception:
+        return None
+    if raw and "," in raw:
+        x, y = raw.split(",", 1)
+        try:
+            return int(x) + 26, int(y) + 26
+        except Exception:
+            return None
+    return None
+
+
+def _use_xiang(gateway: str, verbose: bool = True) -> bool:
+    """补一次 摄妖香（到点调用）。成功使用（数量-1）→ 重置 300 分钟计时。
+    :return: True=成功使用或已上身（本次已处理）；False=没补上（缺道具/定位失败）
+    """
+    global _XIANG_LAST_USE, _XIANG_NEXT_TRY
+    # ★2026-08-30 22:37 实测修复：tp.道具列表 只有 道具行囊 打开后才填充
+    #   （未开包=0条目）。旧逻辑先 _xiang_count 后开包 → 永远读到空 → 误判
+    #   "背包里没有摄妖香"。改为先开包再读数量（_xiang_open_bag 无副作用）。
+    if not _xiang_open_bag(gateway):
+        if verbose:
+            print("[摄妖香] 打开行囊失败", flush=True)
+        _XIANG_NEXT_TRY = __tm.time() + _XIANG_RETRY_GAP
+        return False
+    __tm.sleep(0.5)
+    cnt0 = _xiang_count(gateway)
+    if cnt0 is None:
+        if verbose:
+            print("[摄妖香] 背包里没有摄妖香！", flush=True)
+        _xiang_close_bag(gateway)
+        _XIANG_NEXT_TRY = __tm.time() + _XIANG_RETRY_GAP
+        return False
+    # ★2026-09-01 用户定案：摄妖香定位改为与飞行符同款动态扫描（按名称找格子，
+    #   随机格子位置都能找到；取代"一次性校准槽位 + 网格悬停"旧机制）。
+    pos = _xiang_find_cell(gateway)
+    if pos is None:
+        # 首次打开瞬间物品表可能未加载 → 稍等重扫一次即可（图标开包）
+        __tm.sleep(1.0)
+        pos = _xiang_find_cell(gateway)
+    if not pos:
+        _xiang_close_bag(gateway)
+        _XIANG_NEXT_TRY = __tm.time() + _XIANG_RETRY_GAP
+        if verbose:
+            print(f"[摄妖香] 未定位到摄妖香格子（动态扫描未命中；本次 "
+                  f"{_XIANG_RETRY_GAP:.0f}s 后重试）", flush=True)
+        return False
+    cx, cy = pos
+    # 悬停到位后右键使用（同驿站/战斗选项的 PostMessage 后台点击）
+    import ctypes as _ct
+    from library.common.win_utils import locate_game_window as _l
+    pid = _get_bound_pid()
+    _h = _l(pid, verbose=False) if pid > 0 else (0, 0)
+    hwnd = _h[0] if isinstance(_h, tuple) else _h
+    user32 = _ct.windll.user32
+    lp = (int(cy) << 16) | (int(cx) & 0xFFFF)
+    user32.PostMessageW(hwnd, 0x0204, 1, lp)   # WM_RBUTTONDOWN
+    __tm.sleep(0.06)
+    user32.PostMessageW(hwnd, 0x0205, 0, lp)   # WM_RBUTTONUP
+    if verbose:
+        print(f"[摄妖香] 右键用香 @ 客户区({cx},{cy})", flush=True)
+    __tm.sleep(1.2)
+    cnt1 = _xiang_count(gateway)
+    _xiang_close_bag(gateway)
+    if cnt1 is not None and cnt1 == cnt0 - 1:
+        _XIANG_LAST_USE = __tm.time()
+        if verbose:
+            print(f"[摄妖香] ✓ 使用成功（{cnt0}→{cnt1}），计时重置 300 分钟", flush=True)
+        return True
+    if cnt1 is not None and cnt1 != cnt0:
+        _XIANG_LAST_USE = __tm.time()
+        if verbose:
+            print(f"[摄妖香] ✓ 数量变化 {cnt0}→{cnt1}，按成功处理", flush=True)
+        return True
+    if verbose:
+        print(f"[摄妖香] 数量未变（{cnt0}→{cnt1}）→ 已生效，计时重置 300 分钟"
+              f"（不再 180s 空转重试）", flush=True)
+    # ★2026-09-01 提速：数量未变 = 香已生效（摄妖香无法叠加，右键不消耗）。
+    #   旧逻辑设 _XIANG_NEXT_TRY=now+180 每 180s 重试一次 → 8 次用香全"数量未变"
+    #   白耗 40s。已生效即重置 300 分钟计时，彻底消灭空转重试。
+    _XIANG_LAST_USE = __tm.time()
+    _XIANG_NEXT_TRY = __tm.time() + _XIANG_RETRY_GAP
+    return True
+
+
+def _xiang_due() -> bool:
+    """是否到点补香（挂机一启动先补一次，此后每 300 分钟；失败后不超过冷却即可重试）。"""
+    if _XIANG_LAST_USE <= 0:
+        return __tm.time() >= _XIANG_NEXT_TRY
+    return (__tm.time() - _XIANG_LAST_USE) >= _XIANG_INTERVAL
+
+
 def WORLD_BOSS_auto_farm(
     monitored_maps: List[str] = None,
     target_bosses: List[str] = None,
@@ -2664,6 +4040,10 @@ def WORLD_BOSS_auto_farm(
     walk_background: bool = True,
     verbose: bool = True,
     gateway: str = DEFAULT_GATEWAY,
+    cross_map: bool = True,
+    # ★2026-08-30 摄妖香定时使用（GUI 可配置）：
+    xiang_enabled: bool = True,
+    xiang_interval_min: int = 300,
 ) -> dict:
     """世界BOSS自动监控 farming 主入口。
 
@@ -2684,15 +4064,93 @@ def WORLD_BOSS_auto_farm(
          只在场景内顺手清；未登记实体（_boss_priority=None）=
          非目标，不排序不攻击（六定案）；
       5) 换图优先排除近期去过的 3 张图，避免在清过的图之间打转。
+
+    ★2026-08-30「本图模式」对照实验（cross_map=False / 环境变量 WORLDBOSS_NO_CROSS=1，
+      或标记文件 E:/DS/WORLDBOSS_NO_CROSS.flag 存在即开）：用户观察"只有被 GUI 自动化
+      的角色掉线、其余未操作角色永不掉线"→ 崩溃嫌疑收敛到"高密操作（跨图1003+战斗CALL）
+      触发客户端固有 bug"。本模式禁用一切跨图（财神爷追击/公告跨图/无怪轮换全部短路），
+      只在本图打怪——用于定位"跨图是否掉线触发器"。注意：GUI 由 Explorer 启动时
+      **继承不到 setx 的新环境变量**，故提供同名 flag 文件开关（创建/删除即开/即关）。
+
+    ★2026-08-30「摄妖香定时使用」（GUI 可配 xiang_enabled / xiang_interval_min）：
+      每 N 分钟在"战斗结束+结算对齐后、挑下一目标前"暂停补一次摄妖香（后台开包→
+      校准槽位右键→数量反查），成功使用后重新计时；设置 xiang_enabled=False 关闭。
+
+    :param xiang_enabled: 是否启用摄妖香定时补香（True=启用，挂机启动即先补一次）
+    :param xiang_interval_min: 补香间隔（分钟），默认 300（与摄妖香单次持续时长对齐）
     """
+    if not cross_map or os.environ.get("WORLDBOSS_NO_CROSS") == "1" \
+       or os.path.exists(r"E:\DS\WORLDBOSS_NO_CROSS.flag"):
+        cross_map = False
+    # ★2026-08-30 本图模式（闭包辅助，不用局部 def 覆盖全局名——会触发 UnboundLocalError）：
+    #   跨图禁用时 _go_map 短路（同图直判成功、异图不跨返 False）；开启时转真实 _ensure_on_map。
+    def _go_map(gw, _name, _x, _y):
+        if not cross_map:
+            _cur = _cur_map_name(gw) or ""
+            if _name and _map_same(_cur, _name):
+                return True
+            if verbose:
+                print(f"[本图模式] 跳过跨图 → {_name}（当前 {_cur or '?'}）", flush=True)
+            return False
+        return _ensure_on_map(gw, _name, _x, _y)
+    # ★2026-08-30 摄妖香定时（GUI 可配置 xiang_enabled / xiang_interval_min）：
+    #   启用 → 每 xiang_interval_min 分钟补香（挂机启动先补一次），
+    #   在"战斗结束+结算对齐后、挑下一目标前"暂停补香再继续；禁用 → 永不触发。
+    global _XIANG_INTERVAL
+    if xiang_enabled:
+        _XIANG_INTERVAL = max(1, int(xiang_interval_min)) * 60
+        if verbose:
+            print(f"[摄妖香] 定时启用：每 {int(xiang_interval_min)} 分钟补一次"
+                  f"（槽位 {_XIANG_SLOT_FILE}）", flush=True)
+    else:
+        _XIANG_INTERVAL = 10 ** 18   # 禁用（时间戳永达不到）
+        if verbose:
+            print("[摄妖香] 定时禁用（xiang_enabled=False）", flush=True)
     monitored_maps = monitored_maps or list(DEFAULT_MONITORED_MAPS)
     target_bosses = target_bosses or list(DEFAULT_TARGET_BOSSES)
+    # ★2026-08-30 对照实验开关：E:/DS/WORLDBOSS_SKIP_COVID.flag 存在 → 从目标名单
+    #   剔除「新型冠状病毒」。用于隔离"新冠战斗路径是否掉线触发器"（08:35 实锤
+    #   多开器外+本图模式 3.5 分钟仍崩且零异常，长寿郊外满屏新冠为最大嫌疑）。
+    if os.path.exists(r"E:/DS/WORLDBOSS_SKIP_COVID.flag"):
+        before = len(target_bosses)
+        target_bosses = [b for b in target_bosses if "新冠" not in b]
+        if len(target_bosses) != before:
+            print("[新冠剔除] WORLDBOSS_SKIP_COVID.flag 生效：本次不目标 新型冠状病毒",
+                  flush=True)
+    # ★2026-08-30 对照实验：scan_only 纯扫描模式（WORLDBOSS_SCAN_ONLY.flag）——
+    #   farm 照常扫图/轮换，但绝不 CALL BOSS/进战斗。用于隔离"战斗 CALL"与
+    #   "注入+高频扫描"哪个是掉线触发器（昨晚30分钟0崩但今早密集战斗几轮全崩）。
+    scan_only = os.path.exists(r"E:/DS/WORLDBOSS_SCAN_ONLY.flag")
+    if scan_only:
+        print("[扫描模式] WORLDBOSS_SCAN_ONLY.flag 生效：只扫描不CALL不战斗", flush=True)
+    # ★2026-08-30 固化为默认：扫描降频 3s（无 flag 也生效；flag 存在仅日志冗余）。
+    #   依据：纯扫描 2 分钟即崩（08:51 实锤）而实体少/负载低时稳定，3s 一拍负载 x1/3。
+    if boss_scan_interval < 3.0:
+        boss_scan_interval = 3.0
+    if os.path.exists(r"E:/DS/WORLDBOSS_SCAN_SLOW.flag"):
+        print("[扫描降频] 固化 3s（flag 冗余，行为无差异）", flush=True)
+    # ★2026-08-30 全局 Lua 节流【固化默认生效】：无论 flag 是否存在都启用 0.4s 节流。
+    #   依据：9:07-9:30 attach 静置 23 分钟零崩溃 vs farm 持续注入 1-8 分钟随机崩；
+    #   0.4s 实测 60 杀零崩溃，farm入→开战 1.6~3s、战间 4~7s。
+    #   可用环境变量 WORLDBOSS_LUA_GAP 覆盖（如 1.0 保命）。
+    global _LUA_MIN_GAP
+    _LUA_MIN_GAP = float(os.environ.get("WORLDBOSS_LUA_GAP", "0.4"))
+    global WALK_CALL_INTERVAL
+    WALK_CALL_INTERVAL = 3.0    # 走路边走边CALL 降频（1.5s→3.0s，2026-08-30）
+    if os.path.exists(r"E:/DS/WORLDBOSS_LUA_SLOW.flag"):
+        print(f"[Lua节流] 固化生效：全局 Lua 注入最小间隔 {_LUA_MIN_GAP}s"
+              f"（flag 冗余，含走路通道边走边CALL 3s 一拍）", flush=True)
+    else:
+        print(f"[Lua节流] 固化默认生效：全局 Lua 注入最小间隔 {_LUA_MIN_GAP}s"
+              f"（环境变量 WORLDBOSS_LUA_GAP 可覆盖；含走路通道边走边CALL 3s 一拍）",
+              flush=True)
     spawn_patterns = spawn_patterns or list(DEFAULT_SPAWN_PATTERNS)
     battle_keywords = battle_keywords or list(DEFAULT_BATTLE_KEYWORDS)
     # 2026-08-29 平级交叉攻击配套：登记本次运行目标名单，供 _boss_priority 对
     # "名单内但未映射档位"的名字兜底为白名单档（如用户新增"新型冠状病毒"类），
     # 避免被 _live_bosses 当"未登记非目标"剔除漏打。
     global _RUN_TARGET_BOSSES
+    global _TOP_PIN_MAP
     _RUN_TARGET_BOSSES = frozenset(target_bosses)
     # 2026-08-28 B8 修复：监控表去重——同图双名（如 建邺城/宝象国 同为 1501）
     # 只保留首个，否则轮换会在两名之间空转切图（_map_same 归一后再判重）。
@@ -2726,12 +4184,19 @@ def WORLD_BOSS_auto_farm(
     top_ann_seen = set()        # 已消费的顶级目标公告原文（防同一条反复抢占）
     caishen_scan_miss = 0       # 抢占图内连续无顶级目标的复扫计数
     last_name = None   # 2026-08-29 平级交叉攻击：上一次选中目标的名字
+    # 2026-08-30 防发呆：记录当前外层轮内是否击杀过怪（战斗后不白等满
+    # boss_scan_interval），纯扫描/换图轮才保留完整扫描间隔。
+    _farmed_this_outer_round = False
     print("=== WORLD_BOSS_auto_farm 开始 ===", flush=True)
     print(f"  监控地图={monitored_maps}", flush=True)
     print(f"  目标BOSS={target_bosses[:10]}{'...' if len(target_bosses)>10 else ''}", flush=True)
 
     stopped = False
+    _just_battle_ended = False   # 2026-08-30 提速：战斗确认结束后轮顶跳过冗余战斗态查询
+    _last_kill_ts = t0            # 2026-08-30 排查：上一次击杀时刻（pin 打印用）
     while time.time() - t0 < max_runtime:
+        # 2026-08-30 防发呆：外层每轮重置"本轮是否击杀过怪"标志
+        _farmed_this_outer_round = False
         # -1) GUI 停止按钮：任何时刻置位都立即退出（可随时停止要求）
         if _gui_stop_requested():
             stopped = True
@@ -2752,15 +4217,25 @@ def WORLD_BOSS_auto_farm(
         #      战斗中等待自然结束。
         # 2026-08-28 B5 修复：每轮只做一次全量场景扫描，0.4 与 step2 共享结果
         # （旧逻辑 0.4 扫一次 + step2 再扫一次，双倍 Lua dump 开销）。
-        in_battle = _in_battle(gateway)
+        # ★ 2026-08-30 提速：_wait_battle_end 刚确认战斗结束 → 轮顶直接跳过 _in_battle
+        #   （CALL 路径内部 _call_once 自带战斗态自检兜底），省掉每个击杀后一次
+        #   节流 Lua 的纯等待（~1s）；其余场景仍先走战斗态守门再扫描。
+        in_battle = False if _just_battle_ended else _in_battle(gateway)
+        _just_battle_ended = False
         scanned = None  # 本轮场景扫描结果（0.4/step2 共享；跨图后置 None 强制重扫）
         if in_battle:
             if verbose:
                 print(f"[{int(time.time()-t0)}s] 战斗中（超时未决/战斗收尾），原地等待...", flush=True)
-            if not _sleep_stoppable(2.0):
+            # 2026-08-30 提速：2.0→1.0s 一拍（_in_battle 是轻量 Lua 查询走全局节流），
+            # 战斗结束最多 1s 察觉，不傻站。仍保留节流不增压。
+            if not _sleep_stoppable(1.0):
                 stopped = True
                 break
             continue
+        # ★2026-08-30 摄妖香定时（300 分钟/次，用户定案）：在非战斗、战斗结束+结算
+        #   对齐之后、挑下一目标之前——到点就暂停补香，用后继续（全程后台操作）。
+        if _xiang_due():
+            _use_xiang(gateway, verbose)
         scanned = scan_scene_bosses(gateway, target_bosses)
         live_here = _live_bosses(scanned, excluded)
 
@@ -2774,6 +4249,7 @@ def WORLD_BOSS_auto_farm(
         #   抢占期间只打 P0~P2（财神爷 ＞ 星宿 ＞ 头领=知了王），三者全无 →
         #   解除抢占，回落普通模式：本图其余白名单 BOSS 按 P3/P4 优先级打。
         if caishen_pinned is None:
+            _TOP_PIN_MAP = None   # 未抢占 → 清中断标记（防上一轮残留）
             cs_here = [x for x in live_here if x["name"] == CAISHEN_BOSS]
             if cs_here:
                 # A) 财神爷就在面前：就地抢占
@@ -2798,20 +4274,26 @@ def WORLD_BOSS_auto_farm(
 
         if caishen_pinned:
             cs_map = caishen_pinned["map"]
+            # ★ 2026-08-30 顶级公告优先跨图：当前不在公告图 → 悬挂中断标记，
+            #   让正在进行的本图 boss 尝试在 _farm_one_boss 启动时立即中止（先跨图）。
             if cs_map in unreachable and time.time() < unreachable[cs_map]:
                 if verbose:
                     print(f"  ⚡ 财神爷图 {cs_map} 跨图冷却中 → 放弃抢占，回落普通模式",
                           flush=True)
                 caishen_pinned = None
+                _TOP_PIN_MAP = None
                 continue
             # 已在本图则不重复跨图（_map_same 归一：建邺城 == 宝象国）
             real_now = _cur_map_name(gateway) or ""
+            # 同步"顶级公告指向他图"中断标记（跨图/解除后由下一轮重新计算归零）
+            _TOP_PIN_MAP = cs_map if not _map_same(real_now, cs_map) else None
             if not (real_now and _map_same(real_now, cs_map)):
-                if not _ensure_on_map(gateway, cs_map, None, None):
+                if not _go_map(gateway, cs_map, None, None):
                     unreachable[cs_map] = time.time() + 600
                     if verbose:
                         print(f"  ⚡ 跨图到财神爷图 {cs_map} 失败 → 放弃抢占", flush=True)
                     caishen_pinned = None
+                    _TOP_PIN_MAP = None
                     continue
                 cur_map = cs_map
                 recent_maps.append(cur_map)
@@ -2826,24 +4308,34 @@ def WORLD_BOSS_auto_farm(
                 caishen_scan_miss = 0
                 if verbose:
                     print(f"[{int(time.time()-t0)}s] ⚡ 抢占模式 → {b['name']}"
-                          f"(P{_boss_priority(b['name'])}) @ {cur_map} {b['gx']},{b['gy']}",
-                          flush=True)
+                          f"(P{_boss_priority(b['name'])}) @ {_cur_map_name(gateway) or cur_map or '?'}"
+                          f" {b['gx']},{b['gy']}"
+                          f"（距上杀 {time.time()-_last_kill_ts:.1f}s）", flush=True)
                 real_map = _cur_map_name(gateway) or cur_map or ""
                 kw = _boss_battle_keywords(b["name"], list(battle_keywords))
+                if scan_only:
+                    print(f"  [扫描模式] 发现 {b['name']}@ {cur_map} {b['gx']},{b['gy']} 不CALL不战", flush=True)
+                    excluded.add(_boss_key(b))
+                    continue
                 res = _farm_one_boss(gateway, b, kw, battle_timeout,
                                      walk_background, verbose, real_map)
+                if res.get("reason") == "abort_top_ann":
+                    continue   # 顶级公告优先 → 不计数不拉黑，下一轮 pin 逻辑跨图
                 if res.get("ok") and res.get("battle_ended"):
                     farmed_total += 1
-                    print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）", flush=True)
+                    _farmed_this_outer_round = True   # 2026-08-30 防发呆标记
+                    _just_battle_ended = True         # 2026-08-30 提速：轮顶跳过冗余战斗查询
+                    _g = res.get("gap_s")
+                    _gstr = (f"（上战结束→本场开战 {_g:.1f}s）"
+                             if isinstance(_g, (int, float)) else "")
+                    print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）{_gstr}", flush=True)
+                    _last_kill_ts = time.time()
                 else:
                     # gone = 没了；no_battle_option = 被人锁定/占领 → 拉黑，下轮换目标
                     print(f"  ✗ {b['name']} 跳过: {res.get('reason')} {res.get('msg')}",
                           flush=True)
                     excluded.add(_boss_key(b))
-                if not _sleep_stoppable(0.3):
-                    stopped = True
-                    break
-                continue      # 维持抢占：回外层重扫，再判顶级目标是否还在
+                continue      # 维持抢占：零等待直接回外层重扫，按优先级切下一目标
             # 顶级三目标全无：公告先到怪未刷 / 已被击杀 / 被人锁定 → 复扫几轮再判
             caishen_scan_miss += 1
             if caishen_scan_miss >= CAISHEN_SCAN_MISS_LIMIT:
@@ -2851,6 +4343,7 @@ def WORLD_BOSS_auto_farm(
                     print(f"  ⚡ 财神爷/知了王/妖魔头领 均无（连扫 {caishen_scan_miss} 次）"
                           f" → 解除抢占，回落普通模式打本图其余白名单 BOSS", flush=True)
                 caishen_pinned = None
+                _TOP_PIN_MAP = None
                 just_unpinned = True   # 本轮先清本图，不被公告拉走
             else:
                 if not _sleep_stoppable(CAISHEN_SCAN_MISS_GAP):
@@ -2877,9 +4370,13 @@ def WORLD_BOSS_auto_farm(
                 last_ann_text = spawn.get("text")
                 ann_cleared = False
         # 2026-08-28 五定案：妖魔鬼怪/妖魔/鬼怪=最低优先级——公告不再为它们跨图。
-        # 2026-08-29 补充：多图系统公告（如“妖魔在 A、B、C 出没，前往剿灭”）
+        # 2026-08-29 补充：多图系统公告（如"妖魔在 A、B、C 出没，前往剿灭"）
         # 属于系统召唤事件，force_cross=True，即便 BOSS 是 LOW_PRIORITY 也触发跨图。
-        if spawn and spawn.get("boss") in LOW_PRIORITY_BOSSES and not spawn.get("force_cross"):
+        # 2026-08-30 补充：二十八星宿公告同样不触发跨图（NO_CROSS_BOSSES，用户定案）。
+        # ★2026-08-31 00:12 方案1曾改成"仅顶级公告跨图"（用户试跑后于 00:4x 撤销：
+        #   恢复原公告优先级判定，跨图行为与原版一致；崩溃根因已另锁定 captcha
+        #   monitor，跨图不再是背锅项）。
+        if spawn and spawn.get("boss") in NO_CROSS_BOSSES and not spawn.get("force_cross"):
             spawn = None
         if spawn:
             if cur_map != spawn["map"]:
@@ -2895,7 +4392,7 @@ def WORLD_BOSS_auto_farm(
                           flush=True)
                 spawn = None
             else:
-                if not _ensure_on_map(gateway, spawn["map"], None, None):
+                if not _go_map(gateway, spawn["map"], None, None):
                     unreachable[spawn["map"]] = time.time() + 600
                     if verbose:
                         print(f"[{int(time.time()-t0)}s] 跨图到 {spawn['map']} 失败，"
@@ -2919,7 +4416,7 @@ def WORLD_BOSS_auto_farm(
                 cur_map = _pick_random_map(None, monitored_maps, tuple(recent_maps))
                 no_boss_since = None
                 # 2026-08-28：初始切图也要核实——失败则以真实地图名为准（防标签说谎）
-                if _ensure_on_map(gateway, cur_map, None, None):
+                if _go_map(gateway, cur_map, None, None):
                     recent_maps.append(cur_map)
                 else:
                     unreachable[cur_map] = time.time() + 600
@@ -2994,11 +4491,11 @@ def WORLD_BOSS_auto_farm(
                     gx0, gy0 = (rg0[0], rg0[1]) if rg0 else (0.0, 0.0)
                 except Exception:
                     gx0, gy0 = 0.0, 0.0
-                # 2026-08-29 用户定案：普通模式严格按 BOSS_PRIORITY 排序
-                #   P1 二十八星宿 ＞ P2 头领=统领=知了王 ＞ P3 其余白名单
-                #   （灵猴/十二生肖/天罡地煞）＞ P4 妖族杂鱼垫底；
-                #   同优先级取距离近的。P0 财神爷由 0.5 抢占模式独占，
-                #   走到这里说明顶级三目标已被判定不在场。
+                # 2026-08-30 用户新定案：普通模式严格按 BOSS_PRIORITY 排序
+                #   P0 三界财神爷（抢占独占）＞ P1 头领=统领=知了王 ＞
+                #   P2 其余全部（灵猴/星宿/生肖/天罡地煞/新冠/妖魔鬼怪一律平级）；
+                #   同优先级一律按"距角色坐标由近到远"取最近（平级交叉战斗，
+                #   战斗结束只对最近 BOSS CALL一次，失败马上走路/瞬移贴近）。
                 #   未登记实体 = _boss_priority 返回 None = 非目标，已由 _live_bosses 剔除。
                 b = _pick_target(live, gx0, gy0, last_name=last_name)
                 if b is not None:
@@ -3012,17 +4509,29 @@ def WORLD_BOSS_auto_farm(
                 if not real_map_cache[0]:
                     real_map_cache[0] = _cur_map_name(gateway) or cur_map
                 real_map = real_map_cache[0]
+                if scan_only:
+                    print(f"  [扫描模式] 发现 {b['name']}@ {cur_map} {b['gx']},{b['gy']} 不CALL不战", flush=True)
+                    excluded.add(_boss_key(b))
+                    continue
                 res = _farm_one_boss(gateway, b, this_keywords, battle_timeout,
                                      walk_background, verbose, real_map)
+                if res.get("reason") == "abort_top_ann":
+                    continue   # 顶级公告优先 → 不计数不拉黑，下一轮 pin 逻辑跨图
                 if res.get("ok") and res.get("battle_ended"):
                     farmed_total += 1
-                    print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）", flush=True)
+                    _farmed_this_outer_round = True   # 2026-08-30 防发呆标记
+                    _just_battle_ended = True         # 2026-08-30 提速：轮顶跳过冗余战斗查询
+                    _g = res.get("gap_s")
+                    _gstr = (f"（上战结束→本场开战 {_g:.1f}s）"
+                             if isinstance(_g, (int, float)) else "")
+                    print(f"  ✓ 击杀 {b['name']} @ {cur_map}（累计 {farmed_total}）{_gstr}", flush=True)
+                    _last_kill_ts = time.time()
                 else:
                     # battle_ended=False = 根本没进战斗（假触发），同样按失败处理
                     reason = res.get("reason") or ("no_battle_start" if res.get("ok") else "failed")
                     print(f"  ✗ {b['name']} 跳过: {reason} {res.get('msg')}", flush=True)
                     excluded.add(_boss_key(b))
-                if not _sleep_stoppable(0.3):  # 2026-08-28 提速轮：1.0→0.3，连续击杀不间断
+                if not _sleep_stoppable(0.1):  # 2026-08-30 提速轮：1.0→0.3→0.2→0.1，连续击杀不间断
                     stopped = True
                     break
         else:
@@ -3040,13 +4549,16 @@ def WORLD_BOSS_auto_farm(
                 if re:
                     continue
                 # 复扫仍空 → 立即轮换（公告记忆同步作废，防老公告拉回）
+                # ★2026-08-31 00:12 方案1曾临时改为"驻留等刷新"（用户 00:4x 撤销：
+                #   恢复原版随机换图轮换，跨图行为与原版一致；崩溃根因已另锁定
+                #   captcha monitor）。
                 ann_cleared = True
                 nxt = _pick_random_map(cur_map, monitored_maps, tuple(recent_maps))
                 if verbose:
                     print(f"[{int(time.time()-t0)}s] {cur_map} 实扫无白名单怪，立即换图 → {nxt}",
                           flush=True)
                 no_boss_since = None
-                if _ensure_on_map(gateway, nxt, None, None):
+                if _go_map(gateway, nxt, None, None):
                     cur_map = nxt
                     recent_maps.append(nxt)
                 else:
@@ -3063,7 +4575,7 @@ def WORLD_BOSS_auto_farm(
                     print(f"[{int(time.time()-t0)}s] {cur_map} 已清图（{clear_timeout}s无BOSS），"
                           f"轮换 → {nxt}", flush=True)
                 no_boss_since = None
-                if _ensure_on_map(gateway, nxt, None, None):
+                if _go_map(gateway, nxt, None, None):
                     cur_map = nxt
                     recent_maps.append(nxt)
                 else:
@@ -3076,7 +4588,7 @@ def WORLD_BOSS_auto_farm(
                 break
             continue
 
-        if not _sleep_stoppable(boss_scan_interval):
+        if not _sleep_stoppable(boss_scan_interval if not _farmed_this_outer_round else 0.1):
             stopped = True
             break
 

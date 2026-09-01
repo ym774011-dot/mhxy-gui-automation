@@ -418,22 +418,63 @@ def ensure_gateway(pid=None, timeout: float = 120.0, verbose: bool = False):
                        "error": "网关启动超时（确认游戏已启动、脚本有管理员权限）"}
 
 
-def stop_gateway(timeout: float = 8.0, verbose: bool = False):
-    """GUI 关闭时调用：强制停止本组网关并清空其运行数据。
+def stop_gateway(timeout: float = 8.0, verbose: bool = False, kill: bool = False):
+    """停止本组网关（GUI 关闭 / 停网关按钮 / CLI --stop 统一入口）。
 
-    步骤（2026-08-27）：
-      1. 先调 /api/admin/shutdown 优雅 detach（游戏运行中严禁直接强杀，
-         frida session 非正常中断会崩游戏，见 gateway._admin_shutdown 铁律）；
+    ★★ 2026-08-31 实测定论：**同一游戏进程禁止反复 detach/re-attach** ★★
+    证据：19:10:44 网关 stop→start 对仍在运行的 PID 13416 做第二次 frida
+    attach，96s 后（期间游戏完全空闲、无任何自动化动作）游戏在 ntdll 栈上以
+    0xc0000005（BEX/DEP，WER StackHash_2beb）硬崩；此前已有两次"强杀网关→
+    游戏闪退"实测。机理：frida 会话先 detach 再 attach 同一活进程时，钩子
+    卸载/重挂存在竞态，可能破坏进程内存，延迟几秒~几分钟后引爆访问违例。
+
+    因此 **默认 kill=False 软停**：
+      - **不调 /api/admin/shutdown、不 taskkill、不 session.detach()**
+      - frida 会话常驻游戏、网关进程保留 → 下次 ensure_gateway 直接
+        action=reuse（HTTP 在+attached+pid 匹配+lua 已捕获+script 健康），
+        **永远不产生第二次 attach**，从根上消除该崩溃路径。
+      - 只清理本组运行日志（gateway_run_<port>.log），保持"干净启动"观感。
+
+    仅当 kill=True（GUI「彻底停网关(危险)」/ CLI --kill）才走旧硬停路径：
+      1. 先调 /api/admin/shutdown 优雅 detach（严禁直接强杀，否则必崩游戏）；
       2. 端口仍被占（shutdown 失败/网关假死）→ taskkill 兜底；
-      3. 轮询确认端口已释放；
-      4. 清理本组网关运行日志（gateway_spawn_<port>.log），下次打开从零开始。
+      3. 轮询确认端口已释放。
+    该路径本身仍有极低概率触发上述竞态，非必要不用。
 
     多组安全：只操作本组端口（group_config 解析），不影响其它组的网关。
     返回 (ok, info)。
+
+    步骤（2026-08-27，硬停路径保留）：
+      1. 先调 /api/admin/shutdown 优雅 detach；
+      2. 端口仍被占 → taskkill 兜底；
+      3. 轮询确认端口已释放；
+      4. 清理本组网关运行日志。
     """
     port = _gw_port()
     info = {"port": port}
 
+    def _clean_logs():
+        # 清理本组网关运行日志，下次打开从零开始
+        for name in (f"gateway_spawn_{port}.log", f"gw_{port}.log", f"gateway_run_{port}.log"):
+            p = os.path.join(GATEWAY_DIR, name)
+            try:
+                if os.path.exists(p):
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write("")
+                    info.setdefault("cleaned", []).append(name)
+            except Exception as e:
+                info.setdefault("clean_errors", []).append(f"{name}: {e}")
+
+    if not kill:
+        # ---- 软停：frida 会话常驻、网关进程保留，下次启动直接复用 ----
+        _clean_logs()
+        info.update(stopped=True, action="soft_stop",
+                    note="会话保留：frida 未 detach、进程未杀；下次启动自动复用（防重复 attach 崩游戏）")
+        if verbose:
+            print("[gateway_guard] stop(soft):", info)
+        return True, info
+
+    # ---- 硬停（旧逻辑，kill=True 才走）：优雅 detach → 轮询释放 → taskkill 兜底 ----
     # 1. 优雅退出
     try:
         req = urllib.request.Request(
@@ -474,28 +515,19 @@ def stop_gateway(timeout: float = 8.0, verbose: bool = False):
         info["stopped"] = False
         info["error"] = f"端口 {port} 释放超时"
 
-    # 4. 清理本组网关运行日志（重新打开 GUI 时网关从干净状态加载）
-    # 2026-08-28 补丁2：gateway.py 运行日志已按端口隔离为 gateway_run_<port>.log
-    for name in (f"gateway_spawn_{port}.log", f"gw_{port}.log", f"gateway_run_{port}.log"):
-        p = os.path.join(GATEWAY_DIR, name)
-        try:
-            if os.path.exists(p):
-                with open(p, "w", encoding="utf-8") as f:
-                    f.write("")
-                info.setdefault("cleaned", []).append(name)
-        except Exception as e:
-            info.setdefault("clean_errors", []).append(f"{name}: {e}")
+    _clean_logs()
 
     if verbose:
-        print("[gateway_guard] stop:", info)
+        print("[gateway_guard] stop(kill):", info)
     return bool(info.get("stopped")), info
 
 
 if __name__ == "__main__":
-    # CLI 入口：python core/gateway_guard.py [PID]     → 拉起网关
-    #           python core/gateway_guard.py --stop   → 停止网关（GUI 关闭同款逻辑）
+    # CLI 入口：python core/gateway_guard.py [PID]           → 拉起/复用网关
+    #           python core/gateway_guard.py --stop          → 软停（会话保留，默认）
+    #           python core/gateway_guard.py --stop --kill   → 硬停（detach+杀进程，危险）
     if len(sys.argv) > 1 and sys.argv[1] == "--stop":
-        _ok, _info = stop_gateway(verbose=True)
+        _ok, _info = stop_gateway(verbose=True, kill=("--kill" in sys.argv))
     else:
         pid_arg = None
         if len(sys.argv) > 1 and sys.argv[1].isdigit():

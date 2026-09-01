@@ -123,6 +123,12 @@
         "path": "E:/DS/mhxy-gui-automation/tasks/library/WORLD_BOSS.py",
         "enabled": true,
         "category": "custom"
+      },
+      {
+        "name": "BSHC",
+        "path": "E:\\DS\\mhxy-gui-automation\\tasks\\library\\BSHC.py",
+        "enabled": true,
+        "category": "custom"
       }
     ]
   },

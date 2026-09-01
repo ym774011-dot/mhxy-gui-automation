@@ -498,6 +498,14 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                     from core.captcha_v7 import solve_v7
                     from core.window_manager import window_manager
                     hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
+                    # ★2026-08-30 21:57 同款加固：window_manager 未绑定 → hwnd=0
+                    #   点击必失败 → 验证码超时强制下线。无参 bind() 从 config 恢复。
+                    if hwnd <= 0:
+                        try:
+                            window_manager.bind()
+                        except Exception:
+                            pass
+                        hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
                     ok, detail = solve_v7(hwnd)
                     if ok:
                         logger.info(f"V7 直解成功: {detail}")
@@ -576,6 +584,13 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
                 from core.captcha_v7 import solve_v7
                 from core.window_manager import window_manager
                 hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
+                # ★2026-08-30 21:57 同款加固（轮询路径）：未绑定 → 从 config 恢复
+                if hwnd <= 0:
+                    try:
+                        window_manager.bind()
+                    except Exception:
+                        pass
+                    hwnd = int(getattr(window_manager, "hwnd", 0) or 0)
                 ok, detail = solve_v7(hwnd, verify_wait=0)
                 if ok:
                     logger.info(f"V7 直解成功(轮询): {detail}")

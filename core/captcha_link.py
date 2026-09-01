@@ -103,6 +103,13 @@ def ensure_watchdog(group: int = None) -> tuple:
 
     :return: (ok, info) — ok=True 表示 watchdog 在运行（含本次拉起成功）
     """
+    # ★2026-08-31 00:22 永久禁用（用户定案）：多窗口自动化下 captcha watchdog+
+    #   monitor 会绑错窗口高频 PostMessage/ESC/截图，实证为引擎异常退出干扰源
+    #   （崩溃前 monitor 持续对错误窗口发消息）。farm 内置 _captcha_solve V7 直解
+    #   已自足，无需独立 monitor。置 MHXY_NO_WATCHDOG=1 跳过拉起；默认仍保持
+    #   原行为（不强制改变其他使用者的场景）。
+    if os.environ.get("MHXY_NO_WATCHDOG") == "1":
+        return True, "watchdog 已禁用（MHXY_NO_WATCHDOG=1）"
     if watchdog_running(group):
         return True, "watchdog 已在运行"
     if group is None:

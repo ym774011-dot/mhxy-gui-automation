@@ -1,0 +1,10 @@
+任务库加载完成，共 17 个模块
+启动网关中...
+网关就绪: {'action': 'started', 'pid': 13416, 'wait': 2.2}
+[测试] 日志镜像通道 OK
+网关停止: True {'port': 18082, 'stopped': True, 'cleaned': ['gateway_spawn_18082.log', 'gw_18082.log', 'gateway_run_18082.log']}
+关闭 GUI：停止任务与本组网关...
+网关已停止: {'port': 18082, 'stopped': True, 'cleaned': ['gateway_spawn_18082.log', 'gw_18082.log', 'gateway_run_18082.log']}
+任务库加载完成，共 18 个模块
+关闭 GUI：停止任务；网关会话保留后台运行，下次打开自动复用...
+网关软停(会话保留): ok=True

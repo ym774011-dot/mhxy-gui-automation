@@ -171,7 +171,11 @@
             "function": "WORLD_BOSS_auto_farm",
             "args": [],
             "kwargs": {
-              "max_runtime": 1800
+              "max_runtime": 1800,
+              "boss_scan_interval": 3.0,
+              "xiang_enabled": true,
+              "xiang_interval_min": 300,
+              "verbose": true
             },
             "auto_wait_arrival": false,
             "wait_arrival_timeout": 0.0,
