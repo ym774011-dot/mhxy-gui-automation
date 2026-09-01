@@ -4584,13 +4584,6 @@ def WORLD_BOSS_auto_farm(
                 #   同优先级一律按"距角色坐标由近到远"取最近（平级交叉战斗，
                 #   战斗结束只对最近 BOSS CALL一次，失败马上走路/瞬移贴近）。
                 #   未登记实体 = _boss_priority 返回 None = 非目标，已由 _live_bosses 剔除。
-                # ★2026-09-01 P1 黑名单过滤（拉黑坑位直接跳过）
-                live = _filter_blacklisted(live, brain, real_map, verbose)
-                b = _pick_target(live, gx0, gy0, last_name=last_name)
-                if b is not None:
-                    last_name = b["name"]
-                if b is None:          # 理论不可达（live 非空必有目标），防御性兜底
-                    break
                 this_keywords = _boss_battle_keywords(b["name"], list(battle_keywords))
                 # 2026-08-28：走路/校准一律用实读地图名——cur_map 标签万一错了
                 # （跨图未到达），拿错图的校准数据点屏幕会全错（长寿郊外点花果山像素事故）
@@ -4598,6 +4591,13 @@ def WORLD_BOSS_auto_farm(
                 if not real_map_cache[0]:
                     real_map_cache[0] = _cur_map_name(gateway) or cur_map
                 real_map = real_map_cache[0]
+                # ★2026-09-01 P1 黑名单过滤（拉黑坑位直接跳过；须在 real_map 就绪后）
+                live = _filter_blacklisted(live, brain, real_map, verbose)
+                b = _pick_target(live, gx0, gy0, last_name=last_name)
+                if b is not None:
+                    last_name = b["name"]
+                if b is None:          # 理论不可达（live 非空必有目标），防御性兜底
+                    break
                 if scan_only:
                     print(f"  [扫描模式] 发现 {b['name']}@ {cur_map} {b['gx']},{b['gy']} 不CALL不战", flush=True)
                     excluded.add(_boss_key(b))
