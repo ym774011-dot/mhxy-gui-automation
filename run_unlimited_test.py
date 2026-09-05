@@ -377,6 +377,14 @@ def run_one_round(zgui, args, gateway, index):
     if logger is not None:
         logger.addHandler(handler)
 
+    # ★2026-09-06 多开：每轮把目标窗口钉到本角色，防止 get_hwnd() 取到别的号
+    try:
+        _pw = zgui._find_role_window(args.role)
+        if _pw:
+            zgui.set_target_hwnd(_pw[1])
+    except Exception:
+        pass
+
     pre_task = {}
     try:
         pre_task = zgui.zhuagui_get_task(gateway) or {}

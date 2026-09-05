@@ -192,26 +192,43 @@ def _wait_cancel_cooldown(gateway, cooldown=_CANCEL_COOLDOWN):
 
 
 # 文件通道单例（gateway 传 "file://pzxy" 时启用，方案②：零 frida 依赖）
-_FILE_WORKER = None
+_FILE_WORKERS = {}  # ★2026-09-06 多开：worker名 -> PzxyWorker（file://pzxy_p<pid> 每实例独立通道）
 
 
-def _lua_call_file(code: str, timeout: float):
+def _worker_name_from_gateway(gateway):
+    """file://pzxy → ''（默认通道）；file://pzxy_p12345 → 'p12345'；非 file 前缀 → None。"""
+    s = str(gateway).strip()
+    if not s.lower().startswith("file://"):
+        return None
+    rest = s[len("file://"):].strip("/")
+    if rest.lower().startswith("pzxy"):
+        rest = rest[len("pzxy"):]
+    if rest.startswith("_"):
+        rest = rest[1:]
+    return rest
+
+
+def _lua_call_file(code: str, timeout: float, gateway="file://pzxy"):
     """方案② 文件通道后端：经游戏内常驻 worker 执行 Lua（pzxy_ipc.py）。
 
     语义对齐网关：worker 返回 tostring(结果)，'nil' 归一为 None。
     worker 心跳停止（游戏重启/槽位被覆盖）→ 返回 None，与网关故障同型。
+    ★2026-09-06 多开：gateway 形如 file://pzxy_p<pid> 时使用该实例专属
+      worker（播种时 --name p<pid>），5 开互不串通道。
     """
-    global _FILE_WORKER
     try:
-        if _FILE_WORKER is None:
+        name = _worker_name_from_gateway(gateway) or ""
+        w = _FILE_WORKERS.get(name)
+        if w is None:
             _root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
             if _root not in sys.path:
                 sys.path.insert(0, _root)
             from library.pzxy_ipc import PzxyWorker
-            _FILE_WORKER = PzxyWorker()
-        if not _FILE_WORKER.is_alive():
+            w = PzxyWorker(name=name)
+            _FILE_WORKERS[name] = w
+        if not w.is_alive():
             return None
-        ok, val = _FILE_WORKER.cmd(code, timeout=min(timeout, 5.0))
+        ok, val = w.cmd(code, timeout=min(timeout, 5.0))
         if not ok or val == "nil":
             return None
         return val
@@ -237,7 +254,7 @@ def _lua_call(gateway: str, code: str, timeout: float = 8.0):
         _LUA_LAST[0] = time.time()
         try:
             if str(gateway).lower().startswith("file"):
-                return _lua_call_file(code, timeout)
+                return _lua_call_file(code, timeout, gateway)
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             body = json.dumps({"code": code, "result_var": "__out"}).encode("utf-8")
             req = urllib.request.Request(gateway + "/api/lua", data=body,
@@ -254,10 +271,19 @@ def _lua_call(gateway: str, code: str, timeout: float = 8.0):
 _HWND_CACHE = [0, 0.0]  # [hwnd, 时刻] ★2026-09-05 提速：3s TTL 缓存（窗口句柄只在游戏重启时变化，
 #             原实现每轮起 5~7 次 PowerShell 子进程，每次 0.3~0.8s，单轮浪费 2~4s）
 _HWND_TTL = 3.0
+_PINNED_HWNW = [0]  # ★2026-09-06 多开：跑批器按角色钉住目标窗口，get_hwnd 优先返回它
+
+
+def set_target_hwnd(hwnd):
+    """多开必用：把后续 get_hwnd() 钉到指定窗口（5 开下"取第一个窗口"会点错号）。"""
+    _PINNED_HWNW[0] = int(hwnd or 0)
 
 
 def get_hwnd():
-    """获取游戏主窗口句柄（胖子西游）。带 3s TTL 缓存；缓存失效时走 PowerShell 探测。"""
+    """获取游戏主窗口句柄（胖子西游）。优先返回 set_target_hwnd 钉住的窗口；
+    未钉住时带 3s TTL 缓存走 PowerShell 探测（取第一个带标题的进程窗口）。"""
+    if _PINNED_HWNW[0]:
+        return _PINNED_HWNW[0]
     now = time.time()
     if _HWND_CACHE[0] and now - _HWND_CACHE[1] < _HWND_TTL:
         return _HWND_CACHE[0]
