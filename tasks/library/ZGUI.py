@@ -1053,14 +1053,6 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
             if not zhuagui_go_back_changan(gateway):
                 logger.warning("确保任务：回长安失败")
                 return False
-        # ★2026-09-06 顺手清背包：接任务前出售垃圾装备（异常/失败不影响接任务）
-        _t_sell = time.time()
-        try:
-            n_sold = zhuagui_sell_junk(gateway, hwnd=hwnd)
-            if n_sold:
-                _LAST_ROUND_STAGES["sell_junk"] = round(time.time() - _t_sell, 2)
-        except Exception as e:
-            logger.warning("出售装备异常（不影响接任务）: %s" % e)
         if not zhuagui_take_task_v2(gateway, close_dialog=False):
             # 可能对话框未关，重试一次
             _zhongkui_close_dialog(gateway)
@@ -1205,6 +1197,35 @@ __out = ''
 _SELL_POS = (211, 415, 242, 429)   # "出售"二字客户区坐标块（用户 2026-09-06 实测标定）
 _SELL_MAX_ITEMS = 10               # 单次最多卖几件（防拖时长）
 _SELL_NEVER = ("天眼", "合成旗")   # 绝对保护名单（双保险，判据已天然隔离）
+_SELL_MIN_BAG_COUNT = 12           # 背包(20格)占用达到该格数才触发出售（12=留8格缓冲）
+
+
+def _bag_used_count(gateway):
+    """背包格（格子id<=20，不含装备栏）已用格数；面板关闭/查询失败返回 -1（跳过本轮出售）。
+
+    ★面板关闭时 界面数据[3].物品数据 不是 table —— 此时无法计数，跳过即可：
+    跑批流程里天眼/合成旗前 _bag_ensure_open 会把包打开且不再关闭，
+    下一轮战斗结束后计数恢复正常。
+    """
+    code = r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local pd = type(j) == 'table' and type(j[3]) == 'table' and j[3].物品数据
+if type(pd) ~= 'table' then __out = '-1' return end
+local n = 0
+for i = 1, 100 do
+  local it = pd[i]
+  if type(it) == 'table' then
+    local gidn = tonumber(it.格子id) or i
+    if gidn <= 20 then n = n + 1 end
+  end
+end
+__out = tostring(n)
+"""
+    try:
+        v = int(_lua_call(gateway, code) or "-1")
+        return v if v >= 0 else -1
+    except Exception:
+        return -1
 
 
 def _sellable_items(gateway):
@@ -1350,6 +1371,18 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     _LAST_ROUND_STAGES["enter_battle"] = round(time.time() - _t_b0, 2)
     # ★2026-09-06 顺手打稀有怪：本轮完成后、回长安前，本图扫 知了王/星宿/远古
     if ok:
+        # ★2026-09-06 顺手清背包：所有角色（含队员）战斗结束后统一出售。
+        #   队员不接任务、不走回长安分支，这里是队员唯一出售时机。
+        #   出售不依赖商店（背包自带"出售"绑定，任意地图可用）。
+        #   背包占用 < 阈值时只花一次查询，不拖节奏。
+        _t_sell = time.time()
+        try:
+            if _bag_used_count(gateway) >= _SELL_MIN_BAG_COUNT:
+                n_sold = zhuagui_sell_junk(gateway, hwnd=hwnd)
+                if n_sold:
+                    _LAST_ROUND_STAGES["sell_junk"] = round(time.time() - _t_sell, 2)
+        except Exception as e:
+            logger.warning("出售装备异常（不影响主流程）: %s" % e)
         _t_bn = time.time()
         killed = []
         try:
