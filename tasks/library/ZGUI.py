@@ -16,8 +16,10 @@ ZGUI - 抓鬼进战自动化（后台点击，不抢鼠标）
 import ctypes
 import ctypes.wintypes
 import json
+import os
 import random
 import subprocess
+import sys
 import time
 import urllib.request
 
@@ -151,9 +153,77 @@ _LUA_LAST = [0.0]
 _LUA_MIN_GAP = 0.15        # 两次 Lua RPC 最小间隔（秒）
 _LUA_GAP_JITTER = 1.7      # 间隔抖动上限倍率（统一节奏易被判脚本）
 
+# ★2026-09-03 取消任务冷却：本服接任务后 2 分钟内不能取消（游戏内提示
+# "2分钟后才可取消此任务"，2026-09-03 OCR 实测定标；用户此前口头说1分钟，
+# 以游戏提示为准=120s）。接任务/take 成功、以及完成一只进入下一只（次数递增）
+# 都会刷新本时间戳；retake 取消前若距最近一次任务变动不足 120s，
+# 需先等待补足，否则取消点击无效 → 任务残留 → 重试死循环空烧天眼符。
+_CANCEL_COOLDOWN = 120.0     # 接任务后可取消的最短间隔（秒，游戏提示2分钟）
+_task_ts = {}                # gateway -> 最近一次任务变动时间戳
+_task_ts_lock = _threading.Lock()
+
+
+def _task_ts_set(gateway, t=None):
+    """记录 gateway 最近一次任务变动时间（接任务/次数递增）。"""
+    with _task_ts_lock:
+        _task_ts[gateway] = t if t else time.time()
+
+
+def _task_ts_get(gateway):
+    with _task_ts_lock:
+        return _task_ts.get(gateway) or 0.0
+
+
+def _wait_cancel_cooldown(gateway, cooldown=_CANCEL_COOLDOWN):
+    """等待取消冷却：距最近一次任务变动不足 cooldown 秒则休眠补足。
+
+    返回等待的秒数（0 表示无需等待/无记录）。
+    """
+    last = _task_ts_get(gateway)
+    if last <= 0:
+        return 0.0
+    remain = float(cooldown) - (time.time() - last)
+    if remain > 0:
+        logger.info("取消冷却中：距任务变动 %.0fs，等待 %.0fs 后再取消"
+                    % (float(cooldown) - remain, remain))
+        time.sleep(remain + random.uniform(0.3, 0.8))
+        return remain
+    return 0.0
+
+
+# 文件通道单例（gateway 传 "file://pzxy" 时启用，方案②：零 frida 依赖）
+_FILE_WORKER = None
+
+
+def _lua_call_file(code: str, timeout: float):
+    """方案② 文件通道后端：经游戏内常驻 worker 执行 Lua（pzxy_ipc.py）。
+
+    语义对齐网关：worker 返回 tostring(结果)，'nil' 归一为 None。
+    worker 心跳停止（游戏重启/槽位被覆盖）→ 返回 None，与网关故障同型。
+    """
+    global _FILE_WORKER
+    try:
+        if _FILE_WORKER is None:
+            _root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            if _root not in sys.path:
+                sys.path.insert(0, _root)
+            from library.pzxy_ipc import PzxyWorker
+            _FILE_WORKER = PzxyWorker()
+        if not _FILE_WORKER.is_alive():
+            return None
+        ok, val = _FILE_WORKER.cmd(code, timeout=min(timeout, 5.0))
+        if not ok or val == "nil":
+            return None
+        return val
+    except Exception:
+        return None
+
 
 def _lua_call(gateway: str, code: str, timeout: float = 8.0):
     """调网关 /api/lua 执行 Lua，返回 value 或 None（容错）。
+
+    ★双通道（2026-09-05 方案②）：gateway 以 "file" 开头（如 file://pzxy）时
+    走文件通道（游戏内常驻 worker，零 frida 依赖）；否则走 HTTP 网关。
 
     柔和限速：每次调用前等待 >= MIN_GAP 且带随机抖动，让操作更接近人工节奏。
     """
@@ -166,6 +236,8 @@ def _lua_call(gateway: str, code: str, timeout: float = 8.0):
     with _LUA_LOCK:
         _LUA_LAST[0] = time.time()
         try:
+            if str(gateway).lower().startswith("file"):
+                return _lua_call_file(code, timeout)
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             body = json.dumps({"code": code, "result_var": "__out"}).encode("utf-8")
             req = urllib.request.Request(gateway + "/api/lua", data=body,
@@ -199,6 +271,7 @@ def _lp(x, y):
 # 避免 WM_MOUSEMOVE 瞬移（机械瞬移易被反外挂识别为脚本）。
 # ============================================================
 _last_mouse = [400, 300]  # 客户区坐标缓存（上次点击终点，近似当前引擎鼠标位）
+_call_guard = {"gid": "", "ts": 0.0}  # ★2026-09-03 防重复 CALL 目标冷却（多 call 弹框防护）
 
 
 def _read_engine_mouse(gateway):
@@ -216,14 +289,15 @@ def _move_traj(hwnd, x0, y0, x1, y1):
     """沿二次贝塞尔曲线逐步发 WM_MOUSEMOVE，模拟人类移动轨迹。
 
     - 控制点取连线中点 + 垂直方向的随机偏移（偏移随距离增大，带弧形感）
-    - 采样点数量随距离变化（5~16），步进间隔随机（8~24ms），末端自然减速
+    - 采样点数量随距离变化（加大步长→点数减少），步进间隔缩短 →
+      ★2026-09-03 用户要求加速：整体移动耗时约减半，但仍保留末端自然减速。
     """
     import math
     dist = math.hypot(x1 - x0, y1 - y0)
     if dist < 4:
         # 原地微调：直接过去
         user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(x1, y1))
-        time.sleep(random.uniform(0.03, 0.08))
+        time.sleep(random.uniform(0.02, 0.05))
         return
     # 控制点：中点 + 垂直偏移（随机方向，偏移量=min(距离*0.18, 45)）
     mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
@@ -236,7 +310,8 @@ def _move_traj(hwnd, x0, y0, x1, y1):
         ox, oy = ux * offset, uy * offset
     if random.random() < 0.5:
         ox, oy = -ox, -oy
-    n = max(5, min(int(dist / random.uniform(9.0, 14.0)), 16))
+    # ★2026-09-03 加速：步长加大（每 13~19px 一个点，原 9~14），点数上限 14
+    n = max(4, min(int(dist / random.uniform(13.0, 19.0)), 14))
     if n < 2:
         n = 2
     for i in range(1, n + 1):
@@ -245,11 +320,11 @@ def _move_traj(hwnd, x0, y0, x1, y1):
         px = (1 - t) ** 2 * x0 + 2 * (1 - t) * t * (mx + ox) + t ** 2 * x1
         py = (1 - t) ** 2 * y0 + 2 * (1 - t) * t * (my + oy) + t ** 2 * y1
         user32.PostMessageW(hwnd, WM_MOUSEMOVE, 0, _lp(int(px), int(py)))
-        # 末端减速：离目标越近间隔越大
-        step = random.uniform(8, 22) + t * random.uniform(0, 14)
+        # 末端减速：离目标越近间隔越大（基准缩短，保留减速感）
+        step = random.uniform(5, 12) + t * random.uniform(0, 9)
         time.sleep(step / 1000.0)
     # 到达后小幅停顿再点击
-    time.sleep(random.uniform(0.04, 0.12))
+    time.sleep(random.uniform(0.02, 0.06))
 
 
 def post_click(hwnd, x, y, gateway=None):
@@ -297,6 +372,35 @@ def grab_client(hwnd):
         return ImageGrab.grab(bbox=(w.left, w.top, w.right, w.bottom)).convert("RGB"), (w.left, w.top), (w.right - w.left, w.bottom - w.top)
     img = ImageGrab.grab(bbox=(pt.x, pt.y, pt.x + cw, pt.y + ch)).convert("RGB")
     return img, (pt.x, pt.y), (cw, ch)
+
+
+def _blind_mode(hwnd=None, threshold=30):
+    """检测当前是否处于"黑屏盖屏"状态（星际黑屏/等效关屏）。
+
+    ★2026-09-04 修复：黑屏工具用纯黑置顶窗口盖住屏幕 → PIL 截图（ImageGrab
+      抓屏幕合成画面）得到全黑 → 所有红字截图检测（钟馗对话/送你回地府选项）
+      恒失败 → 接任务/打鬼全挂（整夜空转 779 轮失败）。检测截图整体亮度，
+      亮度极低（<threshold）即判定黑屏，上层走"盲操作"（固定坐标点击 + Lua
+      任务栏验证，均不受黑屏影响）。
+
+    Returns:
+        bool: True=黑屏盖屏中（截图检测不可信）。
+    """
+    try:
+        if hwnd is None:
+            hwnd = get_hwnd()
+        if not hwnd:
+            return False
+        img, _, _ = grab_client(hwnd)
+        if img is None:
+            return False
+        gray = img.convert("L").resize((80, 60))
+        px = list(gray.getdata())
+        if not px:
+            return False
+        return (sum(px) / float(len(px))) < threshold
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -542,6 +646,10 @@ def _zhongkui_dialog_open(gateway, min_close=120, min_take=300):
     hwnd = get_hwnd()
     if not hwnd:
         return False
+    # ★2026-09-04 黑屏盲模式：截图全黑时红字检测恒失败，
+    #   直接视为"对话已开"，交由上层固定坐标点击 + Lua 任务栏验证。
+    if _blind_mode(hwnd):
+        return True
     img, _, _ = grab_client(hwnd)
     px = img.load()
     n_take = 0
@@ -635,18 +743,19 @@ def zhuagui_cancel_task(gateway=DEFAULT_GATEWAY, **kw):
     Returns:
         (bool, str): (是否成功取消, 信息)
     """
-    # ★对话框可能已打开（close带红字判定）就直接点击；否则先 CALL 钟馗打开
+    # ★对话框可能已打开（close带红字判定）就直接点击；否则先 CALL 钟馗打开。
+    # ★2026-09-03 修复：对话框弹出动画约需 1.5s+，旧代码 0.8s 判定太短，
+    # 判定 False 后再次点钟馗会点到已开对话框导致状态错乱。改为轮询等待
+    # 对话框出现（最长 ~4s），确认弹出后再点击取消选项。
     if not _zhongkui_dialog_open(gateway):
         if not _call_zhongkui(gateway):
             return False, "未找到钟馗（可能不在长安）"
-        _sleep(0.8)
-        # 补一次点钟馗再确认
+        for _ in range(6):
+            _sleep(random.uniform(0.6, 0.8))
+            if _zhongkui_dialog_open(gateway):
+                break
         if not _zhongkui_dialog_open(gateway):
-            _sleep(0.5)
-            _call_zhongkui(gateway)
-            _sleep(0.8)
-            if not _zhongkui_dialog_open(gateway):
-                return False, "钟馗对话未弹出（红字检测无结果）"
+            return False, "钟馗对话未弹出（红字检测无结果）"
     _zhongkui_click_row(gateway, "cancel")
     _sleep(1.2)
     has_task = bool(zhuagui_get_task(gateway).get("name"))
@@ -655,13 +764,56 @@ def zhuagui_cancel_task(gateway=DEFAULT_GATEWAY, **kw):
     return False, "点击'取消抓鬼任务'后任务仍在"
 
 
+def _bag_item_zones(gateway):
+    """背包物品图标坐标禁区（右键落点需避开，否则会误点/误用物品）。
+
+    ★2026-09-03 关键修复：_zhongkui_close_dialog 曾用 y[300,400] 的候选
+    右键点，而天眼符(实测232,354)/合成旗(186,302)等道具图标都在该带内，
+    右键"关闭对话框"会直接误用天眼符 → 天眼神秘耗尽。本函数返回当前背包
+    所有物品的小动画坐标，供关闭对话框时动态避让。
+    """
+    code = r"""
+local j = tp.主界面 and tp.主界面.界面数据
+if type(j) ~= 'table' then __out = '' return end
+local pd = j[3] and j[3].物品数据
+if type(pd) ~= 'table' then __out = '' return end
+local out = {}
+for k, it in pairs(pd) do
+  if type(it) == 'table' then
+    local sa = it.小动画
+    if type(sa) == 'table' then
+      local x = tonumber(sa.x); local y = tonumber(sa.y)
+      if x and y and x > 0 and y > 0 then
+        out[#out+1] = string.format('%d,%d', x, y)
+      end
+    end
+  end
+end
+__out = table.concat(out, '|')
+"""
+    r = _lua_call(gateway, code) or ""
+    zones = []
+    for part in r.split("|"):
+        if "," in part:
+            try:
+                a, b = part.split(",")
+                zones.append((int(a), int(b)))
+            except Exception:
+                pass
+    return zones
+
+
 def _zhongkui_close_dialog(gateway, tries=2):
     """右键关闭钟馗对话/任务指引弹窗（对话框内任意位置右键即可关闭）。
 
     ★2026-09-03 实测：接完抓鬼任务后弹出任务指引弹窗（"近日有XX正在
     地图(x,y)处作恶…"），需在对话框内空白处右键关闭。对话框约
     x[11,650] y[240,520]；文字行 y[414,454] 内右键可能点中链接不关闭，
-    故避开文字行取对话框上半空白区随机右键，失败则换点位重试。
+    故避开文字行取对话框上方空白区随机右键，失败则换点位重试。
+    ★2026-09-03 修复（天眼符神秘耗尽根因）：旧候选点含 y[300,400]，
+    恰好覆盖背包天眼符(232,354)/合成旗(186,302)图标 → 右键关框=误用道具。
+    现改为：候选点全部落在对话框上部空白带 y[255,298]（避开物品带 y≥300
+    与文字行 y414+），并额外按背包物品坐标动态避让（gap≥25px）。
 
     Returns:
         bool: 是否已发出右键关闭点击。
@@ -670,18 +822,30 @@ def _zhongkui_close_dialog(gateway, tries=2):
     if not hwnd:
         return False
     n = max(1, int(tries))
-    # 候选右键落点：对话框空白区（避开文字行 y414-454 与标题 y240-245）
-    spots = [
-        (random.randint(260, 460), random.randint(262, 300)),   # 上中空白
-        (random.randint(120, 340), random.randint(300, 400)),   # 中左空白
-        (random.randint(360, 560), random.randint(300, 400)),   # 中右空白
-    ]
+    zones = _bag_item_zones(gateway)
+
+    def _safe(x, y, gap=25):
+        for zx, zy in zones:
+            if abs(x - zx) < gap and abs(y - zy) < gap:
+                return False
+        return True
+
+    cands = []
+    for _ in range(16):
+        x = random.randint(120, 620)
+        y = random.randint(255, 298)
+        if _safe(x, y):
+            cands.append((x, y))
+    if not cands:
+        cands = [(random.randint(260, 460), random.randint(255, 290)),
+                 (random.randint(120, 300), random.randint(256, 292)),
+                 (random.randint(480, 600), random.randint(255, 290))]
     for i in range(n):
-        x, y = spots[i % len(spots)]
-        jx = x + random.randint(-6, 6)
-        jy = y + random.randint(-5, 5)
+        x, y = cands[i % len(cands)]
+        jx = x + random.randint(-5, 5)
+        jy = y + random.randint(-3, 3)
         post_right_click(hwnd, jx, jy, gateway=gateway)
-        _sleep(random.uniform(0.7, 1.1))
+        _sleep(random.uniform(0.5, 0.8))
         if not _zhongkui_dialog_open(gateway):
             return True
     return False
@@ -698,42 +862,79 @@ def zhuagui_take_task_v2(gateway=DEFAULT_GATEWAY, close_dialog=True, **kw):
     Returns:
         bool: 任务栏是否出现"抓鬼任务"。
     """
-    # ★对话框可能已打开就直接点击；否则先 CALL 钟馗打开
+    # ★对话框可能已打开就直接点击；否则先 CALL 钟馗打开。
+    # ★2026-09-03 修复：对话框弹出动画约需 1.5s+，旧代码 0.8s 判定太短，
+    # 判定 False 后再次点钟馗会点到已开对话框导致状态错乱。改为轮询等待
+    # 对话框出现（最长 ~4s），确认弹出后再点击选项。
+    # ★2026-09-04 黑屏盲模式：红字检测恒失败，改为固定链路
+    #   「点钟馗→等待→点take行→Lua任务栏验证」，与截图无关。
+    hwnd = get_hwnd()
+    if _blind_mode(hwnd):
+        for attempt in range(2):
+            if not _call_zhongkui(gateway):
+                _sleep(random.uniform(0.8, 1.2))
+            _sleep(random.uniform(1.2, 1.8))   # 等对话弹出动画
+            _zhongkui_click_row(gateway, "take", hwnd=hwnd)
+            _sleep(1.2)
+            ok = bool(zhuagui_get_task(gateway).get("name"))
+            if ok:
+                _task_ts_set(gateway)
+                if close_dialog:
+                    _zhongkui_close_dialog(gateway)
+                return True
+            # 失败：可能没弹对话/点到空处，关闭对话框后重试一次
+            _zhongkui_close_dialog(gateway)
+            _sleep(random.uniform(0.5, 0.9))
+        logger.warning("黑屏盲模式：接任务失败（点钟馗/点选项后任务栏无任务）")
+        return False
     if not _zhongkui_dialog_open(gateway):
         if not _call_zhongkui(gateway):
             return False
-        _sleep(0.8)
+        for _ in range(6):
+            _sleep(random.uniform(0.6, 0.8))
+            if _zhongkui_dialog_open(gateway):
+                break
         if not _zhongkui_dialog_open(gateway):
-            _sleep(0.5)
-            _call_zhongkui(gateway)
-            _sleep(0.8)
-            if not _zhongkui_dialog_open(gateway):
-                logger.warning("钟馗对话未弹出（红字检测无结果），无法接任务")
-                return False
+            logger.warning("钟馗对话未弹出（红字检测无结果），无法接任务")
+            return False
     _zhongkui_click_row(gateway, "take")
     _sleep(1.2)
     ok = bool(zhuagui_get_task(gateway).get("name"))
-    if ok and close_dialog:
-        _zhongkui_close_dialog(gateway)
+    if ok:
+        # ★接任务成功 → 刷新取消冷却时间戳（接任务后 2 分钟内不能取消）
+        _task_ts_set(gateway)
+        if close_dialog:
+            _zhongkui_close_dialog(gateway)
     return ok
 
 
 def zhuagui_retake_task(gateway=DEFAULT_GATEWAY, **kw):
     """取消当前抓鬼任务并重新接（钟馗弹窗，红字检测后台点击）。
 
+    ★2026-09-03 修复：本服接任务后 1 分钟内不能取消，直接点'取消抓鬼任务'
+      无效且任务残留 → 重试死循环。取消前先等待取消冷却（_wait_cancel_cooldown）。
+
     Returns:
         (bool, str): (是否重接成功, 信息)
     """
+    _wait_cancel_cooldown(gateway)
     ok_c, msg_c = zhuagui_cancel_task(gateway)
     if not ok_c:
-        # 无任务可取消时也算通过，继续直接接
-        return ok_c, "取消: " + msg_c
+        # ★2026-09-03 兜底：进程重启后本地冷却时间戳丢失（_task_ts 为空），
+        # cancel 在冷却期内必然失败（任务残留）。等待一个冷却周期后重试取消一次。
+        if _task_ts_get(gateway) <= 0:
+            logger.info("retake: 无本地任务变动记录，取消失败；等待 %.0fs 冷却后重试取消"
+                        % _CANCEL_COOLDOWN)
+            time.sleep(_CANCEL_COOLDOWN + random.uniform(0.5, 1.5))
+            ok_c, msg_c = zhuagui_cancel_task(gateway)
+        if not ok_c:
+            return ok_c, "取消: " + msg_c
     if zhuagui_take_task_v2(gateway):
         return True, "已重新接抓鬼任务"
     return False, "取消成功但重接失败"
 
 
-def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, **kw):
+def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
     """确保当前角色有抓鬼任务且已在正确地图（可 CALL 目标）位置。
 
     闭环（2026-09-03 实测各环节均已验证）:
@@ -741,16 +942,31 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, **kw):
       2) 无任务 → 保证在长安城（zhuagui_go_back_changan）→ 接任务
       3) 使用天眼符瞬移到目标怪位置
     ★注意：天眼符每次任务都要用（本服天眼瞬移落点=目标坐标）。
+    ★2026-09-03 组员模式（member_mode=True）：
+      队伍中只有队长能接/取消任务，组员点击会提示"队员已有任务"而失效。
+      组员无需接任务（队伍任务同步生效，任务栏仍会显示第N次/目标名），
+      故跳过"回长安+接任务"，直接天眼瞬移+地图校验即可参与打鬼。
 
     Returns:
-        bool: 是否就绪（任务存在 + 已瞬移到目标地图）。
+        bool: 是否就绪（已瞬移到目标地图/可打鬼）。
     """
     hwnd = get_hwnd()
     if not hwnd:
         return False
+    # ★2026-09-03 战斗保护：战斗中 UI 锁定（背包/道具点击无效），先等战斗结束。
+    #   战斗自动进行（自动起始>0）；等待最多 ~20s，期间柔和轮询战斗态。
+    if zhuagui_in_battle(gateway):
+        logger.warning("确保任务：战斗中，等待战斗结束再继续...")
+        t_wait = 0.0
+        while zhuagui_in_battle(gateway) and t_wait < 20.0:
+            _sleep(random.uniform(1.2, 1.8))
+            t_wait += 1.5
+        if zhuagui_in_battle(gateway):
+            logger.warning("确保任务：战斗超时仍未结束，返回失败（等下一轮）")
+            return False
     task = zhuagui_get_task(gateway) or {}
-    if not task.get("name"):
-        # 无任务：回长安接取
+    if not task.get("name") and not member_mode:
+        # 无任务（非组员）：回长安接取
         mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
         if mm != "长安城":
             if not zhuagui_go_back_changan(gateway):
@@ -765,18 +981,63 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, **kw):
                 return False
         task = zhuagui_get_task(gateway) or {}
     if not task.get("name"):
+        if member_mode:
+            # ★组员模式：任务栏无抓鬼任务条目 = 队伍当前无任务（队长未接/已清空）。
+            # 此时不消耗天眼瞬移（没有目标坐标），直接返回等待队长处理。
+            logger.warning("确保任务：组员模式但任务栏无抓鬼任务（等队长接任务）")
         return False
     # 有任务：天眼瞬移
     if not zhuagui_use_tianyan(gateway):
         logger.warning("确保任务：使用天眼失败")
         return False
-    _sleep(random.uniform(1.5, 2.5))
+    _sleep(random.uniform(2.0, 3.0))
+    # ★2026-09-03 瞬移后校验目标地图：天眼落点=任务目标坐标，若该坐标恰为
+    # 地图传送门，角色会踩门被自动传入另一张地图（如大唐境外(633,36)↔五庄观），
+    # 导致地图单位无目标怪、CALL 找不到标识 → 本轮失败。地图不匹配须回长安重接。
+    target_map = _task_target_map(gateway)
+    cur_map = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') or ""
+    if target_map and cur_map and (cur_map != target_map
+                                   and target_map not in cur_map and cur_map not in target_map):
+        logger.warning("确保任务：瞬移落点地图错位（目标地图=%s 实际=%s），需回长安重接"
+                       % (target_map, cur_map))
+        return False
     return True
 
 
+def _task_target_map(gateway):
+    """从抓鬼任务说明解析目标地图名。
+
+    任务说明格式: '#w/近日有#r/XX怪#w/正在#r/大唐境外（633,36)#w/附近作乱…'
+    提取'正在#r/'后的地图名（'大唐境外'）。无任务/解析失败返回 ""。
+    """
+    import re as _re_local
+    code = r"""
+local t = tp.窗口.任务栏.任务
+if type(t) ~= 'table' then __out = '' return end
+for i=1,#t do
+  local v = t[i]
+  if type(v)=='table' and tostring(v.名称 or '')=='抓鬼任务' then
+    __out = tostring(v.说明 or '') return
+  end
+end
+__out = ''
+"""
+    desc = _lua_call(gateway, code) or ""
+    if not desc:
+        return ""
+    m = _re_local.search(r"正在#r/([^#（(]+)[（(]\s*[\-0-9]+", desc)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
 def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
-                     verbose=False, **kw):
+                     verbose=False, member_mode=False, **kw):
     """单轮完整抓鬼：确保接任务→瞬移→找鬼→进战→确认完成。
+
+    Args:
+        member_mode: 组员模式（队伍中非队长）。组员无法接/取消任务，
+          跳过接任务流程，直接天眼瞬移后打鬼；失败也不走取消重接。
 
     Returns:
         (bool, str): (是否完成本轮, 信息)
@@ -784,7 +1045,7 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     hwnd = get_hwnd()
     if not hwnd:
         return False, "未找到游戏窗口"
-    if not zhuagui_ensure_task_ready(gateway):
+    if not zhuagui_ensure_task_ready(gateway, member_mode=member_mode):
         return False, "任务未就绪（接任务/瞬移失败）"
     ok, msg = zhuagui_enter_battle(gateway, wait_dialog=wait_dialog,
                                    timeout=timeout, verbose=verbose, hwnd=hwnd)
@@ -792,33 +1053,38 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
 
 
 def _bag_visible(gateway) -> bool:
-    """查询道具背包面板是否可见。
+    """查询道具背包面板是否可见（用 Lua 直接判定）。
 
-    ★2026-09-03 修复：本服务（卡通版胖子西游）没有 `tp.窗口.道具行囊` 字段
-      （MPCG 的判据在这是 no_table）。改用判据：取 `tp.主界面.界面数据[3].物品
-      数据` 表，仅当背包打开时面板3 物品数据才非空——
-      （等同 profile：MPCG._open_bag 用同样的面板数据源）。
+    ★2026-09-03 修复：改用 `tp.主界面.界面数据[3]` 行囊面板的 `本类开关` 字段
+      直接判定（true=打开）。旧判据"物品数据计数>0"在面板关闭后数据可能残留
+      （恒 true），不可靠。面板3 为道具行囊（状态=道具、当前类型=包裹），
+      其余"包裹"类面板(14/52/53) 本类开关=false，不会混淆。
+      兼容网关序列化：布尔 true 或字符串 'true' 都视为开。
     """
     code = (
-        "local j = tp.主界面 and tp.主界面.界面数据\n"
-        "local pd = j and j[3] and j[3].物品数据\n"
-        "if type(pd) ~= 'table' then __out = 'no' return end\n"
-        "local c = 0\n"
-        "for _, v in pairs(pd) do if type(v)=='table' and tostring(v.名称 or '')~='' then c = c + 1 end end\n"
-        "__out = (c > 0) and 'true' or 'false'\n"
+        "local p = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[3]\n"
+        "if type(p) ~= 'table' then __out = 'false' return end\n"
+        "local sw = p.本类开关\n"
+        "__out = (sw == true or tostring(sw) == 'true') and 'true' or 'false'\n"
     )
     return (_lua_call(gateway, code) or "") == "true"
 
 
 def _bag_button_pos(hwnd):
-    """背包按钮客户区坐标（右下角），按客户区尺寸等比换算。按钮实测 (915,585) @1000x620。"""
+    """背包开关按钮客户区坐标（底栏背包图标）。
+
+    ★2026-09-03 用户实测确认 (492,588)，后台点击双向开关已验证：
+      背包关时点它=打开，开时点它=关闭（配合 _bag_visible 本类开关判据）。
+      此前 (0.915,0.943) 等比推算 (732,565) 实测无效（落在快捷栏空档）。
+    """
     try:
         import win32gui
         _rect = win32gui.GetClientRect(hwnd)
         _w, _h = _rect[2], _rect[3]
-        return int(_w * 0.915), int(_h * 0.943)
+        # 实测基准 @800x600 → 0.615, 0.98；按客户区等比换算
+        return int(_w * (492.0 / 800.0)), int(_h * (588.0 / 600.0))
     except Exception:
-        return 915, 585
+        return 492, 588
 
 
 def _bag_ensure_open(gateway, hwnd, tries=5) -> bool:
@@ -910,11 +1176,20 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
     # ★2026-09-03 修复：天眼符在背包面板内，读坐标前必须保证背包已打开。
     # 读取目标是 `tp.主界面.界面数据[面板].物品数据`，背包未打开时该项为空表。
     # 此处后台点击右下角背包按钮开包并轮询确认（与 MPCG._open_bag 同理）。
+    # ★2026-09-03 追加：游戏刚重启/背包数据未加载时坐标读取会短时失败，
+    # 开包后轮询重读（最多 ~4s），避免瞬时失败误判"无天眼"。
     if tianyan_read_pos(gateway)[0] <= 0:
         if not _bag_ensure_open(gateway, hwnd):
             logger.warning("天眼符坐标读取失败（背包未打开或无天眼符）")
             return False
-    x, y = tianyan_read_pos(gateway)
+        x, y = 0, 0
+        for _ in range(5):
+            x, y = tianyan_read_pos(gateway)
+            if x > 0 and y > 0:
+                break
+            _sleep(random.uniform(0.5, 0.9))
+    else:
+        x, y = tianyan_read_pos(gateway)
     if x <= 0 or y <= 0:
         logger.warning("天眼符坐标读取失败（背包未打开或无天眼符）")
         return False
@@ -924,6 +1199,9 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
     # ★2026-09-03 用户明确要求：不要关闭背包！
     # 背包一旦关闭，背包面板数据消失，后续很难再定位并使用道具（天眼符等）。
     # 因此不再调用 _bag_ensure_close，保持背包打开状态。
+    # ★2026-09-03 追加：把引擎光标移出背包（离开物品格），否则光标悬停在
+    #   天眼符上 tooltip 常显，会遮挡/干扰后续点击（"鼠标一直停留在背包上"）。
+    _mouse_clear(hwnd, gateway)
     return True
 
 
@@ -941,38 +1219,63 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229, **kw)
     hwnd = get_hwnd()
     if not hwnd:
         return False
+    # ★2026-09-03 战斗保护：战斗中右键合成旗/点红点无效，先等战斗结束（最多20s）
+    if zhuagui_in_battle(gateway):
+        logger.warning("回长安：战斗中，等待战斗结束再回城...")
+        t_wait = 0.0
+        while zhuagui_in_battle(gateway) and t_wait < 20.0:
+            _sleep(random.uniform(1.2, 1.8))
+            t_wait += 1.5
+        if zhuagui_in_battle(gateway):
+            logger.warning("回长安：战斗超时未结束")
+            return False
     # 已在长安城直接成功
     if _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
         return True
     # 1) 读合成旗位置并右键打开地图（合成旗图标在背包，先确保背包打开）
+    # ★2026-09-03 追加：游戏刚重启/背包数据未加载时短时读不到，开包后轮询重读。
     flagpos = _zhuagui_find_flag_pos(gateway)
     if flagpos[0] <= 0:
         if not _bag_ensure_open(gateway, hwnd):
             logger.warning("回长安：背包无红色合成旗")
             return False
-        flagpos = _zhuagui_find_flag_pos(gateway)
+        for _ in range(5):
+            flagpos = _zhuagui_find_flag_pos(gateway)
+            if flagpos[0] > 0:
+                break
+            _sleep(random.uniform(0.5, 0.9))
     if flagpos[0] <= 0:
         logger.warning("回长安：找不到红色合成旗")
         return False
     post_right_click(hwnd, flagpos[0], flagpos[1], gateway=gateway)
     _sleep(random.uniform(1.5, 2.2))
+    # ★2026-09-03 追加：右键旗子后移开光标（旗子在背包内，悬停会弹 tooltip）
+    _mouse_clear(hwnd, gateway)
     # 2) 点击"殷"字旁红点 → 钟馗身边
     jx = red_x + random.randint(-3, 3)
     jy = red_y + random.randint(-3, 3)
     post_click(hwnd, jx, jy, gateway=gateway)
-    _sleep(random.uniform(2.5, 3.5))
+    _sleep(random.uniform(1.8, 2.5))
+    _mouse_clear(hwnd, gateway)
     mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
     return mm == "长安城"
 
 
 def _zhuagui_find_flag_pos(gateway):
-    """背包中红色合成旗的图标坐标 (x,y)；无则返回 (0,0)。同天眼逻辑读小动画。"""
+    """背包中红色合成旗的图标坐标 (x,y)；无则返回 (0,0)。同天眼逻辑读小动画。
+
+    ★2026-09-03 修复：原用 `pairs(pd)` 遍历，Lua 表遍历顺序不确定，偶发返回
+      非旗子/错误坐标（充当坐标(475,566)）→ 右键落在空白处 → 长安地图打不开
+      导致"回长安失败"死循环。改为按下标 1..N 顺序扫描（pd[i] 直接取值，
+      空格为 nil 跳过），稳定返回第一个合成旗（实测 (186,302)）。
+    """
     code = r"""
 local j = tp.主界面 and tp.主界面.界面数据
 if type(j) ~= 'table' then __out = '0,0' return end
 local pd = j[3] and j[3].物品数据
 if type(pd) ~= 'table' then __out = '0,0' return end
-for k, it in pairs(pd) do
+for i = 1, 100 do
+  local it = pd[i]
   if type(it) == 'table' and tostring(it.名称 or ''):find('合成旗') then
     local sa = it.小动画
     if type(sa) == 'table' then
@@ -1015,8 +1318,10 @@ def zhuagui_find_ghost(gateway=DEFAULT_GATEWAY, **kw):
         "local ox = off and off.x or 0\n"
         "local oy = off and off.y or 0\n"
         "local target = '" + target_name + "'\n"
-        "for i=1,#t do\n"
-        "  local v = t[i] or {}\n"
+        # ★2026-09-03 修复：地图单位表可能为键值结构（#t=0 但 pairs 有内容），
+        # 旧 for i=1,#t 会漏掉全部单位 → 找不到目标。改用 pairs 遍历。
+        "for _, v in pairs(t) do\n"
+        "  if type(v) == 'table' then\n"
         "  local name = tostring(v.名称 or '')\n"
         "  local cz = tostring(v.称谓 or '')\n"
         "  local match = false\n"
@@ -1030,6 +1335,7 @@ def zhuagui_find_ghost(gateway=DEFAULT_GATEWAY, **kw):
         "    local wy = tonumber(tostring(v.坐标 and v.坐标.y or '')) or 0\n"
         "    __out = name .. '|' .. (wx+ox) .. ',' .. (wy+oy)\n"
         "    return\n"
+        "  end\n"
         "  end\n"
         "end\n"
         "__out = ''\n"
@@ -1052,17 +1358,28 @@ def zhuagui_click_ghost(gateway=DEFAULT_GATEWAY, **kw):
         （[1] 可能是天机星等其它NPC/单位，会 CALL 错对象）。
       - 无任务说明时回退"称谓=野鬼 或 名称含鬼"。
 
+    ★2026-09-03 追加（用户反馈"战斗中弹 call 目标提示框"）：
+      - 战斗保护：战斗中 UI 锁定，对地图目标发 CALL 会弹无意义提示框，
+        直接返回 False 不打 CALL（战斗中不操作目标）。
+      - 防重复 CALL：同一目标 8s 冷却（_call_guard），避免"对话框已弹出但
+        红字检测 miss → 重 CALL"造成的多 call/重复弹框。
+
     Returns:
         bool: 是否成功触发对话请求。
     """
+    # ★战斗保护：战斗中禁止 CALL 目标（用户反馈战斗内弹提示框）
+    if zhuagui_in_battle(gateway):
+        return False
     task = zhuagui_get_task(gateway)
     target_name = (task or {}).get("name") or ""
     code = (
         "local target = '" + target_name + "'\n"
         "local t = tp.地图.地图单位\n"
-        "if type(t) ~= 'table' or #t == 0 then __out = '' return end\n"
-        "for i=1,#t do\n"
-        "  local v = t[i] or {}\n"
+        "if type(t) ~= 'table' then __out = '' return end\n"
+        # ★2026-09-03 修复：地图单位表可能为键值结构（#t=0 但 pairs 有内容），
+        # 旧 for i=1,#t 会漏掉全部单位 → CALL 找不到目标。改用 pairs 遍历。
+        "for _, v in pairs(t) do\n"
+        "  if type(v) == 'table' then\n"
         "  local name = tostring(v.名称 or '')\n"
         "  local match = false\n"
         "  if target ~= '' then\n"
@@ -1072,15 +1389,22 @@ def zhuagui_click_ghost(gateway=DEFAULT_GATEWAY, **kw):
         "    match = (cz == '野鬼') or (name:find('鬼') ~= nil)\n"
         "  end\n"
         "  if match and v.标识 then __out = tostring(v.标识) return end\n"
+        "  end\n"
         "end\n"
         "__out = ''\n"
     )
     gid = _lua_call(gateway, code) or ""
     if not gid.isdigit():
         return False
+    # ★2026-09-03 防重复 CALL：同一目标 8s 冷却，避免多 call 重复弹框
+    _now = time.time()
+    if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
+        return True  # 已触发过，本次视为成功（不再发包）
     # ★柔和化：CALL 前加 0.2~0.6s 随机延迟，避免瞬间机械发包；只发一次
     _sleep(random.uniform(0.2, 0.6))
     _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
+    _call_guard["gid"] = gid
+    _call_guard["ts"] = _now
     return True
 
 
@@ -1158,9 +1482,66 @@ def zhuagui_click_option(gateway=DEFAULT_GATEWAY, tries: int = 1, hwnd=None,
     return True
 
 
+def _option_visible(hwnd, opt_x0=116, opt_y0=307, opt_x1=180, opt_y1=320, min_red=40):
+    """红字检测确认"送你回地府"选项块已弹出（对话框真实打开）。
+
+    ★2026-09-03 用于 enter_battle：CALL 后先确认选项出现再点击，
+    避免对话框未弹出就点选项导致点空（曾造成隔轮成交/天眼翻倍消耗）。
+    无 PIL 时返回 True（直接点击兜底）。
+    """
+    if not _HAS_PIL:
+        return True
+    # ★2026-09-04 黑屏盲模式：截图全黑，红字检测恒失败，
+    #   直接视为选项已弹出（点击用固定坐标，成败靠 Lua 任务栏验证）。
+    if _blind_mode(hwnd):
+        return True
+    try:
+        img, _, _ = grab_client(hwnd)
+        px = img.load()
+        n = 0
+        for y in range(opt_y0, opt_y1 + 1):
+            for x in range(opt_x0, opt_x1 + 1):
+                R, G, B = px[x, y]
+                if R > 110 and (R - G) > 55 and (R - B) > 55:
+                    n += 1
+        return n > min_red
+    except Exception:
+        return True
+
+
 def zhuagui_in_battle(gateway=DEFAULT_GATEWAY, **kw):
-    """是否已进入战斗。"""
-    return _lua_call(gateway, '__out = tostring(tp.战斗中)') == "true"
+    """是否已进入战斗（可靠判据）。
+
+    ★2026-09-03 修复：旧判据读 `tp.战斗中` 本服恒为 nil（永远 False）；
+      而 `tp.战斗类.背景显示=true` 在脱战后会**残留**（垃圾数据），不能单独使用。
+      可靠判据：`tp.战斗类.参战单位` 存在且含单位表 且 敌方数量>0。
+      实测脱战后 参战单位 为空表/nil → False。
+    """
+    r = _lua_call(gateway, r"""
+local b = tp.战斗类
+if type(b) ~= 'table' then __out = 'false' return end
+local u = b.参战单位
+if type(u) ~= 'table' then __out = 'false' return end
+local n = 0
+for _ in pairs(u) do n = n + 1 end
+if n > 0 and tonumber(b.敌方数量 or 0) > 0 then __out = 'true' else __out = 'false' end
+""")
+    return r == "true"
+
+
+def _mouse_clear(hwnd, gateway=None, x=415, y=160):
+    """把引擎鼠标（游戏内光标）移到场景空白处，避免光标常驻背包/物品上。
+
+    ★2026-09-03 修复：PostMessage 点击的终点即引擎光标位置。脚本循环里最后
+      右键天眼(232,354) / 合成旗(186,302) 等都在背包面板内 → 光标一直停在
+      背包上、物品 tooltip 常显（遮挡后续点击，视觉上"鼠标停留在背包"）。
+      在"使用道具后"和"每轮结束后"调用本函数把光标移出界面，杜绝 tooltip。
+    """
+    try:
+        _move_traj(hwnd, _last_mouse[0], _last_mouse[1], x, y)
+        _last_mouse[:] = [x, y]
+    except Exception:
+        pass
 
 
 def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0, verbose=False,
@@ -1194,13 +1575,76 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
         start_cnt = int((task0 or {}).get("count") or 0)
     except Exception:
         start_cnt = 0
-    if not zhuagui_click_ghost(gateway):
+    # ★2026-09-03 修复：目标怪会随刷新/被队伍击杀从单位列表暂时消失，或
+    # 瞬移落点后怪尚未加载。click_ghost 一次找不到时，柔和轮询等待怪出现
+    # （最长 ~12s，1.8~2.6s 间隔），出现即 CALL；避免一找不到就判失败。
+    # ★2026-09-03 追加：轮询期间若已进战斗，立即停止 CALL（战斗中不许 CALL 目标）。
+    ok_call = False
+    if not zhuagui_in_battle(gateway):
+        ok_call = zhuagui_click_ghost(gateway)
+        if not ok_call:
+            if verbose:
+                logger.info("目标怪暂未出现在单位列表，轮询等待刷新...")
+            t_wait0 = 0.0
+            while (not ok_call) and t_wait0 < 12.0:
+                if zhuagui_in_battle(gateway):
+                    ok_call = False
+                    break
+                time.sleep(random.uniform(1.5, 2.1))
+                t_wait0 += 2.2
+                ok_call = zhuagui_click_ghost(gateway)
+    if not ok_call:
+        if zhuagui_in_battle(gateway):
+            # ★战斗中不 CALL：战斗本身已是出发点，直接走完成判定（结算后任务栏更新）
+            logger.info("战斗中跳过 CALL 目标，直接等待抓鬼完成...")
+            return _wait_task_done(gateway, start_cnt, timeout, verbose)
         return False, "无野鬼目标（先用天眼瞬移）"
     if verbose:
         logger.info("已CALL触发野鬼对话，等待对话框...")
-    time.sleep(float(wait_dialog))
+    # ★2026-09-03 修复：CALL 后先轮询确认"送你回地府"选项出现再点击，
+    # 避免对话框未弹出就点选项导致点空（曾造成隔轮成交/天眼翻倍消耗）。
+    # 柔性重试：未出现则等 0.3~0.6s 后重 CALL 一次（最多2次）。
+    # ★2026-09-04 黑屏盲模式：无红字检测，CALL 后固定等待对话弹出再点选项。
+    if _blind_mode(hwnd):
+        time.sleep(random.uniform(max(1.0, float(wait_dialog)), max(1.6, float(wait_dialog) + 0.5)))
+        ok_dlg = True
+        t_wait = 0.0
+    else:
+        ok_dlg = _option_visible(hwnd, opt_x0, opt_y0, opt_x1, opt_y1)
+        t_wait = 0.0
+        while not ok_dlg and t_wait < max(2.0, float(wait_dialog)):
+            time.sleep(random.uniform(0.5, 0.7))
+            t_wait += 0.6
+            ok_dlg = _option_visible(hwnd, opt_x0, opt_y0, opt_x1, opt_y1)
+        if not ok_dlg:
+            # 重 CALL 一次（柔和间隔），再等待确认
+            time.sleep(random.uniform(0.3, 0.6))
+            if zhuagui_click_ghost(gateway):
+                t_wait2 = 0.0
+                while not ok_dlg and t_wait2 < 3.0:
+                    time.sleep(random.uniform(0.5, 0.7))
+                    t_wait2 += 0.6
+                    ok_dlg = _option_visible(hwnd, opt_x0, opt_y0, opt_x1, opt_y1)
+    if not ok_dlg:
+        # 对话框仍未弹出（目标怪可能已在单位列表消失），本轮放弃，走失败容错
+        logger.warning("CALL后'送你回地府'选项未出现（对话框未弹出）")
+        return False, "对话框未弹出（CALL未生效）"
+    if verbose:
+        logger.info("对话框已弹出，点击'送你回地府'...")
     zhuagui_click_option(gateway, tries=tries, hwnd=hwnd,
                          opt_x0=opt_x0, opt_y0=opt_y0, opt_x1=opt_x1, opt_y1=opt_y1)
+    # ★2026-09-03 追加：点选项后光标移到场景空白（选项在对话框内，悬停会拦截后续点击）
+    _mouse_clear(hwnd, gateway)
+    return _wait_task_done(gateway, start_cnt, timeout, verbose)
+
+
+def _wait_task_done(gateway, start_cnt, timeout, verbose=False):
+    """点击'送你回地府'后轮询任务栏直到完成（次数递增/清空），带超时与复查。
+
+    ★2026-09-03 提取公共完成判定：点'送你回地府'=秒杀发奖（本服），但任务栏
+      更新有 8~15s 延迟；战斗中（CALL 后直接进战斗的罕见分支）也可调用本函数，
+      战斗结算后任务栏同样会更新。成功判据=次数递增 或 任务栏清空。
+    """
     if verbose:
         logger.info("已点击'送你回地府'，检测抓鬼完成...")
     t0 = time.time()
@@ -1212,20 +1656,28 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
             cur_cnt = -1
         # 抓鬼完成的两种标志：次数递增（进入下一只）或任务栏清空（本只完成）
         if cur_cnt and cur_cnt != start_cnt:
+            # ★任务变动（进入下一只）→ 刷新取消冷却时间戳
+            _task_ts_set(gateway)
             return True, "抓鬼完成"
         if start_cnt > 0 and not (cur or {}).get("count"):
+            # ★任务栏清空（本只完成）→ 刷新时间戳（下一只需要重新接/再瞬移）
+            _task_ts_set(gateway)
             return True, "抓鬼完成(任务栏已清空)"
         # 柔和化：轮询间隔随机抖动，避免固定频率探测
         time.sleep(random.uniform(0.6, 1.0))
-    # ★2026-09-03 超时后最终复查：任务栏可能刚更新（延迟清空/递增）
+    # ★2026-09-03 超时后最终复查：任务栏可能刚更新（延迟清空/递增）。
+    #   实测本服"第N次递增"只在回长安重接钟馗任务时才体现，点'送你回地府'
+    #   后任务栏并不会立即变化，故这里只做一次复查，不额外拖长轮次。
     cur = zhuagui_get_task(gateway) or {}
     try:
         cur_cnt = int((cur or {}).get("count") or 0)
     except Exception:
         cur_cnt = -1
     if cur_cnt and cur_cnt != start_cnt:
-        return True, "抓鬼完成(复查)"
+        _task_ts_set(gateway)
+        return True, "抓鬼完成(复查,次数递增)"
     if start_cnt > 0 and not (cur or {}).get("count"):
+        _task_ts_set(gateway)
         return True, "抓鬼完成(复查,任务栏已清空)"
     return False, "超时未完成"
 
@@ -1291,7 +1743,7 @@ def _find_role_window(role):
     return None
 
 
-def zhuagui_loop(gateway=None, roles=None, rounds=1,
+def zhuagui_loop(gateway=None, roles=None, rounds=1, member_mode=False,
                  wait_dialog=1.2, timeout=20.0, max_retry=3, verbose=False, **kw):
     """按 GUI 人物列表批量抓鬼。
 
@@ -1300,16 +1752,20 @@ def zhuagui_loop(gateway=None, roles=None, rounds=1,
          （默认只处理当前组人物，不遍历其它组；显式传 roles 可覆盖）
       2) 每个角色：按角色名从已开窗口匹配 (pid, hwnd)
       3) 切到该角色所在组 → ensure_gateway 换绑网关（优雅 detach 防闪退）
-      4) 连做 rounds 轮 zhuagui_enter_battle（CALL目标→点"送你回地府"→等进战）
+      4) 连做 rounds 轮 zhuagui_do_round（CALL目标→点"送你回地府"→等完成）
       5) ★2026-09-03 容错：某轮失败（找不到目标/瞬移错位等"类似问题"）
          自动在钟馗处取消当前任务并重新接（zhuagui_retake_task），
          再重试该轮，直至成功或耗尽 max_retry 次（"直接取消任务重新接任务循环"）。
+      6) ★2026-09-03 组员模式（member_mode=True）：组员无法接/取消任务
+         （提示"队员已有任务"），失败时跳过 cancel/retake（队伍机制拦截），
+         仅回长安 + 休息后重试下一轮（由队长侧负责任务接取/取消）。
 
     Args:
         gateway: 显式网关 URL；缺省按角色所在组端口解析。
         roles: 显式角色名列表（["二号美人","凝宛寄静露"]）；缺省=当前组 roles。
         rounds: 每个角色连做几轮抓鬼（默认1）。
-        max_retry: 单轮失败后取消重接的最大重试次数（默认3）。
+        member_mode: 组员模式（队伍中非队长）。默认 False（队长/单开流程）。
+        max_retry: 单轮失败后重试的最大次数（默认3）。
 
     Returns:
         dict: {角色名: {"组":N, "窗口":bool, "网关":bool, "轮次":[bool,...], "说明":str}}
@@ -1347,7 +1803,8 @@ def zhuagui_loop(gateway=None, roles=None, rounds=1,
         group = groups.get(role, 1)
         gw = gateway or _gw_for(group)
         if verbose:
-            logger.info("人物列表抓鬼: 角色=%s 组=%d pid=%d hwnd=%d gw=%s" % (role, group, pid, hwnd, gw))
+            logger.info("人物列表抓鬼: 角色=%s 组=%d pid=%d hwnd=%d gw=%s 组员模式=%s"
+                        % (role, group, pid, hwnd, gw, member_mode))
         # 切组 + 换绑网关（优雅 detach 旧会话，防游戏闪退）
         from core.gateway_guard import ensure_gateway
         _old = _os.environ.get("MHXY_GROUP")
@@ -1368,29 +1825,27 @@ def zhuagui_loop(gateway=None, roles=None, rounds=1,
             n_retry = 0
             while True:
                 ok_b, msg_b = zhuagui_do_round(gateway=gw, wait_dialog=wait_dialog,
-                                               timeout=timeout, verbose=verbose)
+                                               timeout=timeout, verbose=verbose,
+                                               member_mode=member_mode)
                 if ok_b:
                     break
-                # ★2026-09-03 失败容错：确认回长安 + 取消重接，再循环重试该轮
+                # ★2026-09-03 失败容错（组队机制限制，无取消可用）：
+                #   - 队伍里若有队员挂任务，队长接不了新任务（游戏机制无法取消队员任务）；
+                #   - 因此"取消任务重新接任务"在组队自动化中不可用，一律改为
+                #     "回长安 + 休息后重试"（等队员自行清理 或 任务自然流转）。
                 if n_retry >= max(0, int(max_retry)):
                     break
                 n_retry += 1
                 if verbose:
-                    logger.info("  角色=%s 第%d轮失败(%s)，回长安重接后重试(%d/%d)" % (
-                        role, _rnd + 1, msg_b, n_retry, max_retry))
+                    logger.info("  角色=%s 第%d轮失败(%s)，回长安休息后重试(%d/%d)"
+                                % (role, _rnd + 1, msg_b, n_retry, max_retry))
                 try:
-                    if not zhuagui_go_back_changan(gateway=gw):
-                        if verbose:
-                            logger.warning("  回长安未成功")
-                    _ok_rt, _msg_rt = zhuagui_retake_task(gateway=gw)
+                    zhuagui_go_back_changan(gateway=gw)
                 except Exception as e:
                     if verbose:
-                        logger.warning("  重接异常: %s", e)
-                    _ok_rt = False
-                if not _ok_rt:
-                    if verbose:
-                        logger.warning("  取消重接未完成(%s)，继续重试", _msg_rt)
-                time.sleep(random.uniform(1.5, 2.5))
+                        logger.warning("  回长安异常: %s", e)
+                # 休息拉长（接不上可能因队员挂任务，需等对方清理/任务流转）
+                time.sleep(random.uniform(4.0, 8.0))
             r_entry["轮次"].append(ok_b)
             if verbose:
                 logger.info("  角色=%s 第%d轮 -> %s %s" % (role, _rnd + 1, ok_b, msg_b))
