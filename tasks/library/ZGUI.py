@@ -1178,6 +1178,12 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
     # 此处后台点击右下角背包按钮开包并轮询确认（与 MPCG._open_bag 同理）。
     # ★2026-09-03 追加：游戏刚重启/背包数据未加载时坐标读取会短时失败，
     # 开包后轮询重读（最多 ~4s），避免瞬时失败误判"无天眼"。
+    # ★2026-09-05 根治（与回长安同病灶）：面板关闭后物品数据有残留，
+    # "先读坐标、读不到才开包"的顺序会让残留坐标直接通过 → 右键点空。
+    # 改为读坐标前无条件确保背包打开（幂等，已开时仅一次 Lua 查询）。
+    if not _bag_ensure_open(gateway, hwnd):
+        logger.warning("天眼使用：背包无法打开")
+        return False
     if tianyan_read_pos(gateway)[0] <= 0:
         if not _bag_ensure_open(gateway, hwnd):
             logger.warning("天眼符坐标读取失败（背包未打开或无天眼符）")
@@ -1232,6 +1238,12 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229, **kw)
     # 已在长安城直接成功
     if _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
         return True
+    # ★2026-09-05 修复（用户实拍）：背包关闭时 `界面数据[3].物品数据` 有残留，
+    # _zhuagui_find_flag_pos 照样返回旧坐标 → 右键点在关着的背包上 → 大地图打不开
+    # → "回长安失败"死循环。根治：读坐标前无条件确保背包打开（幂等，已开零开销）。
+    if not _bag_ensure_open(gateway, hwnd):
+        logger.warning("回长安：背包无法打开")
+        return False
     # 1) 读合成旗位置并右键打开地图（合成旗图标在背包，先确保背包打开）
     # ★2026-09-03 追加：游戏刚重启/背包数据未加载时短时读不到，开包后轮询重读。
     flagpos = _zhuagui_find_flag_pos(gateway)
