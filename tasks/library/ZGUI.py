@@ -1053,6 +1053,14 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
             if not zhuagui_go_back_changan(gateway):
                 logger.warning("确保任务：回长安失败")
                 return False
+        # ★2026-09-06 顺手清背包：接任务前出售垃圾装备（异常/失败不影响接任务）
+        _t_sell = time.time()
+        try:
+            n_sold = zhuagui_sell_junk(gateway, hwnd=hwnd)
+            if n_sold:
+                _LAST_ROUND_STAGES["sell_junk"] = round(time.time() - _t_sell, 2)
+        except Exception as e:
+            logger.warning("出售装备异常（不影响接任务）: %s" % e)
         if not zhuagui_take_task_v2(gateway, close_dialog=False):
             # 可能对话框未关，重试一次
             _zhongkui_close_dialog(gateway)
@@ -1185,6 +1193,135 @@ __out = ''
     logger.info("稀有怪 %s 战斗%s（耗时%.0fs）"
                 % (bname, "结束" if ok_end else "超时", time.time() - t1))
     return bname if ok_end else None
+
+
+# ============================================================
+# ★2026-09-06 自动出售垃圾装备：回长安接任务前，点选装备 → 点"出售"二字
+#   （用户实测交互：左键点装备拿起 → 左键点"出售"卖出，非拖拽）。
+#   判据：类型=武器/装备（bag_dump_20260906_004411 实锤，天眼符=功能/
+#   合成旗=杂货 天然隔离）+ 名称含"上古锻造图策"（用户指定）+ 介绍含
+#   "装备角色"兜底。MHXY_ZG_SELL=0 可整体关闭。
+# ============================================================
+_SELL_POS = (211, 415, 242, 429)   # "出售"二字客户区坐标块（用户 2026-09-06 实测标定）
+_SELL_MAX_ITEMS = 10               # 单次最多卖几件（防拖时长）
+_SELL_NEVER = ("天眼", "合成旗")   # 绝对保护名单（双保险，判据已天然隔离）
+
+
+def _sellable_items(gateway):
+    """列出可出售物品：[(格子id, x, y, 名称), ...]（最多 _SELL_MAX_ITEMS 件）。"""
+    code = r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local pd = type(j) == 'table' and type(j[3]) == 'table' and j[3].物品数据
+if type(pd) ~= 'table' then __out = '' return end
+local function deep_concat(v, depth)
+  if depth > 4 then return '' end
+  local tv = type(v)
+  if tv == 'string' then return v end
+  if tv ~= 'table' then return tostring(v) end
+  local acc = {}
+  for _, v2 in pairs(v) do acc[#acc+1] = deep_concat(v2, depth + 1) end
+  return table.concat(acc, '')
+end
+local parts = {}
+for i = 1, 100 do
+  local it = pd[i]
+  if type(it) == 'table' then
+    local name = tostring(it.名称 or '')
+    local itype = tostring(it.类型 or '')
+    local desc = deep_concat(it.说明, 0)
+    local sell = (itype == '武器') or (itype == '装备') or (name:find('上古锻造图策') ~= nil)
+    if not sell then sell = (desc:find('装备角色') ~= nil) end
+    if not sell then sell = (tostring(it.分类 or ''):find('武器') ~= nil
+                             or tostring(it.分类 or ''):find('装备') ~= nil) end
+    if sell then
+      local sa = it.小动画
+      local x = type(sa) == 'table' and tonumber(sa.x) or 0
+      local y = type(sa) == 'table' and tonumber(sa.y) or 0
+      local gidn = tonumber(it.格子id) or i
+      -- ★身上穿的装备也在 物品数据 里（紫电青霜实锤：背包类型=包裹、格子id=21、
+      --   小动画 y≈84 在装备栏区），绝不能碰。背包格判据：格子id<=20 且 y>=195。
+      if x and y and x > 0 and y >= 195 and gidn <= 20 then
+        parts[#parts+1] = tostring(gidn) .. '|' .. x .. '|' .. y .. '|' .. name
+      end
+    end
+  end
+end
+__out = table.concat(parts, ' ;; ')
+"""
+    r = _lua_call(gateway, code) or ""
+    items = []
+    for part in r.split(" ;; "):
+        seg = part.split("|")
+        if len(seg) == 4 and any(n in seg[3] for n in _SELL_NEVER):
+            continue  # 保护名单双保险
+        if len(seg) == 4 and seg[0].isdigit():
+            items.append((int(seg[0]), int(seg[1]), int(seg[2]), seg[3]))
+        if len(items) >= _SELL_MAX_ITEMS:
+            break
+    return items
+
+
+def _bag_pick_state(gateway):
+    """读面板3 的拿起对象（0/空=未拿起）。"""
+    code = r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local v = type(j) == 'table' and type(j[3]) == 'table' and j[3].拿起对象
+__out = tostring(v or '0')
+"""
+    return (_lua_call(gateway, code) or "0")
+
+
+def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
+    """出售背包垃圾装备。返回出售件数；背包未开/无可卖/关闭开关返回 0。
+
+    交互（用户实测）：左键点装备（拿起）→ 左键点"出售"（卖出）。
+    每件都校验：拿起对象非 0 才点出售；卖后重查列表确认该格子消失，
+    仍在则再点一次原格子放回并中止本次出售（防物品拿在手上乱放）。
+    """
+    if os.environ.get("MHXY_ZG_SELL", "1") == "0":
+        return 0
+    if hwnd is None:
+        hwnd = get_hwnd()
+    if not hwnd:
+        return 0
+    if not _bag_ensure_open(gateway, hwnd):
+        logger.warning("出售装备：背包无法打开")
+        return 0
+    sx0, sy0, sx1, sy1 = _SELL_POS
+    sold = 0
+    for _ in range(_SELL_MAX_ITEMS):
+        items = _sellable_items(gateway)
+        if not items:
+            break
+        gid, ix, iy, iname = items[0]
+        post_click(hwnd, ix + random.randint(-2, 2), iy + random.randint(-2, 2),
+                   gateway=gateway)
+        _sleep(random.uniform(0.25, 0.45))
+        pick = _bag_pick_state(gateway)
+        if pick in ("0", "", "nil"):
+            logger.info("出售装备：点选 %s(格子%s) 未拿起，跳过本次出售" % (iname, gid))
+            continue
+        scx = random.randint(sx0 + 3, max(sx0 + 4, sx1 - 3))
+        scy = random.randint(sy0 + 2, max(sy0 + 3, sy1 - 2))
+        post_click(hwnd, scx, scy, gateway=gateway)
+        _sleep(random.uniform(0.35, 0.6))
+        # 校验：该格子消失 = 卖出
+        now_items = _sellable_items(gateway)
+        still = any(it[0] == gid and it[3] == iname for it in now_items)
+        if not still:
+            sold += 1
+            if verbose:
+                logger.info("出售装备：%s(格子%s) 已卖出 (%d/%d)" % (iname, gid, sold, _SELL_MAX_ITEMS))
+        else:
+            # 卖出失败 → 物品可能还在手上，点原格子放回，中止本轮出售
+            logger.warning("出售装备：%s(格子%s) 点出售未生效，放回并中止" % (iname, gid))
+            if _bag_pick_state(gateway) not in ("0", "", "nil"):
+                post_click(hwnd, ix, iy, gateway=gateway)
+                _sleep(random.uniform(0.25, 0.45))
+            break
+    if sold:
+        logger.info("出售装备：本次共卖出 %d 件" % sold)
+    return sold
 
 
 def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
