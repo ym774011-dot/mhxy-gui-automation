@@ -200,4 +200,21 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _rc = 0
+    try:
+        _rc = main()
+    except KeyboardInterrupt:
+        print("\n[stop] 已手动中止。")
+        _rc = 130
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        _rc = 1
+    finally:
+        # 编排器由桌面 bat 以独立控制台拉起：任何退出（含报错）都停住，
+        # 否则窗口一闪即关，用户看不到"未找到游戏实例"之类的失败原因。
+        try:
+            input("\n---- 按回车关闭窗口 ----")
+        except Exception:
+            pass
+    sys.exit(_rc)
