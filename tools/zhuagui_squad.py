@@ -101,6 +101,27 @@ def plant(pid, name, port):
     return r.returncode == 0
 
 
+def running_squad_cmdlines():
+    """当前在跑的小队相关 python 进程命令行列表（PowerShell CIM 查询）。"""
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+          "Where-Object { $_.CommandLine -match 'run_unlimited_test|member_sell_loop' } | "
+          "ForEach-Object { $_.CommandLine }")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
+                           capture_output=True, text=True,
+                           encoding="gbk", errors="replace", timeout=30)
+        return [l.strip() for l in (r.stdout or "").splitlines() if l.strip()]
+    except Exception:
+        return []
+
+
+def process_alive_for(cmdlines, pid, leader):
+    """该实例的跑批/出售进程是否真的在跑（续用前必查，防 state 残留守活）。"""
+    token = "pzxy_p%d" % pid
+    key = "run_unlimited_test" if leader else "member_sell_loop"
+    return any(key in cl and token in cl for cl in cmdlines)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stop", action="store_true", help="停掉小队全部进程")
@@ -151,66 +172,122 @@ def main():
         print("[X] 没有可用实例。请把窗口重开到登录界面再运行。")
         return 1
 
-    # ---- Phase B：观察登录顺序 ----
+    # ---- Phase B：观察登录 → 用户组队 → 按任意键才拉起任务 ----
     print("=" * 60)
-    print("[Phase B] 请依次登录 %d 个号 —— 第一个登录的自动成为队长。" % len(squad))
-    print("          （队长=完整抓鬼跑批；其余=纯出售循环。Ctrl+C 中止）")
+    print("[Phase B] 请依次登录 %d 个号并在游戏里组好队伍。" % len(squad))
+    print("          第一个登录的=队长（完整跑批）；其余=队员（纯出售）。")
+    print("          组好队后【按任意键】启动任务。Ctrl+C 中止。")
     assigned = {}
-    # 重启续用：上一次的队长映射仍然有效时直接沿用（窗口重启 PID 变化则失效）
+    # ★2026-09-06 修复：续用前必须验证对应进程真的活着。此前只看 state 残留
+    #   —— bat"停"过一次后再跑，续用把全部窗口标记已分配却一个进程都不拉起。
+    live_cmdlines = running_squad_cmdlines()
     try:
         with open(STATE_PATH, "r", encoding="utf-8") as f:
             prev = json.load(f)
         for pid_s, info in (prev.get("assigned") or {}).items():
             pid = int(pid_s)
-            if any(pid == p for p, _ in squad) and LOGGED_IN_RE.search(info.get("title", "")):
-                assigned[pid] = info
-                print("[续用] PID=%d 保持上次角色: 队长=%s" % (pid, info.get("leader")))
+            if not any(pid == p for p, _ in squad):
+                continue
+            if not process_alive_for(live_cmdlines, pid, bool(info.get("leader"))):
+                print("[失效] PID=%d state 有分配但进程不在跑 → 将重新拉起" % pid)
+                continue
+            assigned[pid] = info
+            print("[续用] PID=%d 保持上次角色: 队长=%s（进程在跑）"
+                  % (pid, info.get("leader")))
     except Exception:
         pass
 
-    t0 = time.time()
-    spawned = []
-    while len(assigned) < len(squad) and time.time() - t0 < args.wait_login:
-        time.sleep(3)
+    # 登录观察 + 等按键（msvcrt 轮询，任意键触发；期间每 5s 刷新状态行）
+    import msvcrt
+    import time as _t
+    login_order = []  # [pid,...] 按首次登录先后
+    t0 = _t.time()
+    last_status = ""
+    print("-" * 60)
+    while _t.time() - t0 < float(args.wait_login):
+        if msvcrt.kbhit():
+            msvcrt.getwch()  # 任意键 → 启动
+            print()
+            break
+        logged_now = []
         for pid, hwnd, title in enum_game_windows():
-            if pid in assigned or not any(pid == p for p, _ in squad):
+            if not any(pid == p for p, _ in squad):
                 continue
-            m = LOGGED_IN_RE.search(title)
-            if not m:
-                continue
-            rm = ROLE_RE.search(title)
-            role = rm.group(1).strip() if rm else ("p%d" % pid)
-            is_leader = not any(a.get("leader") for a in assigned.values())
-            assigned[pid] = {"role": role, "leader": is_leader, "title": title}
-            gw = "file://pzxy_p%d" % pid
-            try:
-                if is_leader:
-                    cmd = [PYEXE, os.path.join(ROOT, "run_unlimited_test.py"),
-                           "--gateway", gw, "--role", role,
-                           "--timeout", "20", "--wait-dialog", "1.2"]
-                    tag = "队长·完整跑批"
-                else:
-                    cmd = [PYEXE, os.path.join(HERE, "member_sell_loop.py"),
-                           "--pid", str(pid), "--gateway", gw]
-                    tag = "队员·纯出售"
-                import subprocess as _sp
-                CREATE_NO_WINDOW = 0x08000000
-                _sp.Popen(cmd, cwd=ROOT, creationflags=CREATE_NO_WINDOW,
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                spawned.append((pid, tag, role))
-                print("[就位] PID=%d %s 角色=%s gw=%s" % (pid, tag, role, gw))
-                try:
-                    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-                    with open(STATE_PATH, "w", encoding="utf-8") as f:
-                        json.dump({"assigned": {str(k): v for k, v in assigned.items()},
-                                   "ts": time.time()}, f, ensure_ascii=False, indent=1)
-                except OSError:
-                    pass
-            except Exception as e:
-                print("[失败] PID=%d 启动失败: %s" % (pid, e))
+            if LOGGED_IN_RE.search(title) and pid not in login_order:
+                login_order.append(pid)
+            if LOGGED_IN_RE.search(title):
+                logged_now.append(pid)
+        status = ("已登录 %d/%d: %s" % (
+            len(logged_now), len(squad),
+            ",".join(str(p) for p in logged_now)))
+        if status != last_status:
+            print("  [观察] " + status)
+            last_status = status
+        _t.sleep(2)
+    else:
+        print("\n[超时] 等待登录超时，按当前状态继续。")
+
+    # 分配：续用优先；其余按登录顺序补齐（第一个未分配的登录窗口=队长）
+    leader_taken = any(a.get("leader") for a in assigned.values())
+    for pid in login_order:
+        if pid in assigned:
+            continue
+        title = next((t for p, _h, t in enum_game_windows() if p == pid), "")
+        rm = ROLE_RE.search(title or "")
+        role = rm.group(1).strip() if rm else ("p%d" % pid)
+        is_leader = not leader_taken
+        leader_taken = True
+        assigned[pid] = {"role": role, "leader": is_leader, "title": title}
+        print("[分配] PID=%d %s 角色=%s" % (pid, "队长" if is_leader else "队员", role))
+    if not assigned:
+        print("[X] 没有任何已登录窗口，无法启动。")
+        return 1
+
+    # 分配预览 + 拉起（已在跑的跳过）
+    live_cmdlines = running_squad_cmdlines()
+    to_spawn = []
+    print("=" * 60)
+    for pid, info in sorted(assigned.items()):
+        alive = process_alive_for(live_cmdlines, pid, bool(info.get("leader")))
+        mark = "已在跑，跳过" if alive else ("队长·完整跑批" if info.get("leader") else "队员·纯出售")
+        print("  PID=%-6d 角色=%-10s %s" % (pid, info.get("role", "?"), mark))
+        if not alive:
+            to_spawn.append((pid, info))
+    if not to_spawn:
+        print("[完成] 全部进程都在跑，无需启动。")
+        return 0
+
+    spawned = []
+    for pid, info in to_spawn:
+        gw = "file://pzxy_p%d" % pid
+        role = info.get("role") or ("p%d" % pid)
+        try:
+            if info.get("leader"):
+                cmd = [PYEXE, os.path.join(ROOT, "run_unlimited_test.py"),
+                       "--gateway", gw, "--role", role,
+                       "--timeout", "20", "--wait-dialog", "1.2"]
+                tag = "队长·完整跑批"
+            else:
+                cmd = [PYEXE, os.path.join(HERE, "member_sell_loop.py"),
+                       "--pid", str(pid), "--gateway", gw]
+                tag = "队员·纯出售"
+            CREATE_NO_WINDOW = 0x08000000
+            subprocess.Popen(cmd, cwd=ROOT, creationflags=CREATE_NO_WINDOW,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            spawned.append((pid, tag, role))
+            print("[启动] PID=%d %s 角色=%s gw=%s" % (pid, tag, role, gw))
+        except Exception as e:
+            print("[失败] PID=%d 启动失败: %s" % (pid, e))
+    try:
+        os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump({"assigned": {str(k): v for k, v in assigned.items()},
+                       "ts": time.time()}, f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
 
     print("=" * 60)
-    print("[完成] 就位 %d/%d" % (len(spawned), len(squad)))
+    print("[完成] 本次拉起 %d 个进程" % len(spawned))
     for pid, tag, role in spawned:
         print("  PID=%-6d %s  角色=%s" % (pid, tag, role))
     if skip:
