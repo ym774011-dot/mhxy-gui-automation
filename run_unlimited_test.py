@@ -427,6 +427,8 @@ def run_one_round(zgui, args, gateway, index):
         end_count = -1
 
     result = "error" if exc_text else classify(ok, msg)
+    # ★2026-09-05 提速观测：ZGUI 分段耗时（ensure_task_ready / enter_battle / wait_task_done）
+    stages = dict(getattr(zgui, "_LAST_ROUND_STAGES", {}) or {})
     samples = [{"t": off, **snap} for off, snap in (sampler.samples if sampler else [])]
     if len(samples) > MAX_SAMPLES_PER_ROUND:
         samples = samples[:MAX_SAMPLES_PER_ROUND]
@@ -446,6 +448,7 @@ def run_one_round(zgui, args, gateway, index):
         "timeout": args.timeout,
         "wait_dialog": args.wait_dialog,
         "fail_stage": infer_stage(msg, log_lines, exc_text),
+        "stages": stages,
         "task": {
             "name_before": (pre_task or {}).get("name", ""),
             "start_count": start_count,

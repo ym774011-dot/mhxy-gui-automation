@@ -150,7 +150,7 @@ import threading as _threading
 
 _LUA_LOCK = _threading.Lock()
 _LUA_LAST = [0.0]
-_LUA_MIN_GAP = 0.15        # 两次 Lua RPC 最小间隔（秒）
+_LUA_MIN_GAP = 0.10        # 两次 Lua RPC 最小间隔（秒）★2026-09-05 提速 0.15→0.10（file 通道为游戏内 worker，无 HTTP 开销）
 _LUA_GAP_JITTER = 1.7      # 间隔抖动上限倍率（统一节奏易被判脚本）
 
 # ★2026-09-03 取消任务冷却：本服接任务后 2 分钟内不能取消（游戏内提示
@@ -251,15 +251,27 @@ def _lua_call(gateway: str, code: str, timeout: float = 8.0):
             return None
 
 
+_HWND_CACHE = [0, 0.0]  # [hwnd, 时刻] ★2026-09-05 提速：3s TTL 缓存（窗口句柄只在游戏重启时变化，
+#             原实现每轮起 5~7 次 PowerShell 子进程，每次 0.3~0.8s，单轮浪费 2~4s）
+_HWND_TTL = 3.0
+
+
 def get_hwnd():
-    """获取游戏主窗口句柄（胖子西游）。"""
+    """获取游戏主窗口句柄（胖子西游）。带 3s TTL 缓存；缓存失效时走 PowerShell 探测。"""
+    now = time.time()
+    if _HWND_CACHE[0] and now - _HWND_CACHE[1] < _HWND_TTL:
+        return _HWND_CACHE[0]
     try:
         out = subprocess.check_output(
             'powershell -NoProfile -c "(Get-Process -Name 胖子西游 | Where-Object {$_.MainWindowTitle} | Select-Object -First 1).MainWindowHandle"',
             shell=True).decode().strip()
-        return int(out) if out.isdigit() else 0
+        hwnd = int(out) if out.isdigit() else 0
     except Exception:
-        return 0
+        hwnd = 0
+    if hwnd:
+        _HWND_CACHE[0] = hwnd
+        _HWND_CACHE[1] = now
+    return hwnd
 
 
 def _lp(x, y):
@@ -271,16 +283,24 @@ def _lp(x, y):
 # 避免 WM_MOUSEMOVE 瞬移（机械瞬移易被反外挂识别为脚本）。
 # ============================================================
 _last_mouse = [400, 300]  # 客户区坐标缓存（上次点击终点，近似当前引擎鼠标位）
+_last_mouse_ts = [0.0]    # ★2026-09-05 提速：鼠标位读取节流（1.5s 内复用缓存，省一次 Lua RPC）
 _call_guard = {"gid": "", "ts": 0.0}  # ★2026-09-03 防重复 CALL 目标冷却（多 call 弹框防护）
 
 
 def _read_engine_mouse(gateway):
-    """读取游戏引擎当前鼠标位置（客户区逻辑坐标）作为轨迹起点。"""
+    """读取游戏引擎当前鼠标位置（客户区逻辑坐标）作为轨迹起点。
+
+    ★2026-09-05 提速：1.5s 内已读过则直接复用 _last_mouse（上次点击终点），
+    轨迹起点精度足够，省一次 Lua RPC（单轮 5~6 次点击共省 ~1.2s）。
+    """
+    if time.time() - _last_mouse_ts[0] < 1.5:
+        return
     try:
         r = _lua_call(gateway, '__out = tostring(鼠标.x)..","..tostring(鼠标.y)')
         if r and "," in r:
             a, b = r.split(",")
             _last_mouse[:] = [int(a), int(b)]
+            _last_mouse_ts[0] = time.time()
     except Exception:
         pass
 
@@ -341,6 +361,7 @@ def post_click(hwnd, x, y, gateway=None):
     time.sleep(random.uniform(0.04, 0.09))
     user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(x, y))
     _last_mouse[:] = [x, y]
+    _last_mouse_ts[0] = time.time()
 
 
 def post_right_click(hwnd, x, y, gateway=None):
@@ -357,6 +378,7 @@ def post_right_click(hwnd, x, y, gateway=None):
     time.sleep(random.uniform(0.04, 0.09))
     user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, _lp(x, y))
     _last_mouse[:] = [x, y]
+    _last_mouse_ts[0] = time.time()
 
 
 def grab_client(hwnd):
@@ -438,6 +460,63 @@ __out = ''
         return {"name": "", "count": ""}
     n, c = r.split("|")
     return {"name": n, "count": c}
+
+
+_SNAP_LUA = r"""
+local res = {}
+local m = tp.地图
+res[1] = tostring(m and m.地图名称 or '')
+local bt = 'false'
+local b = tp.战斗类
+if type(b) == 'table' then
+  local u = b.参战单位
+  if type(u) == 'table' then
+    local n = 0
+    for _ in pairs(u) do n = n + 1 end
+    if n > 0 and tonumber(b.敌方数量 or 0) > 0 then bt = 'true' end
+  end
+end
+res[2] = bt
+local tn, tc, tm = '', '', ''
+local t = tp.窗口.任务栏.任务
+if type(t) == 'table' then
+  for i = 1, #t do
+    local v = t[i]
+    if type(v) == 'table' and tostring(v.名称 or '') == '抓鬼任务' then
+      local desc = tostring(v.说明 or '')
+      tn = desc:match('近日有#r/([^#]+)#w/') or ''
+      tn = tn:gsub('^%s+', ''):gsub('%s+$', '')
+      tc = desc:match('第(%d+)次') or ''
+      tm = desc:match('正在#r/([^#]+)') or ''
+      local p = tm:find('（') or tm:find('%(')
+      if p then tm = tm:sub(1, p - 1) end
+      tm = tm:gsub('^%s+', ''):gsub('%s+$', '')
+      break
+    end
+  end
+end
+res[3] = tn
+res[4] = tc
+res[5] = tm
+__out = table.concat(res, '|')
+"""
+
+
+def _snapshot(gateway):
+    """★2026-09-05 提速：一次 Lua RPC 同时读 地图名/战斗态/任务名/次数/目标地图。
+
+    原流程单轮要为这些状态连发 5~6 次独立调用（每次限速 0.15~0.26s），
+    合并为 2 次快照后单轮省 ~1s 且减少探测频率。
+    """
+    r = _lua_call(gateway, _SNAP_LUA) or ""
+    parts = (r.split("|") + ["", "", "", "", ""])[:5]
+    return {
+        "map": parts[0],
+        "battle": parts[1] == "true",
+        "name": parts[2],
+        "count": parts[3],
+        "target_map": parts[4],
+    }
 
 
 def zhuagui_take_task(gateway=DEFAULT_GATEWAY,
@@ -542,7 +621,7 @@ __out = ''
         jx = int(zx) + random.randint(-5, 5)
         jy = int(zy) + random.randint(-5, 5)
         post_click(hwnd, jx, jy, gateway=gateway)
-        _sleep(random.uniform(0.6, 1.0))
+        _sleep(random.uniform(0.45, 0.8))  # ★09-05 提速 0.6~1.0 → 0.45~0.8
     return True
 
 
@@ -728,7 +807,7 @@ def _zhongkui_click_row(gateway, row_key, hwnd=None):
     cx = row["x0"] + random.randint(5, max(1, row["x1"] - row["x0"] - 5))
     cy = row["y0"] + random.randint(2, max(1, row["y1"] - row["y0"] - 2))
     post_click(hwnd, cx, cy, gateway=gateway)
-    _sleep(random.uniform(0.5, 0.9))
+    _sleep(random.uniform(0.35, 0.7))  # ★09-05 提速 0.5~0.9 → 0.35~0.7
     return True
 
 
@@ -872,10 +951,10 @@ def zhuagui_take_task_v2(gateway=DEFAULT_GATEWAY, close_dialog=True, **kw):
     if _blind_mode(hwnd):
         for attempt in range(2):
             if not _call_zhongkui(gateway):
-                _sleep(random.uniform(0.8, 1.2))
-            _sleep(random.uniform(1.2, 1.8))   # 等对话弹出动画
+                _sleep(random.uniform(0.6, 0.9))
+            _sleep(random.uniform(0.9, 1.4))   # 等对话弹出动画（★09-05 提速 1.2~1.8 → 0.9~1.4）
             _zhongkui_click_row(gateway, "take", hwnd=hwnd)
-            _sleep(1.2)
+            _sleep(0.9)                        # ★09-05 提速 1.2 → 0.9
             ok = bool(zhuagui_get_task(gateway).get("name"))
             if ok:
                 _task_ts_set(gateway)
@@ -955,7 +1034,9 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
         return False
     # ★2026-09-03 战斗保护：战斗中 UI 锁定（背包/道具点击无效），先等战斗结束。
     #   战斗自动进行（自动起始>0）；等待最多 ~20s，期间柔和轮询战斗态。
-    if zhuagui_in_battle(gateway):
+    # ★2026-09-05 提速：入口改用 _snapshot，1 次调用同时拿 战斗态+任务态（原 2 次）
+    snap = _snapshot(gateway)
+    if snap["battle"]:
         logger.warning("确保任务：战斗中，等待战斗结束再继续...")
         t_wait = 0.0
         while zhuagui_in_battle(gateway) and t_wait < 20.0:
@@ -964,7 +1045,7 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
         if zhuagui_in_battle(gateway):
             logger.warning("确保任务：战斗超时仍未结束，返回失败（等下一轮）")
             return False
-    task = zhuagui_get_task(gateway) or {}
+    task = {"name": snap["name"], "count": snap["count"]}
     if not task.get("name") and not member_mode:
         # 无任务（非组员）：回长安接取
         mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
@@ -990,12 +1071,14 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
     if not zhuagui_use_tianyan(gateway):
         logger.warning("确保任务：使用天眼失败")
         return False
-    _sleep(random.uniform(2.0, 3.0))
+    _sleep(random.uniform(1.2, 1.8))  # ★2026-09-05 提速 2.0~3.0 → 1.2~1.8（天眼瞬移本身瞬时生效）
     # ★2026-09-03 瞬移后校验目标地图：天眼落点=任务目标坐标，若该坐标恰为
     # 地图传送门，角色会踩门被自动传入另一张地图（如大唐境外(633,36)↔五庄观），
     # 导致地图单位无目标怪、CALL 找不到标识 → 本轮失败。地图不匹配须回长安重接。
-    target_map = _task_target_map(gateway)
-    cur_map = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') or ""
+    # ★2026-09-05 提速：目标地图+当前地图 2 次调用合并为 1 次快照
+    snap2 = _snapshot(gateway)
+    target_map = snap2["target_map"]
+    cur_map = snap2["map"] or ""
     if target_map and cur_map and (cur_map != target_map
                                    and target_map not in cur_map and cur_map not in target_map):
         logger.warning("确保任务：瞬移落点地图错位（目标地图=%s 实际=%s），需回长安重接"
@@ -1031,6 +1114,9 @@ __out = ''
     return ""
 
 
+_LAST_ROUND_STAGES = {}  # ★2026-09-05 提速观测：最近一轮的分段耗时（秒），run_unlimited_test 写入 jsonl
+
+
 def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
                      verbose=False, member_mode=False, **kw):
     """单轮完整抓鬼：确保接任务→瞬移→找鬼→进战→确认完成。
@@ -1042,13 +1128,19 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     Returns:
         (bool, str): (是否完成本轮, 信息)
     """
+    _LAST_ROUND_STAGES.clear()
+    _t_round0 = time.time()
     hwnd = get_hwnd()
     if not hwnd:
         return False, "未找到游戏窗口"
     if not zhuagui_ensure_task_ready(gateway, member_mode=member_mode):
+        _LAST_ROUND_STAGES["ensure_task_ready"] = round(time.time() - _t_round0, 2)
         return False, "任务未就绪（接任务/瞬移失败）"
+    _LAST_ROUND_STAGES["ensure_task_ready"] = round(time.time() - _t_round0, 2)
+    _t_b0 = time.time()
     ok, msg = zhuagui_enter_battle(gateway, wait_dialog=wait_dialog,
                                    timeout=timeout, verbose=verbose, hwnd=hwnd)
+    _LAST_ROUND_STAGES["enter_battle"] = round(time.time() - _t_b0, 2)
     return ok, msg
 
 
@@ -1200,8 +1292,8 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
         logger.warning("天眼符坐标读取失败（背包未打开或无天眼符）")
         return False
     post_right_click(hwnd, int(x), int(y), gateway=gateway)
-    # 柔和化：使用后短暂停顿，等待瞬移生效
-    _sleep(random.uniform(0.8, 1.4))
+    # 柔和化：使用后短暂停顿，等待瞬移生效（★09-05 提速 0.8~1.4 → 0.6~1.0）
+    _sleep(random.uniform(0.6, 1.0))
     # ★2026-09-03 用户明确要求：不要关闭背包！
     # 背包一旦关闭，背包面板数据消失，后续很难再定位并使用道具（天眼符等）。
     # 因此不再调用 _bag_ensure_close，保持背包打开状态。
@@ -1260,14 +1352,14 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229, **kw)
         logger.warning("回长安：找不到红色合成旗")
         return False
     post_right_click(hwnd, flagpos[0], flagpos[1], gateway=gateway)
-    _sleep(random.uniform(1.5, 2.2))
+    _sleep(random.uniform(1.0, 1.5))  # ★2026-09-05 提速 1.5~2.2 → 1.0~1.5（等大地图弹出）
     # ★2026-09-03 追加：右键旗子后移开光标（旗子在背包内，悬停会弹 tooltip）
     _mouse_clear(hwnd, gateway)
     # 2) 点击"殷"字旁红点 → 钟馗身边
     jx = red_x + random.randint(-3, 3)
     jy = red_y + random.randint(-3, 3)
     post_click(hwnd, jx, jy, gateway=gateway)
-    _sleep(random.uniform(1.8, 2.5))
+    _sleep(random.uniform(1.2, 1.8))  # ★2026-09-05 提速 1.8~2.5 → 1.2~1.8（飞行落地图弹出）
     _mouse_clear(hwnd, gateway)
     mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
     return mm == "长安城"
@@ -1379,41 +1471,58 @@ def zhuagui_click_ghost(gateway=DEFAULT_GATEWAY, **kw):
     Returns:
         bool: 是否成功触发对话请求。
     """
-    # ★战斗保护：战斗中禁止 CALL 目标（用户反馈战斗内弹提示框）
-    if zhuagui_in_battle(gateway):
-        return False
-    task = zhuagui_get_task(gateway)
-    target_name = (task or {}).get("name") or ""
-    code = (
-        "local target = '" + target_name + "'\n"
-        "local t = tp.地图.地图单位\n"
-        "if type(t) ~= 'table' then __out = '' return end\n"
-        # ★2026-09-03 修复：地图单位表可能为键值结构（#t=0 但 pairs 有内容），
-        # 旧 for i=1,#t 会漏掉全部单位 → CALL 找不到目标。改用 pairs 遍历。
-        "for _, v in pairs(t) do\n"
-        "  if type(v) == 'table' then\n"
-        "  local name = tostring(v.名称 or '')\n"
-        "  local match = false\n"
-        "  if target ~= '' then\n"
-        "    match = (name:find(target, 1, true) ~= nil) or (target:find(name, 1, true) ~= nil)\n"
-        "  else\n"
-        "    local cz = tostring(v.称谓 or '')\n"
-        "    match = (cz == '野鬼') or (name:find('鬼') ~= nil)\n"
-        "  end\n"
-        "  if match and v.标识 then __out = tostring(v.标识) return end\n"
-        "  end\n"
-        "end\n"
-        "__out = ''\n"
-    )
-    gid = _lua_call(gateway, code) or ""
+    # ★2026-09-05 提速：战斗检查+任务名提取+目标标识查找 原为 3 次独立 Lua 调用，
+    #   合并为 1 次（服务端同一 Lua 态内顺序执行，语义不变）。
+    code = r"""
+local b = tp.战斗类
+if type(b) == 'table' then
+  local u = b.参战单位
+  if type(u) == 'table' then
+    local n = 0
+    for _ in pairs(u) do n = n + 1 end
+    if n > 0 and tonumber(b.敌方数量 or 0) > 0 then __out = 'BATTLE' return end
+  end
+end
+local target = ''
+local t = tp.窗口.任务栏.任务
+if type(t) == 'table' then
+  for i = 1, #t do
+    local v = t[i]
+    if type(v) == 'table' and tostring(v.名称 or '') == '抓鬼任务' then
+      target = tostring(v.说明 or ''):match('近日有#r/([^#]+)#w/') or ''
+      break
+    end
+  end
+end
+local un = tp.地图.地图单位
+if type(un) ~= 'table' then __out = '' return end
+for _, v in pairs(un) do
+  if type(v) == 'table' then
+    local name = tostring(v.名称 or '')
+    local match = false
+    if target ~= '' then
+      match = (name:find(target, 1, true) ~= nil) or (target:find(name, 1, true) ~= nil)
+    else
+      local cz = tostring(v.称谓 or '')
+      match = (cz == '野鬼') or (name:find('鬼') ~= nil)
+    end
+    if match and v.标识 then __out = tostring(v.标识) return end
+  end
+end
+__out = ''
+"""
+    r = _lua_call(gateway, code) or ""
+    if r == "BATTLE":
+        return False  # 战斗中禁止 CALL（用户反馈战斗内弹提示框）
+    gid = r
     if not gid.isdigit():
         return False
     # ★2026-09-03 防重复 CALL：同一目标 8s 冷却，避免多 call 重复弹框
     _now = time.time()
     if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
         return True  # 已触发过，本次视为成功（不再发包）
-    # ★柔和化：CALL 前加 0.2~0.6s 随机延迟，避免瞬间机械发包；只发一次
-    _sleep(random.uniform(0.2, 0.6))
+    # ★柔和化：CALL 前加 0.15~0.4s 随机延迟（★09-05 提速 0.2~0.6），避免瞬间机械发包；只发一次
+    _sleep(random.uniform(0.15, 0.4))
     _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
     _call_guard["gid"] = gid
     _call_guard["ts"] = _now
@@ -1489,8 +1598,8 @@ def zhuagui_click_option(gateway=DEFAULT_GATEWAY, tries: int = 1, hwnd=None,
         cx = opt_x0 + random.randint(3, max(1, opt_x1 - opt_x0 - 3))
         cy = opt_y0 + random.randint(2, max(1, opt_y1 - opt_y0 - 2))
         post_click(hwnd, cx, cy, gateway=gateway)
-        # 柔和化：点击间隔随机化，避免固定节奏
-        time.sleep(random.uniform(0.5, 0.9))
+        # 柔和化：点击间隔随机化（★09-05 提速 0.5~0.9 → 0.3~0.6）
+        time.sleep(random.uniform(0.3, 0.6))
     return True
 
 
@@ -1552,6 +1661,7 @@ def _mouse_clear(hwnd, gateway=None, x=415, y=160):
     try:
         _move_traj(hwnd, _last_mouse[0], _last_mouse[1], x, y)
         _last_mouse[:] = [x, y]
+        _last_mouse_ts[0] = time.time()
     except Exception:
         pass
 
@@ -1582,9 +1692,10 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
         hwnd = get_hwnd()
     if not hwnd:
         return False, "未找到游戏窗口"
-    task0 = zhuagui_get_task(gateway) or {}
+    # ★2026-09-05 提速：任务态+战斗态 2 次调用合并为 1 次快照
+    snap = _snapshot(gateway)
     try:
-        start_cnt = int((task0 or {}).get("count") or 0)
+        start_cnt = int((snap.get("count") or 0))
     except Exception:
         start_cnt = 0
     # ★2026-09-03 修复：目标怪会随刷新/被队伍击杀从单位列表暂时消失，或
@@ -1592,7 +1703,7 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     # （最长 ~12s，1.8~2.6s 间隔），出现即 CALL；避免一找不到就判失败。
     # ★2026-09-03 追加：轮询期间若已进战斗，立即停止 CALL（战斗中不许 CALL 目标）。
     ok_call = False
-    if not zhuagui_in_battle(gateway):
+    if not snap["battle"]:
         ok_call = zhuagui_click_ghost(gateway)
         if not ok_call:
             if verbose:
@@ -1618,7 +1729,8 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     # 柔性重试：未出现则等 0.3~0.6s 后重 CALL 一次（最多2次）。
     # ★2026-09-04 黑屏盲模式：无红字检测，CALL 后固定等待对话弹出再点选项。
     if _blind_mode(hwnd):
-        time.sleep(random.uniform(max(1.0, float(wait_dialog)), max(1.6, float(wait_dialog) + 0.5)))
+        # ★2026-09-05 提速：CALL 到对话框弹出实测 <1s，等待 1.0~1.7 → 0.7~1.2
+        time.sleep(random.uniform(0.7, 1.2))
         ok_dlg = True
         t_wait = 0.0
     else:
@@ -1669,14 +1781,16 @@ def _wait_task_done(gateway, start_cnt, timeout, verbose=False):
         # 抓鬼完成的两种标志：次数递增（进入下一只）或任务栏清空（本只完成）
         if cur_cnt and cur_cnt != start_cnt:
             # ★任务变动（进入下一只）→ 刷新取消冷却时间戳
+            _LAST_ROUND_STAGES["wait_task_done"] = round(time.time() - t0, 2)
             _task_ts_set(gateway)
             return True, "抓鬼完成"
         if start_cnt > 0 and not (cur or {}).get("count"):
             # ★任务栏清空（本只完成）→ 刷新时间戳（下一只需要重新接/再瞬移）
+            _LAST_ROUND_STAGES["wait_task_done"] = round(time.time() - t0, 2)
             _task_ts_set(gateway)
             return True, "抓鬼完成(任务栏已清空)"
-        # 柔和化：轮询间隔随机抖动，避免固定频率探测
-        time.sleep(random.uniform(0.6, 1.0))
+        # 柔和化：轮询间隔随机抖动，避免固定频率探测（★09-05 提速 0.6~1.0 → 0.4~0.7）
+        time.sleep(random.uniform(0.4, 0.7))
     # ★2026-09-03 超时后最终复查：任务栏可能刚更新（延迟清空/递增）。
     #   实测本服"第N次递增"只在回长安重接钟馗任务时才体现，点'送你回地府'
     #   后任务栏并不会立即变化，故这里只做一次复查，不额外拖长轮次。
