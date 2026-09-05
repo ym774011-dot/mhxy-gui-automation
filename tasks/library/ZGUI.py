@@ -1116,6 +1116,76 @@ __out = ''
 
 _LAST_ROUND_STAGES = {}  # ★2026-09-05 提速观测：最近一轮的分段耗时（秒），run_unlimited_test 写入 jsonl
 
+# ============================================================
+# ★2026-09-06 顺手打稀有怪：抓鬼完成判定后、回长安前，扫一次本图单位，
+#   命中稀有名单（知了王/星宿/远古系）就 CALL 开打，打完继续原流程。
+#   只管本图、不跨图、不追公告；MHXY_ZG_BONUS=0 可整体关闭。
+# ============================================================
+_BONUS_NAMES = ("知了王", "星宿", "远古")   # 名称包含即命中
+_BONUS_MAX_KILLS = 3                        # 单轮最多顺手打几只（防连环刷体）
+_BONUS_ENABLED = os.environ.get("MHXY_ZG_BONUS", "1") != "0"
+
+
+def zhuagui_bonus_battle(gateway=DEFAULT_GATEWAY, verbose=False,
+                         max_battle_wait=180.0, **kw):
+    """扫本图稀有怪并顺手打一只。命中并打完返回怪名，未命中/未进战返回 None。
+
+    复用抓鬼 CALL 通道 `客户端:发送数据(0,3,6,标识,1)` 与 _call_guard 防重冷却。
+    CALL 后最多等 8s 进战：未进战（距离太远/不可交互）直接放弃不阻塞跑批；
+    进战后挂机等战斗结束（自动战斗），上限 max_battle_wait。
+    """
+    if not _BONUS_ENABLED:
+        return None
+    code = r"""
+local t = tp.地图.地图单位
+if type(t) ~= 'table' then __out = '' return end
+for _, v in pairs(t) do
+  if type(v) == 'table' then
+    local name = tostring(v.名称 or '')
+    if name ~= '' and v.标识 then
+      if name:find('知了王') or name:find('星宿') or name:find('远古') then
+        __out = name .. '|' .. tostring(v.标识)
+        return
+      end
+    end
+  end
+end
+__out = ''
+"""
+    r = _lua_call(gateway, code) or ""
+    if "|" not in r:
+        return None
+    bname, gid = r.split("|", 1)
+    if not gid.isdigit():
+        return None
+    # 防重复 CALL：复用抓鬼目标的 8s 冷却
+    _now = time.time()
+    if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
+        return None
+    if verbose:
+        logger.info("发现稀有怪 %s，顺手 CALL 开打..." % bname)
+    _sleep(random.uniform(0.15, 0.4))
+    _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
+    _call_guard["gid"] = gid
+    _call_guard["ts"] = _now
+    # 等进战（最多 ~8s）；不进战说明距离太远或不可交互，放弃不阻塞跑批
+    t0 = time.time()
+    while time.time() - t0 < 8.0:
+        if zhuagui_in_battle(gateway):
+            break
+        _sleep(random.uniform(0.5, 0.8))
+    if not zhuagui_in_battle(gateway):
+        logger.info("稀有怪 %s CALL 后未进战（距离太远/不可交互），跳过" % bname)
+        return None
+    # 战斗挂机等结束
+    t1 = time.time()
+    while zhuagui_in_battle(gateway) and time.time() - t1 < float(max_battle_wait):
+        _sleep(random.uniform(1.2, 1.8))
+    ok_end = not zhuagui_in_battle(gateway)
+    logger.info("稀有怪 %s 战斗%s（耗时%.0fs）"
+                % (bname, "结束" if ok_end else "超时", time.time() - t1))
+    return bname if ok_end else None
+
 
 def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
                      verbose=False, member_mode=False, **kw):
@@ -1141,6 +1211,21 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     ok, msg = zhuagui_enter_battle(gateway, wait_dialog=wait_dialog,
                                    timeout=timeout, verbose=verbose, hwnd=hwnd)
     _LAST_ROUND_STAGES["enter_battle"] = round(time.time() - _t_b0, 2)
+    # ★2026-09-06 顺手打稀有怪：本轮完成后、回长安前，本图扫 知了王/星宿/远古
+    if ok:
+        _t_bn = time.time()
+        killed = []
+        try:
+            for _ in range(max(1, _BONUS_MAX_KILLS)):
+                bname = zhuagui_bonus_battle(gateway, verbose=verbose)
+                if not bname:
+                    break
+                killed.append(bname)
+        except Exception as e:
+            logger.warning("顺手打稀有怪异常（不影响抓鬼主流程）: %s" % e)
+        if killed:
+            _LAST_ROUND_STAGES["bonus_battle"] = round(time.time() - _t_bn, 2)
+            msg = msg + " 顺手打:" + "+".join(killed)
     return ok, msg
 
 
