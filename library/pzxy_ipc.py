@@ -23,13 +23,32 @@ import time
 
 
 class PzxyWorker(object):
-    def __init__(self, tmp_dir=r'E:\DS\tmp', timeout=3.0):
+    def __init__(self, tmp_dir=r'E:\DS\tmp', timeout=3.0, name=''):
+        """name='' 用全局文件 pzxy_cmd.txt；多开按角色隔离时传 name='二号美人'
+        → pzxy_二号美人_cmd.txt（worker 播种时由 pzxy_plant 注入同名路径）。"""
         self.tmp_dir = tmp_dir
-        self.cmd_path = os.path.join(tmp_dir, 'pzxy_cmd.txt')
-        self.out_path = os.path.join(tmp_dir, 'pzxy_out.txt')
-        self.hb_path = os.path.join(tmp_dir, 'pzxy_hb.txt')
+        prefix = 'pzxy' + (('_' + name) if name else '')
+        self.cmd_path = os.path.join(tmp_dir, prefix + '_cmd.txt')
+        self.out_path = os.path.join(tmp_dir, prefix + '_out.txt')
+        self.hb_path = os.path.join(tmp_dir, prefix + '_hb.txt')
         self.timeout = timeout
-        self.seq = 0
+        # ★2026-09-05 修复跨次运行 cid 碰撞：OUT 文件不再删除（沙箱守卫），
+        # 进程重启后 seq 若从 1 重新计数，新命令会匹配到上一轮的同 id 陈旧结果。
+        # 启动时从残留 OUT 恢复最大 cid 并 +1000 起步，保证单调递增。
+        self.seq = self._recover_seq()
+
+    def _recover_seq(self):
+        try:
+            with open(self.out_path, 'rb') as f:
+                raw = f.read().decode('gbk', 'replace')
+            mx = 0
+            for line in raw.splitlines():
+                head = line.split('|', 1)[0].strip()
+                if head.isdigit():
+                    mx = max(mx, int(head))
+            return mx + 1000
+        except (IOError, OSError, ValueError):
+            return 0
 
     # ---- 心跳 ----
     def heartbeat(self):
@@ -67,17 +86,22 @@ class PzxyWorker(object):
             f.write(payload)
         os.replace(tmp, self.cmd_path)
         deadline = time.time() + timeout
+        last_raw = ''
         while time.time() < deadline:
             try:
                 with open(self.out_path, 'rb') as f:
-                    raw = f.read().decode('gbk', 'replace')
+                    last_raw = f.read().decode('gbk', 'replace')
             except (IOError, OSError):
-                raw = ''
-            for line in raw.splitlines():
+                last_raw = ''
+            for line in last_raw.splitlines():
                 if line.startswith(cid + '|'):
                     parts = line.split('|', 2)
                     return parts[1] == 'ok', parts[2] if len(parts) > 2 else ''
             time.sleep(0.04)
+        # ★2026-09-05 超时但 OUT 里有 TICKERR：worker 帧 tick 本身报错（命令可能未执行）
+        for line in last_raw.splitlines():
+            if line.startswith('TICKERR|'):
+                return False, 'worker-tickerr: %s' % line.split('|', 1)[1]
         return False, '(timeout %.1fs)' % timeout
 
     def shutdown(self):
