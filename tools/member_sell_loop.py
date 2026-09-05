@@ -29,24 +29,30 @@ spec.loader.exec_module(ZGUI)
 
 
 def find_hwnd_by_pid(pid):
-    """按 PID 找该实例的主窗口（带标题的可见顶层窗口）。找不到返回 0。"""
-    try:
-        import win32gui
-        hits = []
+    """按 PID 找该实例的主窗口（带标题的可见顶层窗口）。找不到返回 0。
 
-        def cb(h, _):
-            try:
-                if win32gui.IsWindowVisible(h) and win32gui.GetWindowText(h):
-                    if win32gui.GetWindowThreadProcessId(h)[1] == pid:
-                        hits.append(h)
-            except Exception:
-                pass
-            return True
+    ★ctypes 实现（win32gui 无 GetWindowThreadProcessId）。
+    """
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    hits = []
 
-        win32gui.EnumWindows(cb, None)
-        return hits[0] if hits else 0
-    except Exception:
-        return 0
+    ENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(h, _lp):
+        pidv = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(h, ctypes.byref(pidv))
+        if pidv.value == pid and user32.IsWindowVisible(h):
+            n = user32.GetWindowTextLengthW(h)
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(h, buf, n + 1)
+            if buf.value:
+                hits.append(h)
+        return True
+
+    user32.EnumWindows(ENUMPROC(cb), 0)
+    return hits[0] if hits else 0
 
 
 def main():

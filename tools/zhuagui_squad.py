@@ -35,35 +35,55 @@ ROLE_RE = re.compile(r"\(([^()\[\]]+)\[\d+\]\)")
 
 
 def enum_game_windows():
-    """返回 [(pid, hwnd, title)]：Galaxy2DEngine 顶层+子窗口，同进程取标题最长者。"""
-    import win32gui
+    """返回 [(pid, hwnd, title)]：Galaxy2DEngine 顶层+子窗口，同进程取标题最长者。
+
+    ★ctypes 实现（win32gui 没有 GetWindowThreadProcessId，曾致静默枚举 0 个）。
+    兼容两种形态：单独打开的顶层引擎窗口 + 多开器 SetParent 嵌入的子窗口
+    （父 WTWindow 属多开器进程，子 Galaxy2DEngine 属游戏进程）。
+    """
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
     seen = {}
 
     def add(h):
         try:
-            if not win32gui.IsWindowVisible(h):
+            if not user32.IsWindowVisible(h):
                 return
-            pid = win32gui.GetWindowThreadProcessId(h)[1]
+            pidv = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(h, ctypes.byref(pidv))
+            pid = pidv.value
             if not pid:
                 return
-            if win32gui.GetClassName(h) != "Galaxy2DEngine":
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(h, cls, 64)
+            if cls.value != "Galaxy2DEngine":
                 return
-            title = win32gui.GetWindowText(h)
+            n = user32.GetWindowTextLengthW(h)
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(h, buf, n + 1)
+            title = buf.value
             cur = seen.get(pid)
             if cur is None or len(title) > len(cur[2]):
                 seen[pid] = (pid, h, title)
         except Exception:
             pass
 
-    def cb_top(h, _):
+    ENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def cb_top(h, _lp):
         add(h)
         try:
-            win32gui.EnumChildWindows(h, lambda c, _x: (add(c), True)[1], None)
+            user32.EnumChildWindows(h, ENUMPROC(_child), 0)
         except Exception:
             pass
         return True
 
-    win32gui.EnumWindows(cb_top, None)
+    def _child(h, _lp):
+        add(h)
+        return True
+
+    user32.EnumWindows(ENUMPROC(cb_top), 0)
     return list(seen.values())
 
 
