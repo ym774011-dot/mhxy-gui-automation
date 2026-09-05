@@ -93,7 +93,7 @@ def plant(pid, name, port):
     r = subprocess.run(
         [PYEXE, os.path.join(GATEWAY_DIR, "tools", "pzxy_plant.py"),
          "--pid", str(pid), "--name", name, "--port", str(port)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        capture_output=True, text=True, encoding="gbk", errors="replace",
         timeout=180)
     tail = (r.stdout or "").strip().splitlines()[-3:]
     for line in tail:

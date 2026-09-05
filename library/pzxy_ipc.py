@@ -19,6 +19,7 @@
   另一个不存在的标识符（表现为返回 nil，不报错）——极易踩坑。
 """
 import os
+import threading
 import time
 
 
@@ -32,6 +33,11 @@ class PzxyWorker(object):
         self.out_path = os.path.join(tmp_dir, prefix + '_out.txt')
         self.hb_path = os.path.join(tmp_dir, prefix + '_hb.txt')
         self.timeout = timeout
+        # ★2026-09-06 修复：跑批器主线程 + 采样线程共用同一 worker 实例，
+        #   并发 cmd() 会写同一个 .tmp 互相覆盖 → 命令丢失 → 轮询把更新
+        #   当"没任务"（实测 round5：鬼已打死、任务栏 10.9s 已刷新，主流程
+        #   却 20s 全盲超时）。cmd 全程持锁 + 临时名带 seq 唯一化。
+        self._lock = threading.Lock()
         # ★2026-09-05 修复跨次运行 cid 碰撞：OUT 文件不再删除（沙箱守卫），
         # 进程重启后 seq 若从 1 重新计数，新命令会匹配到上一轮的同 id 陈旧结果。
         # 启动时从残留 OUT 恢复最大 cid 并 +1000 起步，保证单调递增。
@@ -76,33 +82,50 @@ class PzxyWorker(object):
         返回 (ok:bool, value:str)。value 为 ret1 的 tostring 形式或错误消息。
         """
         timeout = self.timeout if timeout is None else timeout
-        self.seq += 1
-        cid = str(self.seq)
-        payload = ('--WB:%s\n%s' % (cid, lua_src)).encode('gbk', 'replace')
-        tmp = self.cmd_path + '.tmp'
-        # ★2026-09-05 不再删除 out 文件：结果按 <cid>| 前缀匹配，跨命令不会串；
-        # 且频繁 os.remove 会触发沙箱批量删除守卫（SAFE_DELETE）杀进程。
-        with open(tmp, 'wb') as f:
-            f.write(payload)
-        os.replace(tmp, self.cmd_path)
-        deadline = time.time() + timeout
-        last_raw = ''
-        while time.time() < deadline:
-            try:
-                with open(self.out_path, 'rb') as f:
-                    last_raw = f.read().decode('gbk', 'replace')
-            except (IOError, OSError):
-                last_raw = ''
+        # ★2026-09-06 锁覆盖整个命令周期：单文件协议同一时刻只允许一条在途
+        #   命令（worker 每 tick 只消费最新 cmd 文件内容，写快了会覆盖未读
+        #   命令导致丢失）。主线程+采样线程共用实例时完全串行，符合协议语义。
+        with self._lock:
+            self.seq += 1
+            cid = str(self.seq)
+            payload = ('--WB:%s\n%s' % (cid, lua_src)).encode('gbk', 'replace')
+            # 临时名带 seq 唯一化
+            tmp = '%s.%s.tmp' % (self.cmd_path, cid)
+            with open(tmp, 'wb') as f:
+                f.write(payload)
+            self._replace_with_retry(tmp, self.cmd_path)
+            deadline = time.time() + timeout
+            last_raw = ''
+            while time.time() < deadline:
+                try:
+                    with open(self.out_path, 'rb') as f:
+                        last_raw = f.read().decode('gbk', 'replace')
+                except (IOError, OSError):
+                    last_raw = ''
+                for line in last_raw.splitlines():
+                    if line.startswith(cid + '|'):
+                        parts = line.split('|', 2)
+                        return parts[1] == 'ok', parts[2] if len(parts) > 2 else ''
+                time.sleep(0.04)
+            # ★2026-09-05 超时但 OUT 里有 TICKERR：worker 帧 tick 本身报错（命令可能未执行）
             for line in last_raw.splitlines():
-                if line.startswith(cid + '|'):
-                    parts = line.split('|', 2)
-                    return parts[1] == 'ok', parts[2] if len(parts) > 2 else ''
-            time.sleep(0.04)
-        # ★2026-09-05 超时但 OUT 里有 TICKERR：worker 帧 tick 本身报错（命令可能未执行）
-        for line in last_raw.splitlines():
-            if line.startswith('TICKERR|'):
-                return False, 'worker-tickerr: %s' % line.split('|', 1)[1]
-        return False, '(timeout %.1fs)' % timeout
+                if line.startswith('TICKERR|'):
+                    return False, 'worker-tickerr: %s' % line.split('|', 1)[1]
+            return False, '(timeout %.1fs)' % timeout
+
+    @staticmethod
+    def _replace_with_retry(src, dst, timeout=2.0):
+        """os.replace 重试：worker 60fps 读 cmd 文件的瞬间会短暂锁住目标，
+        WinError 5 重试到它读完为止（一个 tick ≈16ms，2s 上限极宽松）。"""
+        deadline = time.time() + timeout
+        while True:
+            try:
+                os.replace(src, dst)
+                return
+            except PermissionError:
+                if time.time() >= deadline:
+                    raise
+                time.sleep(0.01)
 
     def shutdown(self):
         """停机：worker 还原原始 更新函数/渲染函数 并停止消费。"""

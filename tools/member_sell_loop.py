@@ -29,30 +29,59 @@ spec.loader.exec_module(ZGUI)
 
 
 def find_hwnd_by_pid(pid):
-    """按 PID 找该实例的主窗口（带标题的可见顶层窗口）。找不到返回 0。
+    """按 PID 找该实例可点击的窗口句柄。找不到返回 0。
 
-    ★ctypes 实现（win32gui 无 GetWindowThreadProcessId）。
+    ★2026-09-06 修复：多开器实例的带标题 Galaxy2DEngine 窗口是**子窗口**
+    （顶层 WTWindow 属多开器进程且无标题），只枚举顶层会永远返回 0。
+    与生产 get_hwnd（PowerShell MainWindowHandle=引擎子窗口）语义对齐：
+    优先顶层带标题窗口，其次该进程的 Galaxy2DEngine 子窗口。
     """
     import ctypes
     from ctypes import wintypes
     user32 = ctypes.windll.user32
-    hits = []
+    top_hits = []
+    engine_hits = []
+    state = {"pid": pid}
+
+    def classify(h):
+        try:
+            pidv = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(h, ctypes.byref(pidv))
+            if pidv.value != state["pid"] or not user32.IsWindowVisible(h):
+                return
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(h, cls, 64)
+            n = user32.GetWindowTextLengthW(h)
+            buf = ctypes.create_unicode_buffer(n + 1)
+            user32.GetWindowTextW(h, buf, n + 1)
+            if cls.value == "Galaxy2DEngine":
+                engine_hits.append(h)
+            if buf.value:
+                top_hits.append(h)
+        except Exception:
+            pass
 
     ENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 
     def cb(h, _lp):
-        pidv = wintypes.DWORD()
-        user32.GetWindowThreadProcessId(h, ctypes.byref(pidv))
-        if pidv.value == pid and user32.IsWindowVisible(h):
-            n = user32.GetWindowTextLengthW(h)
-            buf = ctypes.create_unicode_buffer(n + 1)
-            user32.GetWindowTextW(h, buf, n + 1)
-            if buf.value:
-                hits.append(h)
+        classify(h)
+        try:
+            user32.EnumChildWindows(h, ENUMPROC(_child), 0)
+        except Exception:
+            pass
+        return True
+
+    def _child(h, _lp):
+        classify(h)
         return True
 
     user32.EnumWindows(ENUMPROC(cb), 0)
-    return hits[0] if hits else 0
+    # ★引擎子窗口优先——游戏进程顶层还可能有 GGESUB 聊天窗口（历史坑：误中它点击全落聊天框）
+    if engine_hits:
+        return engine_hits[0]
+    if top_hits:
+        return top_hits[0]
+    return 0
 
 
 def main():
@@ -92,8 +121,16 @@ def main():
                 continue
             ZGUI.set_target_hwnd(hwnd)
             cnt = ZGUI._bag_used_count(gw)
+            if cnt < 0:
+                # ★2026-09-06 修复：队员登录后背包面板是关的 → 计数 -1 →
+                #   旧逻辑直接跳过且永远不开包 → 永远不出售。这里先开包再数。
+                if ZGUI._bag_ensure_open(gw, hwnd):
+                    cnt = ZGUI._bag_used_count(gw)
+                else:
+                    log.warning("背包打不开（窗口可能不在游戏界面），下轮重试")
+            log.info("巡检: 背包占用 %s 格（阈值 %d）" % (cnt, args.min_count))
             if cnt >= args.min_count:
-                log.info("背包占用 %d 格 >= %d，开始出售..." % (cnt, args.min_count))
+                log.info("开始出售...")
                 n = ZGUI.zhuagui_sell_junk(gw, hwnd=hwnd)
                 log.info("本次卖出 %d 件" % n)
         except Exception as e:
