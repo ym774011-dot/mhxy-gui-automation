@@ -1152,7 +1152,128 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
     return False
 
 
-_MISMATCH = {"task": "", "n": 0}  # ★2026-09-06 同一鬼"天眼落点被弹回"累计计数（防循环烧天眼）
+_MISMATCH = {"task": "", "n": 0, "ts": 0.0}  # ★2026-09-06 同一鬼"天眼落点被弹回"累计（防循环烧天眼）
+
+# ★2026-09-06 地图编号→名称 学习表（传送圈.目标 存的是地图编号，需译回名称）。
+#   已知种子来自 MPCG/实测；其余在各实例跑图时由 _learn_map_id 自动补全。
+_MAP_ID_FILE = os.path.join(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))), "data", "pzxy_map_ids.json")
+
+
+def _load_map_ids():
+    try:
+        import json as _json
+        with open(_MAP_ID_FILE, encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return {"1140": "普陀山", "1142": "女儿村", "1512": "魔王寨", "1513": "盘丝洞"}
+
+
+def _save_map_ids(d):
+    try:
+        import json as _json
+        os.makedirs(os.path.dirname(_MAP_ID_FILE), exist_ok=True)
+        _tmp = _MAP_ID_FILE + ".tmp"
+        with open(_tmp, "w", encoding="utf-8") as f:
+            _json.dump(d, f, ensure_ascii=False, indent=1)
+        os.replace(_tmp, _MAP_ID_FILE)
+    except Exception:
+        pass
+
+
+def _learn_map_id(gateway):
+    """把当前 地图编号→地图名称 记入学习表（传送圈跨图的译码基础，幂等）。"""
+    try:
+        r = _lua_call(gateway,
+                      r'''local m=tp.地图
+__out=tostring(m and m.地图编号 or '')..'|'..tostring(m and m.地图名称 or '')''') or ""
+        mid, name = r.split("|", 1)
+        if not mid.isdigit() or not name:
+            return
+        d = _load_map_ids()
+        if str(d.get(mid)) != name:
+            d[mid] = name
+            _save_map_ids(d)
+            logger.info("地图ID学习：%s=%s" % (mid, name))
+    except Exception:
+        pass
+
+
+def _portal_walk_back(gateway, hwnd, target_map, max_wait=25.0):
+    """传送圈走回（零消耗跨图）：当前图 传送圈 里找 目标==target_map 的门，
+    点击 所在xy（世界坐标+屏幕偏移，与 NPC 点击同款换算）走回门上自动跨图。
+
+    ★2026-09-06 实锤：tp.地图.传递数据.传送圈[k] = {所在x,所在y,目标(地图编号),
+      目标x,目标y,显示,参数}——即本图全部传送门。天眼被弹回后角色就站在门旁，
+      点门即回，不依赖接引人、不动任务、不耗道具。
+    ★传递数据可能滞留旧图（合成旗飞城不重建场景，实测长安挂着大唐境外数据），
+      故 传递数据.名称 必须等于当前地图名才可用。
+    成功（已到目标图）返回 True。
+    """
+    if not hwnd or not target_map:
+        return False
+    ids = _load_map_ids()
+    tid = None
+    for k, v in ids.items():
+        if v == target_map or str(v).find(target_map) >= 0 or target_map.find(str(v)) >= 0:
+            tid = str(k)
+            break
+    if not tid:
+        return False  # 目标图编号未知（等 _learn_map_id 学到后下轮可用）
+    code = r"""
+local m = tp.地图
+local td = m and m.传递数据
+if type(td) ~= 'table' then __out = 'N' return end
+local parts = {}
+parts[#parts+1] = tostring(m.地图名称 or '')
+parts[#parts+1] = tostring(m.地图编号 or '')
+parts[#parts+1] = tostring(td.名称 or '')
+local tc = td.传送圈
+if type(tc) == 'table' then
+  for k, v in pairs(tc) do
+    if type(v) == 'table' then
+      parts[#parts+1] = tostring(v.目标 or '') .. '|' ..
+        tostring(v.所在x or '') .. ',' .. tostring(v.所在y or '')
+    end
+  end
+end
+__out = table.concat(parts, ' ;; ')
+"""
+    r = _lua_call(gateway, code) or ""
+    segs = r.split(" ;; ")
+    if len(segs) < 4 or segs[2] != segs[0]:
+        return False  # 传递数据滞留旧图（与当前图名不符），不可用
+    off = _lua_call(gateway,
+                    r'''local o=tp.屏幕.xy __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)''') or "0,0"
+    try:
+        ox, oy = [int(float(v)) for v in off.split(",")]
+    except Exception:
+        ox = oy = 0
+    for seg in segs[3:]:
+        p = seg.split("|")
+        if len(p) != 2 or p[0] != tid:
+            continue
+        try:
+            ax, ay = [int(float(v)) for v in p[1].split(",")]
+        except Exception:
+            continue
+        post_click(hwnd, ax + ox + random.randint(-3, 3),
+                   ay + oy + random.randint(-3, 3), gateway=gateway)
+        _sleep(random.uniform(0.8, 1.2))
+        # 走路+跨图轮询（按编号判到达，名称兜底）
+        t0 = time.time()
+        while time.time() - t0 < max_wait:
+            _sleep(random.uniform(0.8, 1.2))
+            rr = _lua_call(gateway,
+                           r'''local m=tp.地图
+__out=tostring(m and m.地图编号 or '')..'|'..tostring(m and m.地图名称 or '')''') or ""
+            cur_id, cur_name = (rr.split("|", 1) + [""])[:2]
+            if cur_id == tid or (cur_name and (cur_name == target_map
+                                               or target_map in cur_name)):
+                _learn_map_id(gateway)
+                return True
+        return False
+    return False
 
 
 def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
@@ -1209,79 +1330,67 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
             # 此时不消耗天眼瞬移（没有目标坐标），直接返回等待队长处理。
             logger.warning("确保任务：组员模式但任务栏无抓鬼任务（等队长接任务）")
         return False
-    # ★2026-09-06 省天眼决策树（用户要求：不能循环烧天眼，浪费且无收益）：
-    #   异图 → 先试免费接引人跨图（成功=0消耗）
-    #   → 跨不动才天眼（常规机制：落点=鬼坐标）
-    #   → 天眼仍被弹回（=鬼刷在传送门旁实锤）→ 再跨；跨不动 → 回长安重接止血
-    #   → 同一鬼错位累计>=2次后停用天眼（损失封顶，等鬼刷新/换任务）
+    # ★2026-09-06 省天眼决策树 v2（用户要求：不能循环烧天眼；且队伍中取消任务
+    #   需全员退队重组，重接不可用——只能"不动任务"零消耗回跨）：
+    #   异图 → ①接引人跨图（免费）→ ②传送圈走回（免费，读 传递数据.传送圈 点门）
+    #   → 都不行才天眼（常规：落点=鬼坐标）
+    #   → 天眼被弹回（鬼在传送门旁实锤）→ 再 ①→②
+    #   → 同一鬼错位>=2次后限流：每 4 分钟才允许烧 1 次天眼（等鬼自己走开，
+    #     实测 ~14min 鬼换位后自愈），其余轮次零消耗空转等待。
     def _mis(a, b):
         return bool(a and b and a != b and b not in a and a not in b)
 
     global _MISMATCH
+    _learn_map_id(gateway)  # 顺手学习 地图编号→名称（传送圈译码用）
     tname = task.get("name") or ""
     if _MISMATCH["task"] != tname:
-        _MISMATCH = {"task": tname, "n": 0}  # 换鬼重置计数
+        _MISMATCH = {"task": tname, "n": 0, "ts": 0.0}  # 换鬼重置计数
 
     target_map0 = snap.get("target_map") or ""
     cur_map0 = snap.get("map") or ""
     if _mis(cur_map0, target_map0):
-        # 异图：接引人免费跨图优先（乾坤殿↔五庄观 37 轮烧 37 符实锤后的止血位）
+        # 异图：先走免费通道（接引人 → 传送圈），成功 = 0 消耗
         if _npc_hop_map(gateway, hwnd, target_map0):
             logger.info("确保任务：异图(%s→%s)接引人跨图成功（省1个天眼符）"
                         % (cur_map0, target_map0))
             _sleep(random.uniform(0.8, 1.4))
             return True
-        if _MISMATCH["n"] >= 2:
-            # 该鬼已实证反复错位且跨图不可用 → 停用天眼，直接回长安重接
-            #（新鬼新坐标才是唯一出路；重接内部自带取消冷却等待，期间零消耗）
-            if member_mode:
-                logger.warning("确保任务：鬼 %s 反复错位且接引人不可用（%d次），"
-                               "组员停用天眼等队长重接" % (tname, _MISMATCH["n"]))
-                return False
-            logger.warning("确保任务：鬼 %s 反复错位且接引人不可用（%d次），"
-                           "停用天眼，直接回长安重接（防烧符）" % (tname, _MISMATCH["n"]))
-            try:
-                if zhuagui_go_back_changan(gateway):
-                    ok_r, msg_r = zhuagui_retake_task(gateway)
-                    logger.info("确保任务：重接结果 %s" % msg_r)
-                else:
-                    logger.warning("确保任务：回长安失败，本轮放弃")
-            except Exception as _e:
-                logger.warning("确保任务：重接异常 %s" % _e)
+        if _portal_walk_back(gateway, hwnd, target_map0):
+            logger.info("确保任务：异图(%s→%s)传送圈走回成功（省1个天眼符）"
+                        % (cur_map0, target_map0))
+            _sleep(random.uniform(0.8, 1.4))
+            return True
+        if _MISMATCH["n"] >= 2 and (time.time() - _MISMATCH["ts"]) < 240.0:
+            # 该鬼已实证反复错位且两条免费通道都不可用 → 限流：4 分钟内不烧符
+            logger.info("确保任务：鬼 %s 卡传送门（错位%d次），限流等待鬼走开（%.0fs 内不烧符）"
+                        % (tname, _MISMATCH["n"], 240.0 - (time.time() - _MISMATCH["ts"])))
             return False
-    # 天眼瞬移（同图直达鬼坐标 / 异图无接引人时的常规手段）
+    # 天眼瞬移（同图直达鬼坐标 / 异图免费通道都不可用时的常规手段）
     if not zhuagui_use_tianyan(gateway):
         logger.warning("确保任务：使用天眼失败")
         return False
     _sleep(random.uniform(1.2, 1.8))  # ★2026-09-05 提速 2.0~3.0 → 1.2~1.8（天眼瞬移本身瞬时生效）
     # 瞬移后校验目标地图：天眼落点=任务目标坐标，若该坐标恰为地图传送门
-    # （乾坤殿(633,36)↔五庄观 等实锤），角色踩门被自动弹回相邻图。
+    # （乾坤殿↔五庄观 等实锤），角色踩门被自动弹回相邻图。
     snap2 = _snapshot(gateway)
     target_map = snap2["target_map"] or target_map0
     cur_map = snap2["map"] or ""
     if _mis(cur_map, target_map):
         _MISMATCH["n"] += 1
-        # 落点被弹回 = 鬼在传送门旁实锤 → 接引人跨回（免费）
+        _MISMATCH["ts"] = time.time()
+        # 落点被弹回 = 鬼在传送门旁实锤 → 免费通道跨回
         if _npc_hop_map(gateway, hwnd, target_map):
             logger.info("确保任务：落点错位（目标=%s 实际=%s），接引人跨图回目标图成功"
                         % (target_map, cur_map))
             _sleep(random.uniform(0.8, 1.4))  # 落地稳定
             return True
-        # 跨不动 → 回长安重接止血（新鬼新坐标），绝不空转下一轮再烧天眼
-        if member_mode:
-            logger.warning("确保任务：落点错位（目标=%s 实际=%s）且接引人不可用；"
-                           "组员不能重接，等队长处理（错位计数=%d）" % (target_map, cur_map, _MISMATCH["n"]))
-            return False
-        logger.warning("确保任务：落点错位（目标=%s 实际=%s）且接引人不可用，回长安重接止血"
-                       % (target_map, cur_map))
-        try:
-            if zhuagui_go_back_changan(gateway):
-                ok_r, msg_r = zhuagui_retake_task(gateway)
-                logger.info("确保任务：重接结果 %s" % msg_r)
-            else:
-                logger.warning("确保任务：回长安失败，本轮放弃")
-        except Exception as _e:
-            logger.warning("确保任务：重接异常 %s" % _e)
+        if _portal_walk_back(gateway, hwnd, target_map):
+            logger.info("确保任务：落点错位（目标=%s 实际=%s），传送圈走回目标图成功"
+                        % (target_map, cur_map))
+            _sleep(random.uniform(0.8, 1.4))
+            return True
+        logger.warning("确保任务：落点错位（目标=%s 实际=%s）且两条免费通道不可用，"
+                       "限流等待鬼走开（错位计数=%d）" % (target_map, cur_map, _MISMATCH["n"]))
         return False
     return True
 
@@ -1649,7 +1758,7 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     if ok:
         # ★2026-09-06 本轮成功 = 错位循环已解除，重置防烧符计数
         global _MISMATCH
-        _MISMATCH = {"task": "", "n": 0}
+        _MISMATCH = {"task": "", "n": 0, "ts": 0.0}
     return ok, msg
 
 
