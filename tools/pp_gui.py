@@ -59,8 +59,13 @@ class _MSLLHOOKSTRUCT(ctypes.Structure):
 
 def start_mouse_hook(on_click):
     """装低级鼠标钩子，左键按下回调 on_click(sx, sy)。返回 (proc, hook)。"""
-    HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int,
-                                  ctypes.c_ssize_t, ctypes.c_ssize_t)
+    # 必须显式声明 CallNextHookEx 签名：默认 argtypes 会把 l_param 大指针值
+    # 按 c_int 转换 → OverflowError，每次鼠标事件都抛异常，导致 GUI 卡死关不掉
+    user32.CallNextHookEx.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                      wintypes.WPARAM, wintypes.LPARAM]
+    user32.CallNextHookEx.restype = ctypes.c_void_p
+    HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_void_p, ctypes.c_int,
+                                  wintypes.WPARAM, wintypes.LPARAM)
 
     def handler(n_code, w_param, l_param):
         if n_code == 0 and w_param == WM_LBUTTONDOWN:
