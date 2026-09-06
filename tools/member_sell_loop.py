@@ -5,6 +5,11 @@
 在队伍里跟着队长即可，唯一需要自动化的就是清背包（抓鬼奖励的垃圾装备
 很快塞满 20 格）。出售走背包自带"出售"绑定，任意地图可用，不依赖商店。
 
+★2026-09-06 用户实测修正：背包面板一直开着 物品数据 不刷新（冻结）。
+  循环改为：背包平时保持关闭；每 ~2 轮抓鬼（75s，可调）开包一次 →
+  查可售列表（分类=武器/防具）→ 有则出售 → 查完关包。
+  开包动作本身即强制重建物品数据，保证每次巡检看到的都是新背包。
+
 用法（由 zhuagui_squad.py 自动拉起，也可手动）:
     E:/py/python.exe tools/member_sell_loop.py --pid 12345
         --gateway file://pzxy_p12345
@@ -89,10 +94,10 @@ def main():
     ap.add_argument("--pid", type=int, required=True)
     ap.add_argument("--gateway", default=None,
                     help="缺省 file://pzxy_p<pid>（与播种名一致）")
-    ap.add_argument("--min-count", type=int, default=ZGUI._SELL_MIN_BAG_COUNT,
-                    help="背包占用达到该格数才出售（默认 12）")
-    ap.add_argument("--interval", type=float, default=90.0,
-                    help="巡检间隔秒（默认 90，带随机抖动）")
+    ap.add_argument("--min-count", type=int, default=0,
+                    help="(已废弃，保留兼容) 2026-09-06 起改为'有可售物品即卖'")
+    ap.add_argument("--interval", type=float, default=75.0,
+                    help="巡检间隔秒（默认 75≈2 轮抓鬼，带随机抖动）")
     args = ap.parse_args()
     gw = args.gateway or ("file://pzxy_p%d" % args.pid)
 
@@ -107,8 +112,8 @@ def main():
             encoding="utf-8")])
     log = logging.getLogger("member")
 
-    log.info("队员出售循环启动 pid=%d gw=%s min_count=%d interval=%.0fs"
-             % (args.pid, gw, args.min_count, args.interval))
+    log.info("队员出售循环启动 pid=%d gw=%s interval=%.0fs (有可售即卖,查完关包)"
+             % (args.pid, gw, args.interval))
     # 开跑先钉一次目标窗口（member 自己的窗口），防 ZGUI 内部 get_hwnd 串号
     hwnd = find_hwnd_by_pid(args.pid)
     if hwnd:
@@ -120,19 +125,23 @@ def main():
                 time.sleep(10)
                 continue
             ZGUI.set_target_hwnd(hwnd)
-            cnt = ZGUI._bag_used_count(gw)
-            if cnt < 0:
-                # ★2026-09-06 修复：队员登录后背包面板是关的 → 计数 -1 →
-                #   旧逻辑直接跳过且永远不开包 → 永远不出售。这里先开包再数。
-                if ZGUI._bag_ensure_open(gw, hwnd):
-                    cnt = ZGUI._bag_used_count(gw)
-                else:
-                    log.warning("背包打不开（窗口可能不在游戏界面），下轮重试")
-            log.info("巡检: 背包占用 %s 格（阈值 %d）" % (cnt, args.min_count))
-            if cnt >= args.min_count:
-                log.info("开始出售...")
-                n = ZGUI.zhuagui_sell_junk(gw, hwnd=hwnd)
-                log.info("本次卖出 %d 件" % n)
+            # ★2026-09-06 重构（用户实测：背包一直开着 物品数据 不刷新，
+            #   占用冻结在旧值、永远到不了阈值 → 永远不出售）：
+            #   平时背包保持关闭；每轮巡检 开包(=强制重建物品数据) →
+            #   查可售列表 → 有则卖 → finally 关包。
+            if not ZGUI._bag_ensure_open(gw, hwnd):
+                log.warning("背包打不开（窗口可能不在游戏界面），下轮重试")
+                time.sleep(random.uniform(args.interval * 0.8, args.interval * 1.3))
+                continue
+            try:
+                items = ZGUI._sellable_items(gw)
+                log.info("巡检: 可售物品 %d 件" % len(items))
+                if items:
+                    log.info("开始出售...")
+                    n = ZGUI.zhuagui_sell_junk(gw, hwnd=hwnd)
+                    log.info("本次卖出 %d 件" % n)
+            finally:
+                ZGUI._bag_ensure_close(gw, hwnd)
         except Exception as e:
             log.warning("巡检异常（继续）: %s" % e)
         time.sleep(random.uniform(args.interval * 0.8, args.interval * 1.3))

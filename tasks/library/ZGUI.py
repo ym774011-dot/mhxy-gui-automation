@@ -1269,17 +1269,21 @@ local function deep_concat(v, depth)
   for _, v2 in pairs(v) do acc[#acc+1] = deep_concat(v2, depth + 1) end
   return table.concat(acc, '')
 end
-local parts = {}
-for i = 1, 100 do
-  local it = pd[i]
-  if type(it) == 'table' then
-    local name = tostring(it.名称 or '')
-    local itype = tostring(it.类型 or '')
-    local desc = deep_concat(it.说明, 0)
-    local sell = (itype == '武器') or (itype == '装备') or (name:find('上古锻造图策') ~= nil)
-    if not sell then sell = (desc:find('装备角色') ~= nil) end
-    if not sell then sell = (tostring(it.分类 or ''):find('武器') ~= nil
-                             or tostring(it.分类 or ''):find('装备') ~= nil) end
+    local parts = {}
+    for i = 1, 100 do
+      local it = pd[i]
+      if type(it) == 'table' then
+        local name = tostring(it.名称 or '')
+        local itype = tostring(it.类型 or '')
+        local cat = tostring(it.分类 or '')
+        local desc = deep_concat(it.说明, 0)
+        -- ★2026-09-06 队长满包20格0可售实锤修正：装备的 类型=具体部位
+        --   （头盔/衣服/鞋子/腰带/项链/武器...），'武器'/'装备'一个都匹配不上；
+        --   装备的 **分类** 字段才是 '武器'/'防具'。主判据改分类，类型作兼容。
+        local sell = (cat == '武器') or (cat == '防具')
+        if not sell then sell = (itype == '武器') or (itype == '装备') end
+        if not sell then sell = (name:find('上古锻造图策') ~= nil) end
+        if not sell then sell = (desc:find('装备角色') ~= nil) end
     if sell then
       local sa = it.小动画
       local x = type(sa) == 'table' and tonumber(sa.x) or 0
@@ -1322,8 +1326,12 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
     """出售背包垃圾装备。返回出售件数；背包未开/无可卖/关闭开关返回 0。
 
     交互（用户实测）：左键点装备（拿起）→ 左键点"出售"（卖出）。
-    每件都校验：拿起对象非 0 才点出售；卖后重查列表确认该格子消失，
-    仍在则再点一次原格子放回并中止本次出售（防物品拿在手上乱放）。
+    ★2026-09-06 复核加固（队员实测：面板开着时 物品数据 可能不刷新）：
+      - 先看拿起对象：手未空=卖出未生效，点原格子放回并中止；
+      - 手已空=物品已脱手，但先关包再开包**强制重建物品数据**再复核
+        （按同名数量是否减少判定，防格子位移误判），
+        避免"旧数据仍列该格→误判未卖→点原格子反拿起新物品"。
+      - tried 集合防同一物品反复重试。
     """
     if os.environ.get("MHXY_ZG_SELL", "1") == "0":
         return 0
@@ -1336,36 +1344,46 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
         return 0
     sx0, sy0, sx1, sy1 = _SELL_POS
     sold = 0
+    tried = set()
     for _ in range(_SELL_MAX_ITEMS):
-        items = _sellable_items(gateway)
+        items = [it for it in _sellable_items(gateway)
+                 if (it[0], it[3]) not in tried]
         if not items:
             break
         gid, ix, iy, iname = items[0]
+        tried.add((gid, iname))
+        same_before = sum(1 for it in items if it[3] == iname)
         post_click(hwnd, ix + random.randint(-2, 2), iy + random.randint(-2, 2),
                    gateway=gateway)
         _sleep(random.uniform(0.25, 0.45))
         pick = _bag_pick_state(gateway)
         if pick in ("0", "", "nil"):
-            logger.info("出售装备：点选 %s(格子%s) 未拿起，跳过本次出售" % (iname, gid))
+            logger.info("出售装备：点选 %s(格子%s) 未拿起，跳过" % (iname, gid))
             continue
         scx = random.randint(sx0 + 3, max(sx0 + 4, sx1 - 3))
         scy = random.randint(sy0 + 2, max(sy0 + 3, sy1 - 2))
         post_click(hwnd, scx, scy, gateway=gateway)
         _sleep(random.uniform(0.35, 0.6))
-        # 校验：该格子消失 = 卖出
+        # 手未空 = 卖出未生效 → 放回并中止
+        if _bag_pick_state(gateway) not in ("0", "", "nil"):
+            logger.warning("出售装备：%s(格子%s) 点出售未生效，放回并中止" % (iname, gid))
+            post_click(hwnd, ix, iy, gateway=gateway)
+            _sleep(random.uniform(0.25, 0.45))
+            break
+        # 手已空 → 关包再开包强制刷新物品数据，按同名数量复核
+        if not (_bag_ensure_close(gateway, hwnd) and _bag_ensure_open(gateway, hwnd)):
+            logger.warning("出售装备：卖出后刷新背包失败，按已卖出计并中止")
+            sold += 1
+            break
         now_items = _sellable_items(gateway)
-        still = any(it[0] == gid and it[3] == iname for it in now_items)
-        if not still:
+        same_after = sum(1 for it in now_items if it[3] == iname)
+        if same_after < same_before:
             sold += 1
             if verbose:
-                logger.info("出售装备：%s(格子%s) 已卖出 (%d/%d)" % (iname, gid, sold, _SELL_MAX_ITEMS))
+                logger.info("出售装备：%s(格子%s) 已卖出 (%d/%d)"
+                            % (iname, gid, sold, _SELL_MAX_ITEMS))
         else:
-            # 卖出失败 → 物品可能还在手上，点原格子放回，中止本轮出售
-            logger.warning("出售装备：%s(格子%s) 点出售未生效，放回并中止" % (iname, gid))
-            if _bag_pick_state(gateway) not in ("0", "", "nil"):
-                post_click(hwnd, ix, iy, gateway=gateway)
-                _sleep(random.uniform(0.25, 0.45))
-            break
+            logger.warning("出售装备：%s(格子%s) 手已空但数量未减，跳过该物品" % (iname, gid))
     if sold:
         logger.info("出售装备：本次共卖出 %d 件" % sold)
     return sold
