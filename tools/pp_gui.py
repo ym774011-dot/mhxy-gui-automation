@@ -213,9 +213,37 @@ class PPApp(tk.Tk):
         self._watch_started = False
         self._rejoining = set()           # 正在归队流程的实例 pid（防双驱动）
 
+        # ★2026-09-07 可观测性：squad_auto_team 的 _log 原本只 print 到
+        #   stdout（GUI 无控制台 → 全程丢失）。组队/走位/建队每一步的内部
+        #   日志因此不可见（只能靠肉眼观察客户端），桥接到 GUI 日志落地。
+        self._bridge_sat_log()
+
         self._build_ui()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
         self.after(200, self._tick)
+
+    def _bridge_sat_log(self):
+        """把 squad_auto_team 的日志接进 GUI 日志（写 pp_gui.log）。
+
+        建队/走位/申请等内部步骤原本只 print，GUI 无控制台时全部丢失，
+        故障只能靠肉眼观察。此处包装 sat._log 同时落到 GUI 日志。
+        """
+        orig = getattr(sat, "_log", None)
+        if orig is None:
+            return
+
+        def _bridge(msg, _orig=orig):
+            try:
+                _orig(msg)
+            except Exception:
+                pass
+            try:
+                self._log("[sat] %s" % (msg,))
+            except Exception:
+                pass
+
+        sat._log = _bridge
+        self._log("squad_auto_team 日志已桥接到 GUI（组队内部步骤可见）")
 
     # ---------- 配置 ----------
     def _load_cfg(self):
@@ -679,8 +707,19 @@ class PPApp(tk.Tk):
                     self._kill_stale_tasks()
                 if not self.scripts_started or self.teamflow_running:
                     continue
-                leader = next((i for i in self.instances
-                               if i.pid == leader_pid), None)
+                # ★2026-09-07：队长重登后 PID 会变（02:21 实证 p9472→24712）。
+                #   旧代码拿启动时的 leader_pid 死查，重启后一直在读死通道
+                #   → 看门狗永久失明。改为每轮按 role 重新解析当前队长。
+                with self.lock:
+                    leader = next((i for i in self.instances
+                                   if i.role == "leader"), None)
+                    if leader is None:
+                        leader = next((i for i in self.instances
+                                       if i.pid == leader_pid), None)
+                if leader is not None and leader.pid != leader_pid:
+                    self._log("[看门狗] 队长 PID 变更 %d → %d，跟随新通道"
+                              % (leader_pid, leader.pid))
+                    leader_pid = leader.pid
                 if leader is None or leader.status != S_ONLINE:
                     continue   # 队长不在（掉线重登中），等归队流程
                 # ★2026-09-07：顶栏读数零点击，战斗中也可判缺员
@@ -874,16 +913,35 @@ class PPApp(tk.Tk):
 
     def _maybe_adopt(self, inst):
         """进程消失但存在游离游戏窗口（启动器型 exe 拉起真客户端后自己退出）
-        → 收养该窗口为新 PID，避免误判掉线重复开游戏。返回窗口三元组或 None。"""
+        ★2026-09-07 加固（02:21 实证坑）：此前直接收养 orphans[0]，把刚重启的
+          队长新进程（PID=24712）误收养成"一号美人"槽 → 两个槽位驱动同一客户端
+          （双驱动：抢点击/抢面板，表现就是"组队不行"）。现在必须同时满足：
+            1) 窗口标题里的角色名与本实例角色名一致（ROLE_RE 提取）；
+            2) 该 PID 未被其它实例占用。
+        """
         orphans = self._untracked_windows()
         if not orphans:
             return None
-        pid, hwnd, title = orphans[0]
-        old = inst.pid
-        inst.pid, inst.name, inst.title = pid, "p%d" % pid, title
-        self._log("p%s 进程消失，但发现游离游戏窗口 PID=%d → 收养（不重启）"
-                  % (old, pid))
-        return (pid, hwnd, title)
+        m = ROLE_RE.search(inst.title or "")
+        want = m.group(1).strip() if m else ""
+        if not want:
+            self._log("p%s 进程消失，但实例角色名未知 → 不收养，按掉线重启"
+                      % inst.pid)
+            return None
+        with self.lock:
+            others = {i.pid for i in self.instances if i is not inst}
+        for pid, hwnd, title in orphans:
+            m2 = ROLE_RE.search(title or "")
+            name2 = m2.group(1).strip() if m2 else ""
+            if name2 != want or pid in others:
+                continue
+            old = inst.pid
+            inst.pid, inst.name, inst.title = pid, "p%d" % pid, title
+            self._log("p%s 进程消失，收养同名角色窗口 PID=%d（%s）" % (old, pid, want))
+            return (pid, hwnd, title)
+        self._log("p%s 进程消失，无同名(%s)游离窗口 → 不收养（防误绑）"
+                  % (inst.pid, want))
+        return None
 
     def _monitor_once(self):
         with self.lock:

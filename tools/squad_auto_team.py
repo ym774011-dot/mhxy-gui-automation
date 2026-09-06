@@ -161,31 +161,27 @@ def prep_leader(leader_pid):
     return pos
 
 
-def _team_panel_ensure(lhwnd, lw, want_open, wait_s=2.0):
-    """把组队面板开关到 want_open 状态（读 本类开关 实际状态配对，防双击）。
+def _team_panel_ensure(lhwnd, lw, want_open, settle=0.9):
+    """把组队面板切到 want_open 状态；★一次调用最多点一次图标。
 
-    ★2026-09-07：图标点击不再盲点——先读 _team_panel_visible，
-      状态不符才点，点击后轮询确认。None（通道失败）时等待重读不点。
-    返回 True=最终确认符合，False=未确认。
+    ★2026-09-07 修正（关键）：主队图标点击语义是"切换"（无队=举旗/收旗），
+      若点击后确认不到状态就补点 = 收旗 → 点身体建不了队（用户实测
+      "点击2次就取消了旗子"）。因此这里只读一次状态，不符则点一次并等待，
+      绝不二次点击；通道不可信（None）时宁可不点。
     """
     v = ZGUI._team_panel_visible(lw)
-    deadline = time.time() + wait_s
-    while time.time() < deadline:
-        if v is True and want_open:
-            return True
-        if v is False and not want_open:
-            return True
-        if v is not None:   # 状态确认但不符合 → 点一次
-            ZGUI._team_click_icon(lhwnd, lw)
-            for _ in range(5):
-                time.sleep(random.uniform(0.25, 0.4))
-                nv = ZGUI._team_panel_visible(lw)
-                if nv is not None and nv == want_open:
-                    return True
-        else:               # 通道失败：等一拍重读，绝不点
-            time.sleep(random.uniform(0.5, 0.8))
+    if v is None:                      # 通道失败：等一拍重读，读不到就不点
+        time.sleep(random.uniform(0.5, 0.8))
         v = ZGUI._team_panel_visible(lw)
-    return False
+        if v is None:
+            _log("组队面板状态读不到，跳过本次图标点击（防误触收旗）")
+            return False
+    if v == want_open:
+        return True
+    ZGUI._team_click_icon(lhwnd, lw)
+    time.sleep(settle)
+    nv = ZGUI._team_panel_visible(lw)
+    return (nv is None) or (nv == want_open)
 
 
 def create_team(leader_pid, cap_world, tries=3):
@@ -202,27 +198,43 @@ def create_team(leader_pid, cap_world, tries=3):
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
     for k in range(max(1, int(tries))):
-        coff = ZGUI._screen_offset_xy(lw)
-        if coff is None or lhwnd is None:
-            _log("建队: tp/窗口不可用，等 3s 重试")
+        if lhwnd is None:
+            _log("建队: 窗口不可用，等 3s 重试")
             time.sleep(3.0)
             continue
-        # 1) 走回锚点
-        ax, ay = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
-        if 0 <= ax <= 800 and 0 <= ay <= 600:
-            ZGUI.post_click(lhwnd, ax + random.randint(-2, 2),
-                            ay + random.randint(-2, 2), gateway=lw)
-            time.sleep(3.0)   # 等走位停稳
-        # 2) 确保面板打开（读状态配对）
-        if not _team_panel_ensure(lhwnd, lw, want_open=True):
-            _log("建队第%d次：组队面板无法打开，重试" % (k + 1))
-            continue
-        # 3) 鼠标移到队长身体点击（建队）；走位后刷新偏移再投影
+        # 1) 先开面板：开面板后 p7 数据才新鲜，可读到真实自身坐标
+        _team_panel_ensure(lhwnd, lw, want_open=True)
         coff = ZGUI._screen_offset_xy(lw)
         if coff is None:
+            _log("建队第%d次：tp 不可用，等 3s 重试" % (k + 1))
             _team_panel_ensure(lhwnd, lw, want_open=False)
+            time.sleep(3.0)
             continue
-        sx, sy = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
+        # 2) 新鲜自身坐标（面板开着，可信）；读不到才退回 cap_world 盲估计
+        self_xy = ZGUI._team_self_world_xy(lw)
+        use_xy = self_xy if self_xy else cap_world
+        _log("建队第%d次 自身坐标=%s（来源=%s）"
+             % (k + 1, use_xy, "p7新鲜" if self_xy else "cap_world盲估计"))
+        # 3) 偏离锚点则走回（失败的"点身体"=走路指令会带离原位）
+        if self_xy and (abs(cap_world[0] - self_xy[0]) > 60
+                        or abs(cap_world[1] - self_xy[1]) > 60):
+            ax, ay = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
+            if 0 <= ax <= 800 and 0 <= ay <= 600:
+                _log("建队第%d次 偏离锚点，点击走回 (%d,%d)" % (k + 1, ax, ay))
+                ZGUI.post_click(lhwnd, ax + random.randint(-2, 2),
+                                ay + random.randint(-2, 2), gateway=lw)
+                time.sleep(3.0)   # 等走位停稳
+                # 走完重新取一次坐标与偏移（相机/角色都变了）
+                coff = ZGUI._screen_offset_xy(lw) or coff
+                fresh = ZGUI._team_self_world_xy(lw)
+                if fresh:
+                    use_xy = fresh
+        # 4) 点身体建队
+        sx, sy = int(use_xy[0] + coff[0]), int(use_xy[1] + coff[1])
+        if not (0 <= sx <= 800 and 0 <= sy <= 600):
+            sx, sy = 400, 370     # 兜底：相机跟随，自身脚底约屏幕中心偏下
+            _log("建队第%d次 投影越界，改用固定屏幕点 (400,370)" % (k + 1))
+        _log("建队第%d次 点身体屏幕位 (%d,%d)" % (k + 1, sx, sy))
         ZGUI._team_click_body(lhwnd, lw, sx, sy)
         # 4) 零点击验证：顶部头像栏（实时渲染，无懒加载脏数据）
         time.sleep(1.5)
