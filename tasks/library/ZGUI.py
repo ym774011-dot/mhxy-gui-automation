@@ -1890,11 +1890,13 @@ def _bag_ensure_close(gateway, hwnd, tries=3) -> bool:
 #   ★tp 依赖：全部走 tp.主界面/tp.屏幕；tp 被服务器事件抹除时（2026-09-06
 #   20:28 实证，换图不恢复、仅重登重建）整套自动化同死，属同一运维事件。
 # ============================================================
-_TEAM_ICON_POS = (570, 583)                 # 主队图标（客户区，用户标定）
+_TEAM_ICON_POS = (570, 583)                 # 主队图标（客户区，用户标定；快捷键 ALT+T）
 _TEAM_REQLIST_RECT = (460, 140, 509, 152)   # "请求列表"按钮（用户标定）
 _TEAM_ALLOW_RECT = (514, 370, 541, 378)     # 申请列表"允许"（用户标定）
-# 申请者卡片名字行点击点（截图标定：卡宽~112，首卡名字中心 x≈159，y≈287）
-_TEAM_APPLY_SLOTS = ((159, 287), (271, 287), (383, 287), (495, 287))
+# 申请者卡片选中点（用户 21:44 标定 (162,166) 实测选中成功；卡距~112）
+# ★注意：点名字行(y≈287)/头像下部都不选中，必须点头像上部 (162,166)
+_TEAM_APPLY_SLOTS = ((162, 166), (274, 166), (386, 166), (498, 166))
+_TEAM_BODY_LIFT = 35                        # 身体点击：世界脚底锚点上移量（半身高，实测命中）
 
 _TEAM_STATS_LUA = r"""
 if type(tp) ~= 'table' then __out = '-' return end
@@ -1971,26 +1973,39 @@ __out = tostring(o.x) .. ',' .. tostring(o.y)
         return None
 
 
-def _team_click_icon(hwnd, gateway, tries=2):
-    """点主队图标（每次间隔~0.5s，弹面板/锁定目标模式都需要一拍）。"""
+def _team_click_icon(hwnd, gateway, tries=1):
+    """点主队图标（用户流程：点一次图标进入选目标模式，下一次身体点击生效）。
+
+    ★tries 默认 1：图标是模式开关，点两次=开又关（2026-09-06 实测建队
+    3 连败的根因）。
+    """
     for _ in range(max(1, tries)):
         post_click(hwnd, _TEAM_ICON_POS[0], _TEAM_ICON_POS[1], gateway=gateway)
         _sleep(random.uniform(0.45, 0.7))
 
 
-def _team_click_body(hwnd, gateway, sx, sy):
-    """点角色身体（世界坐标已换算成屏幕坐标 sx,sy），带小抖动。"""
-    post_click(hwnd, sx + random.randint(-4, 4), sy + random.randint(-6, 2),
-               gateway=gateway)
+def _team_click_body(hwnd, gateway, sx, sy, hover_pause=0.7):
+    """点角色身体。
+
+    ★(sx,sy) 是世界脚底锚点的屏幕坐标，角色精灵从脚底向上画，实际点击
+    点要上移 _TEAM_BODY_LIFT（2026-09-06 实测：不抬会点在脚下地面=移动
+    指令，角色走散）。hover_pause 供旗子光标（悬停目标才变旗）渲染。
+    """
+    tx, ty = sx + random.randint(-3, 3), sy - _TEAM_BODY_LIFT + random.randint(-3, 2)
+    _move_traj(hwnd, _last_mouse[0], _last_mouse[1], tx, ty)
+    _sleep(hover_pause)
+    post_click(hwnd, tx, ty, gateway=gateway)
     _sleep(random.uniform(0.4, 0.7))
 
 
 def zhuagui_team_create(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
                         world_xy=None, **kw):
-    """队长创建队伍：点主队图标 → 点自己身体 → 校验队伍数据出现。
+    """队长创建队伍：点主队图标(旗子模式) → 光标移到自己身体 → 左键。
 
-    world_xy: 队长当前世界坐标 (x,y)（如重登前从队伍数据读到的）；缺省点
-    屏幕中下 (400,430) 兜底（站立时相机近似锁定自身，实测踩点在中心带）。
+    world_xy: 队长当前世界坐标 (x,y)；缺省用屏幕点 (400,370) 兜底（脚底
+    锚点≈相机中心带，再由 _team_click_body 上移）。
+    ★队伍数据是面板懒加载：建队后头顶令牌即成功标志，但 Lua 读 队伍数据
+    需先点一次图标打开队伍信息面板，故校验前补一次图标点击。
     创建成功返回 True。
     """
     if hwnd is None:
@@ -1999,17 +2014,26 @@ def zhuagui_team_create(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
     if world_xy is not None and off is not None:
         sx, sy = int(world_xy[0] + off[0]), int(world_xy[1] + off[1])
     else:
-        sx, sy = 400, 430
+        sx, sy = 400, 400
     for attempt in range(3):
         _team_click_icon(hwnd, gateway)
         _team_click_body(hwnd, gateway, sx, sy)
-        for _ in range(8):
+        for _ in range(6):
             _sleep(random.uniform(0.4, 0.6))
             st = _team_stats(gateway)
             if st and st[0] >= 1 and st[2]:
                 if verbose:
                     logger.info("队伍创建成功：队长=%s 成员=%d（第%d次尝试）"
                                 % (st[2], st[0], attempt + 1))
+                return True
+        # 面板懒加载：点图标打开队伍信息面板后再读
+        _team_click_icon(hwnd, gateway)
+        for _ in range(4):
+            _sleep(random.uniform(0.4, 0.6))
+            st = _team_stats(gateway)
+            if st and st[0] >= 1 and st[2]:
+                if verbose:
+                    logger.info("队伍创建成功（开面板后确认）：队长=%s" % st[2])
                 return True
         if verbose:
             logger.info("创建第%d次尝试未观察到队伍数据，重试" % (attempt + 1))
@@ -2043,8 +2067,10 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
                              expect_members=5, max_rounds=8, **kw):
     """队长循环批准入队申请，直到成员数达 expect_members 或申请清空。
 
-    每轮：点图标 → "请求列表" → 点首个申请者卡片 → "允许"
-    （允许后面板自动关闭，下一轮重新打开）。返回最终成员数（不可读=-1）。
+    流程（用户 2026-09-06 手动演示实测）：第 1 轮点图标打开队伍信息面板，
+    之后每轮点"请求列表"→点首个申请者卡片→"允许"；允许后申请列表自动
+    关闭，下一轮重开即可（无需再点图标——图标会把面板关掉）。
+    返回最终成员数（不可读=-1）。
     """
     if hwnd is None:
         hwnd = get_hwnd()
@@ -2053,7 +2079,11 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
     ax = random.randint(_TEAM_ALLOW_RECT[0], _TEAM_ALLOW_RECT[2])
     ay = random.randint(_TEAM_ALLOW_RECT[1], _TEAM_ALLOW_RECT[3])
     for rnd in range(max(1, max_rounds)):
-        st = _team_stats(gateway)
+        if rnd == 0:
+            _team_click_icon(hwnd, gateway)   # 打开队伍信息面板
+        post_click(hwnd, rx, ry, gateway=gateway)            # "请求列表"
+        _sleep(random.uniform(0.7, 1.0))
+        st = _team_stats(gateway)                            # 面板已开，数据新鲜
         if st is None:
             logger.info("队伍面板不可读（tp 缺失?），中止审批")
             return -1
@@ -2062,12 +2092,9 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
             if verbose:
                 logger.info("审批结束：成员=%d 申请=%d" % (mem, app))
             return mem
-        _team_click_icon(hwnd, gateway)
-        post_click(hwnd, rx, ry, gateway=gateway)            # "请求列表"
-        _sleep(random.uniform(0.5, 0.8))
         slot = _TEAM_APPLY_SLOTS[0]                          # 每批总点首卡
         post_click(hwnd, slot[0], slot[1], gateway=gateway)  # 选中申请者
-        _sleep(random.uniform(0.3, 0.5))
+        _sleep(random.uniform(0.4, 0.6))
         post_click(hwnd, ax, ay, gateway=gateway)            # "允许"
         if verbose:
             logger.info("审批轮%d：已点申请者+允许（成员%d 申请%d）"
