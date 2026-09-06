@@ -850,7 +850,11 @@ class PPApp(tk.Tk):
             if cap is None:
                 self._log("[看门狗] 补组失败：无队长坐标")
                 return
-            st = ZGUI._team_stats(lw)
+            # ★散队判定必须读顶栏：p7 面板数据是懒加载快照，队员掉线后
+            #   会残留旧的满员数据 → 判定为"队伍还在"而永不重建（02:14 实证）
+            st = ZGUI.team_stats_topbar(lw)
+            if st is None:
+                st = ZGUI._team_stats(lw)
             mem = st[0] if st else 0
             if mem <= 1:
                 self._log("[看门狗] 队伍已散（%s 人）→ 重新建队" % mem)

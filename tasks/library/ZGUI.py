@@ -2092,6 +2092,58 @@ __out = tostring(o.x) .. ',' .. tostring(o.y)
         return None
 
 
+_SELF_XY_LUA = r"""
+local s = type(tp) == 'table' and tp.屏幕
+if type(s) ~= 'table' then __out = '' return end
+local z = s.主角
+local zx = z and z.xy
+if type(zx) ~= 'table' then __out = '' return end
+local o = s.xy
+local ox = (type(o) == 'table' and o.x) or 0
+local oy = (type(o) == 'table' and o.y) or 0
+__out = tostring(zx.x) .. ',' .. tostring(zx.y) .. ',' .. tostring(ox) .. ',' .. tostring(oy)
+"""
+
+
+def _self_xy_raw(gateway):
+    """→ (主角世界x, 主角世界y, 屏幕off x, 屏幕off y) 或 None。"""
+    r = _lua_call(gateway, _SELF_XY_LUA) or ""
+    parts = r.split(",")
+    if len(parts) != 4:
+        return None
+    try:
+        return tuple(float(p) for p in parts)
+    except ValueError:
+        return None
+
+
+def self_world_xy(gateway=DEFAULT_GATEWAY):
+    """★自身实时世界像素坐标（tp.屏幕.主角.xy）——零点击、不依赖队伍。
+
+    2026-09-07 定案（建队总失败的真根因）：
+      旧读法 `界面数据[7].队伍数据[1].地图数据` 其实是 **目标xy（上一次走路
+      目标）**，不是当前位置 —— 实测队长实际 (4440,5480)，该字段却返回
+      (2772,1563)=锚点，导致投影算出 (-1268,-3617) 越界 → 退回固定点
+      (400,370)（在脚底 y≈300 之下）→ 点到地面=走路指令 → 永远建不了队。
+      且无队伍时该表为空（懒加载），"队长当前位置: None" 亦由此而来。
+      `tp.屏幕.主角.xy` 是引擎每帧维护的主角坐标，散人/队长/队员都可读。
+    """
+    v = _self_xy_raw(gateway)
+    return (v[0], v[1]) if v else None
+
+
+def self_screen_xy(gateway=DEFAULT_GATEWAY):
+    """★自身脚底屏幕坐标 = 主角.xy + 屏幕.xy；静止时≈(400,300)（相机锁中心）。
+
+    移动中相机会滞后（实测普陀山 (1700,1300)+(-1120,-840)=(580,460)），
+    所以不能写死 (400,300)，必须实时相加。返回 None 表示通道不可用。
+    """
+    v = _self_xy_raw(gateway)
+    if not v:
+        return None
+    return (v[0] + v[2], v[1] + v[3])
+
+
 def _team_click_icon(hwnd, gateway, tries=1):
     """点主队图标（用户流程：点一次图标进入选目标模式，下一次身体点击生效）。
 
@@ -2132,30 +2184,34 @@ def zhuagui_team_create(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
     """
     if hwnd is None:
         hwnd = get_hwnd()
-    off = _screen_offset_xy(gateway)
-    if world_xy is not None and off is not None:
-        sx, sy = int(world_xy[0] + off[0]), int(world_xy[1] + off[1])
-    else:
-        sx, sy = 400, 400
     for attempt in range(3):
+        if attempt > 0:      # ★清掉上一轮可能残留的旗子，否则点图标=收旗
+            post_right_click(hwnd, random.randint(390, 430),
+                             random.randint(240, 280), gateway=gateway)
+            _sleep(random.uniform(0.6, 0.9))
+        # ★2026-09-07：脚底屏幕位改用实时 主角.xy+屏幕.xy（旧读法取的是
+        #   p7 目标xy，投影越界后退回 (400,370) 落在脚底之下=点地面走人）
+        sc = self_screen_xy(gateway)
+        if sc is None or not (0 <= sc[0] <= 800 and 0 <= sc[1] <= 600):
+            if world_xy is not None:
+                off = _screen_offset_xy(gateway)
+                sc = ((world_xy[0] + off[0], world_xy[1] + off[1])
+                      if off else (400.0, 300.0))
+            else:
+                sc = (400.0, 300.0)
+        sx, sy = int(sc[0]), int(sc[1])
         _team_click_icon(hwnd, gateway)
         _team_click_body(hwnd, gateway, sx, sy)
+        # ★2026-09-07：验证改读顶部头像栏（实时渲染），不再"点图标开面板"确认
+        #   ——无队时点图标=举旗，再点=收旗，容易把旗子取消导致建队失败。
+        #   顶栏语义：无队=0 人；建队成功=1 人（仅队长自己）。
         for _ in range(6):
             _sleep(random.uniform(0.4, 0.6))
-            st = _team_stats(gateway)
+            st = team_stats_topbar(gateway)
             if st and st[0] >= 1 and st[2]:
                 if verbose:
                     logger.info("队伍创建成功：队长=%s 成员=%d（第%d次尝试）"
                                 % (st[2], st[0], attempt + 1))
-                return True
-        # 面板懒加载：点图标打开队伍信息面板后再读
-        _team_click_icon(hwnd, gateway)
-        for _ in range(4):
-            _sleep(random.uniform(0.4, 0.6))
-            st = _team_stats(gateway)
-            if st and st[0] >= 1 and st[2]:
-                if verbose:
-                    logger.info("队伍创建成功（开面板后确认）：队长=%s" % st[2])
                 return True
         if verbose:
             logger.info("创建第%d次尝试未观察到队伍数据，重试" % (attempt + 1))
@@ -2208,11 +2264,13 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
             _team_click_icon(hwnd, gateway)   # 打开队伍信息面板
         post_click(hwnd, rx, ry, gateway=gateway)            # "请求列表"
         _sleep(random.uniform(0.7, 1.0))
-        st = _team_stats(gateway)                            # 面板已开，数据新鲜
-        if st is None:
-            logger.info("队伍面板不可读（tp 缺失?），中止审批")
+        st = _team_stats(gateway)          # 申请数只有面板里有
+        tb = team_stats_topbar(gateway)    # ★成员数以顶栏为准（实时渲染）
+        if st is None and tb is None:
+            logger.info("队伍数据不可读（tp 缺失?），中止审批")
             return -1
-        mem, app, leader = st
+        app = st[1] if st else 0
+        mem = tb[0] if tb else (st[0] if st else -1)
         if mem >= expect_members:
             if verbose:
                 logger.info("审批结束：成员=%d 申请=%d" % (mem, app))
@@ -2227,12 +2285,17 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
         ok = False
         for _ in range(10):
             _sleep(random.uniform(0.5, 0.7))
-            st2 = _team_stats(gateway)
-            if st2 and (st2[0] > mem or st2[1] < app):
+            tb2 = team_stats_topbar(gateway)        # 成员增量判据用顶栏
+            st2 = _team_stats(gateway)              # 申请数变化仍看面板
+            m2 = tb2[0] if tb2 else (st2[0] if st2 else -1)
+            if (tb2 or st2) and (m2 > mem or (st2 and st2[1] < app)):
                 ok = True
                 break
         if not ok and verbose:
             logger.info("审批轮%d 未观察到成员/申请变化，继续下一轮" % (rnd + 1))
+    tb = team_stats_topbar(gateway)
+    if tb:
+        return tb[0]
     st = _team_stats(gateway)
     return st[0] if st else -1
 
