@@ -2153,6 +2153,56 @@ def zhuagui_team_formation(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **
     return True
 
 
+# ============================================================
+# 十八门派传送（背包"传送"→梦幻高速列车）。2026-09-06 22:52 实测 5/5 全通过。
+# 坐标来源：tp.主界面.界面数据[8] 超级文本.显示表（文字区原点 client(100,275)，
+# 行高 15px；"关闭"回调包围盒 (114,365)-(142,379) 与显示表 x=14 吻合）。
+# ★铁律：队伍成员不能传送（对话框都不弹），必须散人状态传送后再组队。
+_TP_BAG_BTN_RECT = (258, 436, 287, 447)      # 背包底栏"传送"按钮（用户标定）
+_TP_DIALOG_CLOSE_POS = (616, 262)            # 对话框右上 X
+_TP_DEST_RECTS = {
+    "大唐官府": (114, 290, 166, 304), "天宫": (198, 290, 224, 304),
+    "狮驼岭": (275, 290, 314, 304), "凌波城": (352, 290, 391, 304),
+    "花果山": (422, 290, 461, 304), "化生寺": (114, 305, 166, 319),
+    "龙宫": (198, 305, 224, 319), "魔王寨": (275, 305, 314, 319),
+    "神木林": (345, 305, 384, 319), "天机城": (415, 305, 454, 319),
+    "女儿村": (114, 320, 166, 334), "普陀山": (198, 320, 237, 334),
+    "阴曹地府": (275, 320, 327, 334), "无底洞": (345, 320, 384, 334),
+    "女魃墓": (415, 320, 454, 334), "方寸山": (114, 335, 166, 349),
+    "五庄观": (198, 335, 237, 349), "盘丝洞": (275, 335, 314, 349),
+}
+
+
+def zhuagui_teleport(gateway=DEFAULT_GATEWAY, hwnd=None, dest="大唐官府",
+                     verbose=False, **kw):
+    """散人传送：开包 → 点"传送" → 点目的地文字链接（全左键）。
+
+    ★必须在散人状态调用（队员在队伍中会被游戏拦截，对话框不弹）。
+    传送落地约 2-4s；同图重复传送无效（地图/相机不变）。
+    返回 True 表示点击序列已执行（落地与否由调用方核对地图/偏移）。
+    """
+    if hwnd is None:
+        hwnd = get_hwnd()
+    if dest not in _TP_DEST_RECTS:
+        logger.info("未知传送目的地: %s" % dest)
+        return False
+    if not _bag_ensure_open(gateway, hwnd):
+        logger.info("背包打不开，无法传送")
+        return False
+    rect = _TP_BAG_BTN_RECT
+    post_click(hwnd, random.randint(rect[0], rect[2]),
+               random.randint(rect[1], rect[3]), gateway=gateway)
+    _sleep(random.uniform(1.0, 1.4))
+    rect = _TP_DEST_RECTS[dest]
+    post_click(hwnd, random.randint(rect[0], rect[2]),
+               random.randint(rect[1], rect[3]), gateway=gateway)
+    _sleep(random.uniform(2.5, 3.5))
+    _bag_ensure_close(gateway, hwnd)         # 传送后包可能仍开着，兜底关掉
+    if verbose:
+        logger.info("传送流程已执行: %s" % dest)
+    return True
+
+
 def tianyan_read_pos(gateway):
     """确认背包中存在天眼符，返回其图标中心坐标 (x,y)；未找到返回 (0,0)。
 
