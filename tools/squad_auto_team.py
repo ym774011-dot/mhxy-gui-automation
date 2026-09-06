@@ -63,11 +63,16 @@ def read_pos_closed(hwnd, gw, tries=3):
 
 
 def _read_pos_via_panel(hwnd, gw, open_already=False):
-    """点图标开面板刷新懒加载 → 读 队伍数据[1].地图数据（散人=自己）。"""
+    """点图标开面板刷新懒加载 → 读 队伍数据[1].地图数据（散人=自己）。
+
+    ★2026-09-07：队伍数据懒加载（重登后尤其慢），开面板后单次读常为空；
+      旧逻辑读空即返回 None，外层重试还会把面板点关 → 越试越读不到。
+      改为面板开着时轮询读（最多 ~4.3s），空了稍等再读。
+    """
     if not open_already:
         ZGUI.post_click(hwnd, 570, 583, gateway=gw)
         time.sleep(1.0)
-    r = ZGUI._lua_call(gw, r"""
+    code = r"""
 if type(tp) ~= 'table' then __out = '' return end
 local j = tp.主界面 and tp.主界面.界面数据
 local p7 = type(j) == 'table' and j[7]
@@ -76,7 +81,13 @@ local v = type(td) == 'table' and td[1]
 local md = type(v) == 'table' and v.地图数据
 if type(md) ~= 'table' then __out = '' return end
 __out = tostring(md.x) .. ',' .. tostring(md.y)
-""", timeout=10.0) or ""
+"""
+    r = ""
+    for _ in range(6):
+        r = ZGUI._lua_call(gw, code, timeout=10.0) or ""
+        if "," in r:
+            break
+        time.sleep(0.6)
     if "," not in r:
         return None
     x, y = r.split(",", 1)
@@ -130,10 +141,22 @@ def prep_leader(leader_pid):
         time.sleep(4.0)
         pos = (pos[0] + (CAP_TARGET[0] - pos[0]) * 0.5,
                pos[1] + (CAP_TARGET[1] - pos[1]) * 0.5)  # 盲估计，走完再验证
-    pos = read_pos_closed(lhwnd, lw)
-    _log("到达验证: %s（目标 %s）" % (pos, CAP_TARGET))
-    if pos is None or abs(CAP_TARGET[0] - pos[0]) > 40 or abs(CAP_TARGET[1] - pos[1]) > 40:
-        _log("[fail] 队长未到达 [139,80]")
+    est = pos
+    # ★2026-09-07 到达判定放宽（用户要求：不必精确踩 [139,80]，走离人群即可）：
+    #   1) 容差 40 → 60（±3 格），[138,80] 这类差一格不再判失败；
+    #   2) 面板读数失败重读 3 次（每次隔 2s），仍读不到按走位盲估计放行——
+    #      此前读不到直接 [fail]，人已到位却整场组队卡死。
+    for _ in range(3):
+        pos = read_pos_closed(lhwnd, lw)
+        if pos is not None:
+            break
+        time.sleep(2.0)
+    if pos is None:
+        pos = est
+        _log("[warn] 到达后面板仍读不到，按走位盲估计放行: %s" % (pos,))
+    _log("到达验证: %s（目标 %s，±3 格容差）" % (pos, CAP_TARGET))
+    if pos is None or abs(CAP_TARGET[0] - pos[0]) > 60 or abs(CAP_TARGET[1] - pos[1]) > 60:
+        _log("[fail] 队长未到达 [139,80] 附近（±3 格）")
         return None
     return pos
 
