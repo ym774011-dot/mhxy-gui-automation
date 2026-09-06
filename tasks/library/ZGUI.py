@@ -1429,8 +1429,16 @@ _LAST_ROUND_STAGES = {}  # ★2026-09-05 提速观测：最近一轮的分段耗
 #   命中稀有名单（知了王/星宿/远古系）就 CALL 开打，打完继续原流程。
 #   只管本图、不跨图、不追公告；MHXY_ZG_BONUS=0 可整体关闭。
 # ============================================================
-_BONUS_NAMES = ("知了王", "星宿", "远古")   # 名称包含即命中
+_BONUS_NAMES = ("知了王", "星宿", "远古")   # ★2026-09-06 定案：知了王/远古按名称命中；星宿名称多变（尾火虎等），按 称谓='星宿' 命中
 _BONUS_MAX_KILLS = 3                        # 单轮最多顺手打几只（防连环刷体）
+# ★2026-09-06 用户实测标定的"进入战斗"选项矩形（客户区坐标 x0,y0,x1,y1）：
+#   星宿对话（名上带"星宿"称谓）→ (118,308)-(175,318)；知了王对话 → (121,322)-(219,333)。
+#   远古无标定范围，退回红字首行检测。CALL 出对话后按矩形随机取点直点，
+#   不再依赖 _zhongkui_detect_rows（其首行对这些对话会点偏导致被跳过）。
+_BONUS_CLICK_RECT = {
+    "知了王": (121, 322, 219, 333),
+    "星宿": (118, 308, 175, 318),
+}
 _BONUS_ENABLED = os.environ.get("MHXY_ZG_BONUS", "1") != "0"
 
 
@@ -1441,9 +1449,11 @@ def zhuagui_bonus_battle(gateway=DEFAULT_GATEWAY, verbose=False,
     复用抓鬼 CALL 通道 `客户端:发送数据(0,3,6,标识,1)` 与 _call_guard 防重冷却。
     ★2026-09-06 修复（用户实测：CALL 出了对话框但没点击进战斗）：知了王/星宿/
     远古 CALL 后弹出"是否挑战"对话，必须点对话选项才进战——旧逻辑只干等 8s。
-    对话与抓鬼鬼同款红字 UI（选项不进 tp.窗口.对话栏.选项，实测恒 0 条），
-    走红字像素检测点**首行**（预设=开战选项）。点击前自动存截图到
-    test_data/bonus_dialog_*.png 留证：若首行实为"取消"，据图改点 rows[1] 即可。
+    ★2026-09-06 二次修复（用户标定）：星宿/知了王的"进入战斗"选项位置固定，
+    存入 _BONUS_CLICK_RECT 按矩形随机取点直点；星宿检测改按 称谓='星宿'
+    （名称多变：尾火虎等，不能按名称判），知了王/远古仍按名称。远古无标定
+    范围退回红字首行。点击前自动存截图到 test_data/bonus_dialog_*.png 留证。
+    "我正在战斗中，请勿扰。"=怪被占用，无可点选项，等进战超时跳过即可。
     进战后挂机等战斗结束（自动战斗），上限 max_battle_wait。
     """
     if not _BONUS_ENABLED:
@@ -1456,11 +1466,15 @@ if type(t) ~= 'table' then __out = '' return end
 for _, v in pairs(t) do
   if type(v) == 'table' then
     local name = tostring(v.名称 or '')
-    if name ~= '' and v.标识 then
-      if name:find('知了王') or name:find('星宿') or name:find('远古') then
-        __out = name .. '|' .. tostring(v.标识)
-        return
-      end
+    local title = tostring(v.称谓 or '')
+    local kind = ''
+    if name:find('知了王') then kind = '知了王'
+    elseif title:find('星宿') then kind = '星宿'
+    elseif name:find('远古') then kind = '远古'
+    end
+    if kind ~= '' and v.标识 then
+      __out = name .. '|' .. tostring(v.标识) .. '|' .. kind
+      return
     end
   end
 end
@@ -1469,23 +1483,31 @@ __out = ''
     r = _lua_call(gateway, code) or ""
     if "|" not in r:
         return None
-    bname, gid = r.split("|", 1)
+    parts = r.split("|")
+    if len(parts) < 2:
+        return None
+    bname, gid = parts[0], parts[1]
     if not gid.isdigit():
         return None
+    # 星宿名称多变（尾火虎等），kind 以称谓判定；旧格式无第三段时按名称兜底
+    bkind = parts[2] if len(parts) >= 3 else (
+        "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else "远古"))
     # 防重复 CALL：复用抓鬼目标的 8s 冷却
     _now = time.time()
     if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
         return None
     if verbose:
-        logger.info("发现稀有怪 %s，顺手 CALL 开打..." % bname)
+        logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
     _sleep(random.uniform(0.15, 0.4))
     _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
     _call_guard["gid"] = gid
     _call_guard["ts"] = _now
-    # ★CALL 后等对话弹出 → 点首行（开战选项）→ 等进战
-    # ★2026-09-06 实测（tools/bonus_dialog_calib.py 现场标定）：对话还有一种
-    #   "我正在战斗中，请勿扰。"（怪被别的队伍占用，无可点选项）——这不是点击
-    #   范围问题，跳过是正确行为。据此：无红字行=疑似被占用，存截图留证。
+    # ★CALL 后等对话弹出 → 点"进入战斗"选项 → 等进战
+    # ★2026-09-06 用户实测标定：星宿/知了王的进战斗选项位置固定，直接按
+    #   _BONUS_CLICK_RECT 矩形随机取点直点（红字首行检测对这些对话会点偏，
+    #   是此前"CALL 出对话却没进战被跳过"的根因之一）。远古无标定范围，
+    #   退回红字首行检测。另有一种"我正在战斗中，请勿扰。"对话（怪被别的
+    #   队伍占用，无可点选项）——点矩形无效果，等进战超时跳过即可。
     def _bonus_shot(tag):
         try:
             _img, _, _ = grab_client(hwnd)
@@ -1499,10 +1521,27 @@ __out = ''
         except Exception:
             return ""
 
+    rect = _BONUS_CLICK_RECT.get(bkind)
     clicked = False
     t_dlg = time.time()
     while time.time() - t_dlg < 5.0:
         if zhuagui_in_battle(gateway):
+            break
+        if rect:
+            # 有标定矩形：等对话渲染一小会再按矩形点，截图留证
+            if time.time() - t_dlg < random.uniform(0.7, 1.0):
+                _sleep(0.2)
+                continue
+            _shot = _bonus_shot("dialog")
+            if _shot:
+                logger.info("稀有怪对话截图：%s" % _shot)
+            x0, y0, x1, y1 = rect
+            post_click(hwnd, random.randint(x0, x1), random.randint(y0, y1),
+                       gateway=gateway)
+            clicked = True
+            if verbose:
+                logger.info("已按标定矩形点稀有怪对话 (x%d-%d,y%d-%d)"
+                            % (x0, x1, y0, y1))
             break
         rows = _zhongkui_detect_rows(gateway) if hwnd else []
         if rows:
@@ -1527,7 +1566,7 @@ __out = ''
         _sleep(random.uniform(0.5, 0.8))
     if not zhuagui_in_battle(gateway):
         if clicked:
-            logger.info("稀有怪 %s 已点对话首行仍未进战（选项可能点错/距离远），跳过" % bname)
+            logger.info("稀有怪 %s 已点进战斗选项仍未进战（选项可能点错/距离远/被占用），跳过" % bname)
         else:
             _shot = _bonus_shot("skip")
             logger.info("稀有怪 %s 无可点选项（大概率正被其他队伍占用'请勿扰'），跳过%s"
