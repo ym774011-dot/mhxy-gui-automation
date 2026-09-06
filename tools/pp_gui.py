@@ -110,11 +110,14 @@ def kill_task_process(pid):
 
 class Instance:
     _seq = 0
+    _role_count = {}
 
     def __init__(self, role, pid=None, name=None, status=S_LAUNCH, title=""):
         Instance._seq += 1
+        Instance._role_count[role] = Instance._role_count.get(role, 0) + 1
         self.seq = Instance._seq
         self.role = role            # 'leader' | 'member'
+        self.slot = "%s#%d" % (role, Instance._role_count[role])  # 录制键
         self.pid = pid
         self.name = name or ("p%d" % pid if pid else "")
         self.status = status
@@ -137,7 +140,7 @@ class PPApp(tk.Tk):
         self.lock = threading.Lock()
         self.instances = []
         self.logq = []
-        self.recording = False
+        self.recording_target = None   # 正在录制的实例（None=未录制）
         self._last_click_t = 0.0
         self._prev_btn = False
         self._port_i = 0
@@ -190,15 +193,13 @@ class PPApp(tk.Tk):
         self.btn_member.pack(side="left", padx=6)
         ttk.Button(bar, text="启动脚本", width=12,
                    command=self._start_all_tasks).pack(side="left", padx=6)
-        self.var_rec = tk.BooleanVar(value=False)
-        self.chk_rec = ttk.Checkbutton(
-            bar, text="记录登录点击（打开后手动登录一次即录制）",
-            variable=self.var_rec, command=self._toggle_rec)
-        self.chk_rec.pack(side="left", padx=12)
-        self.lbl_rec = ttk.Label(bar, text="已录 %d 次点击"
-                                 % len(self.cfg.get("login_clicks", [])))
+        # 录制：先在列表选中实例，再点此按钮；该号登录成功自动停止
+        self.btn_rec = ttk.Button(bar, text="录制登录点击", width=14,
+                                  command=self._toggle_rec)
+        self.btn_rec.pack(side="left", padx=12)
+        self.lbl_rec = ttk.Label(bar, text="未选中实例")
         self.lbl_rec.pack(side="left")
-        ttk.Button(bar, text="清空录制", width=8,
+        ttk.Button(bar, text="清空选中录制", width=12,
                    command=self._clear_rec).pack(side="left", padx=4)
 
         cols = ("pid", "role", "status", "title", "note")
@@ -222,18 +223,55 @@ class PPApp(tk.Tk):
             self.cfg["game_path"] = p
             self._save_cfg()
 
+    # ---------- 录制（按实例单独记录，该号登录成功自动停止） ----------
+    def _inst_by_seq(self, seq):
+        with self.lock:
+            for i in self.instances:
+                if i.seq == seq:
+                    return i
+        return None
+
+    def _clicks_store(self):
+        return self.cfg.setdefault("login_clicks_by_slot", {})
+
     def _toggle_rec(self):
-        self.recording = self.var_rec.get()
-        self._log("录制登录点击: %s（打开后到游戏窗口手动登录一次）"
-                  % ("开" if self.recording else "关"))
-        if not self.recording and self.cfg.get("login_clicks"):
-            self._save_cfg()
+        if self.recording_target is not None:
+            self._stop_rec("手动停止")
+            return
+        sel = self.tree.selection()
+        if not sel:
+            self._log("请先在列表中选中要录制的实例")
+            return
+        inst = self._inst_by_seq(int(sel[0]))
+        if inst is None:
+            return
+        self.recording_target = inst
+        self.btn_rec.config(text="停止录制(%s)" % inst.slot)
+        n = len(self._clicks_store().get(inst.slot, []))
+        self.lbl_rec.config(text="录制中: %s（已录 %d 步）" % (inst.slot, n))
+        self._log("开始录制 %s 的登录点击——到该号窗口手动登录一次，"
+                  "其登录成功后自动停止" % inst.slot)
+
+    def _stop_rec(self, reason):
+        inst = self.recording_target
+        self.recording_target = None
+        self.btn_rec.config(text="录制登录点击")
+        n = len(self._clicks_store().get(inst.slot, [])) if inst else 0
+        self.lbl_rec.config(text="未选中实例")
+        self._save_cfg()
+        self._log("录制停止（%s）：%s 共 %d 步" % (reason, inst.slot if inst else "?", n))
 
     def _clear_rec(self):
-        self.cfg["login_clicks"] = []
-        self.lbl_rec.config(text="已录 0 次点击")
+        sel = self.tree.selection()
+        if not sel:
+            self._log("请先在列表中选中要清空录制的实例")
+            return
+        inst = self._inst_by_seq(int(sel[0]))
+        if inst is None:
+            return
+        self._clicks_store().pop(inst.slot, None)
         self._save_cfg()
-        self._log("已清空登录点击录制")
+        self._log("已清空 %s 的登录点击录制" % inst.slot)
 
     # ---------- 启动实例 ----------
     def _launch(self, role):
@@ -288,12 +326,12 @@ class PPApp(tk.Tk):
         if ok:
             inst.status, inst.note = S_WAIT, "播种成功"
             self._log("p%d 播种成功 ✓（%s）" % (inst.pid, inst.name))
-            if self.cfg.get("login_clicks"):
+            if self._clicks_store().get(inst.slot):
                 threading.Thread(target=self._replay_login,
                                  args=(inst, hwnd), daemon=True).start()
             else:
-                self._log("p%d 等待手动登录（未录制登录点击，可打开录制后登录一次）"
-                          % inst.pid)
+                self._log("p%d 等待手动登录（%s 无登录录制：选中该实例点【录制登录点击】"
+                          "后手动登录一次即可）" % (inst.pid, inst.slot))
         else:
             inst.status, inst.note = S_PLANT, "播种失败，重试中"
             time.sleep(3)
@@ -307,11 +345,12 @@ class PPApp(tk.Tk):
                           % inst.pid)
 
     def _replay_login(self, inst, hwnd):
-        """重放录制的登录点击（掉线重登录闭环）。"""
-        clicks = self.cfg.get("login_clicks") or []
+        """重放该实例自己录制的登录点击（掉线重登录闭环）。"""
+        clicks = self._clicks_store().get(inst.slot) or []
         if not clicks:
+            self._log("p%d 没有 %s 的登录录制，等待手动登录" % (inst.pid, inst.slot))
             return
-        self._log("p%d 重放登录点击 %d 步…" % (inst.pid, len(clicks)))
+        self._log("p%d 重放 %s 登录点击 %d 步…" % (inst.pid, inst.slot, len(clicks)))
         for c in clicks:
             delay = min(max(float(c.get("dt", 0.6)), 0.4), 4.0)
             time.sleep(delay)
@@ -557,8 +596,13 @@ class PPApp(tk.Tk):
         self.after(150, self._tick)
 
     def _poll_record(self):
-        if not self.recording:
+        inst = self.recording_target
+        if inst is None:
             self._prev_btn = False
+            return
+        # ★该号登录成功即自动停止（登录后的游戏点击不录）
+        if inst.status == S_ONLINE or LOGGED_IN_RE.search(inst.title or ""):
+            self._stop_rec("%s 已登录" % inst.slot)
             return
         down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)
         if down and not self._prev_btn:
@@ -570,12 +614,13 @@ class PPApp(tk.Tk):
                 now = time.time()
                 dt = round(now - self._last_click_t, 2) if self._last_click_t else 0.6
                 self._last_click_t = now
-                clicks = self.cfg.setdefault("login_clicks", [])
+                clicks = self._clicks_store().setdefault(inst.slot, [])
                 clicks.append({"x": int(cx), "y": int(cy), "dt": dt})
                 if len(clicks) > 40:
                     del clicks[:-40]
-                self.lbl_rec.config(text="已录 %d 次点击" % len(clicks))
-                self._log("录制点击 (%d,%d) dt=%.2f" % (cx, cy, dt))
+                self.lbl_rec.config(text="录制中: %s（已录 %d 步）"
+                                    % (inst.slot, len(clicks)))
+                self._log("录制 %s 点击 (%d,%d) dt=%.2f" % (inst.slot, cx, cy, dt))
         self._prev_btn = down
 
     def _refresh_tree(self):
