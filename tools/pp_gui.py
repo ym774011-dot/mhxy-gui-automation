@@ -741,6 +741,24 @@ class PPApp(tk.Tk):
         if len(self.logq) > 400:
             del self.logq[:-200]
 
+    def _on_close(self):
+        """关闭兜底：存配置 → 卸载鼠标钩子 → 强制退出（钩子/后台线程不清场
+        会导致窗口关不掉，os._exit 保证必关）。"""
+        try:
+            self._persist_instances()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_hook", None):
+                user32.UnhookWindowsHookEx(self._hook)
+        except Exception:
+            pass
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        os._exit(0)
+
     def _persist_instances(self):
         with self.lock:
             self.cfg["instances"] = [
@@ -762,6 +780,5 @@ class PPApp(tk.Tk):
 
 if __name__ == "__main__":
     app = PPApp()
-    app.protocol("WM_DELETE_WINDOW", lambda: (app._persist_instances(),
-                                              app.destroy()))
+    app.protocol("WM_DELETE_WINDOW", app._on_close)
     app.mainloop()
