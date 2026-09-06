@@ -1039,6 +1039,117 @@ def zhuagui_retake_task(gateway=DEFAULT_GATEWAY, **kw):
     return False, "取消成功但重接失败"
 
 
+def _dialog_options_flat(gateway):
+    """读对话栏选项: [(idx, text, link, cx, cy), ...]。
+
+    ★移植自 MPCG._dialog_options，改文件通道单行协议（' ;; ' 分隔——
+    out 文件按行读，Lua 结果含 \\n 会被截断只剩首行，实测坑）。
+    cx/cy=『选中判断』中心客户区坐标（分辨率无关），未就绪为空串。
+    """
+    code = r"""
+local d = tp.窗口.对话栏
+local parts = {}
+if type(d) == 'table' and type(d.选项) == 'table' then
+  for i = 1, 20 do
+    local o = d.选项[i]
+    if type(o) ~= 'table' then break end
+    local j = type(o.选中判断) == 'table' and o.选中判断 or nil
+    local cx, cy = '', ''
+    if j then
+      local x = tonumber(j.x or 0); local x2 = tonumber(j.x2 or 0)
+      local y = tonumber(j.y or 0); local y2 = tonumber(j.y2 or 0)
+      if x and x2 and y and y2 and x2 > x and y2 > y and x > 15 and y > 15 then
+        cx = tostring((x + x2) / 2); cy = tostring((y + y2) / 2)
+      end
+    end
+    parts[#parts+1] = table.concat({tostring(i), tostring(o.文字 or ''),
+      tostring(o.跳转 or o.跳转链接 or ''), cx, cy}, '|')
+  end
+end
+__out = table.concat(parts, ' ;; ')
+"""
+    r = _lua_call(gateway, code) or ""
+    opts = []
+    for part in r.split(" ;; "):
+        seg = part.split("|")
+        if len(seg) >= 5 and seg[0].isdigit():
+            opts.append((int(seg[0]), seg[1], seg[2], seg[3], seg[4]))
+    return opts
+
+
+def _npc_hop_map(gateway, hwnd, target_map, tries=2):
+    """天眼落点错位兜底：找当前图 "<目标图>接引人" NPC，点击→对话→点"送我过去"跨图。
+
+    ★2026-09-06 实测（用户现场教学）：天眼落点=任务坐标，鬼刷在地图边缘传送门
+      旁时落地踩门被弹回相邻图（普陀山↔大唐国境 / 长寿村↔长寿郊外，实测各卡
+      31/32 轮）。相邻图 npc 表里有 "<目标图>接引人"（如 大唐国境的"普陀山接引人"，
+      tp.地图.npc 实锤），CALL 对话后点"送我过去"即跨回目标图。
+    NPC 定位：tp.地图.npc（数组，x/y=世界坐标），屏幕坐标 = 世界 + tp.屏幕.xy
+      （与 _call_zhongkui 同款换算）。匹配用 前缀锚定（名称以目标图名开头），
+      防误中"长安城传送XX"类反向条目。
+    成功（已到目标图）返回 True。
+    """
+    if not hwnd or not target_map:
+        return False
+    for _ in range(max(1, tries)):
+        code = (
+            "local t = tp.地图.npc\n"
+            "if type(t) ~= 'table' then __out = '' return end\n"
+            "local off = tp.屏幕.xy\n"
+            "local ox = off and off.x or 0\n"
+            "local oy = off and off.y or 0\n"
+            "for i = 1, #t do\n"
+            "  local v = t[i] or {}\n"
+            "  local nm = tostring(v.名称 or '')\n"
+            "  if nm:find('" + target_map + "', 1, true) == 1 then\n"
+            "    local wx = tonumber(tostring(v.x or '')) or 0\n"
+            "    local wy = tonumber(tostring(v.y or '')) or 0\n"
+            "    __out = nm .. '|' .. (wx + ox) .. ',' .. (wy + oy)\n"
+            "    return\n"
+            "  end\n"
+            "end\n"
+            "__out = ''\n"
+        )
+        r = _lua_call(gateway, code) or ""
+        if "|" not in r:
+            return False  # 本图没有去目标图的接引人
+        nx, nxy = r.split("|", 1)
+        sx, sy = nxy.split(",")
+        post_click(hwnd, int(sx) + random.randint(-3, 3),
+                   int(sy) + random.randint(-3, 3), gateway=gateway)
+        _sleep(random.uniform(0.8, 1.2))
+        # ★2026-09-06 截图实锤（test_data/npc_click_1s.png）：接引人对话与钟馗
+        # 同款 UI，红字选项不进 tp.窗口.对话栏.选项（读到 0 条）——必须走红字
+        # 像素检测。首行=「送我过去」（行2=取消），点首行红字块中心。
+        clicked = False
+        for _ in range(5):
+            rows = _zhongkui_detect_rows(gateway)
+            if rows:
+                b = rows[0]
+                post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                           random.randint(b["y0"], b["y1"]), gateway=gateway)
+                clicked = True
+                break
+            _sleep(random.uniform(0.4, 0.6))
+        if not clicked:
+            continue  # 对话没弹出 → 重新点 NPC
+        # 等跨图完成（含走路+切换），轮询校验地图
+        for _ in range(8):
+            _sleep(random.uniform(0.5, 0.8))
+            cur = _lua_call(gateway,
+                            r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') or ""
+            if cur and (cur == target_map or target_map in cur or cur in target_map):
+                return True
+        # 跨图未生效：若对话还开着点第2行「取消」收尾，防残留对话挡后续点击
+        rows = _zhongkui_detect_rows(gateway)
+        if len(rows) >= 2:
+            b = rows[1]
+            post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                       random.randint(b["y0"], b["y1"]), gateway=gateway)
+            _sleep(random.uniform(0.4, 0.7))
+    return False
+
+
 def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
     """确保当前角色有抓鬼任务且已在正确地图（可 CALL 目标）位置。
 
@@ -1107,7 +1218,15 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
     cur_map = snap2["map"] or ""
     if target_map and cur_map and (cur_map != target_map
                                    and target_map not in cur_map and cur_map not in target_map):
-        logger.warning("确保任务：瞬移落点地图错位（目标地图=%s 实际=%s），需回长安重接"
+        # ★2026-09-06 根治无限循环：原逻辑直接 return False → 天眼每轮落同一
+        # 传送门坐标被弹回同一相邻图（普陀山↔大唐国境卡 31 轮、长寿村↔长寿郊外
+        # 卡 32 轮，实测）。兜底：找 "<目标图>接引人" 点"送我过去"跨回目标图。
+        if _npc_hop_map(gateway, hwnd, target_map):
+            logger.info("确保任务：落点错位（目标=%s 实际=%s），接引人跨图回目标图成功"
+                        % (target_map, cur_map))
+            _sleep(random.uniform(0.8, 1.4))  # 落地稳定
+            return True
+        logger.warning("确保任务：瞬移落点地图错位（目标地图=%s 实际=%s），接引人跨图不可用，需回长安重接"
                        % (target_map, cur_map))
         return False
     return True
