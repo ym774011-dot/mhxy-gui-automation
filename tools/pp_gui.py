@@ -146,7 +146,6 @@ class PPApp(tk.Tk):
         self.team_done = False     # 组队阶段结束（满员/放弃）
 
         self._build_ui()
-        self._restore_instances()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
         self.after(200, self._tick)
 
@@ -570,31 +569,6 @@ class PPApp(tk.Tk):
         self.logq.append("%s %s" % (stamp, msg))
         if len(self.logq) > 400:
             del self.logq[:-200]
-
-    def _restore_instances(self):
-        """恢复上次会话的实例角色表（pid 可能已失效，监控会重新认领/重启）。"""
-        for d in self.cfg.get("instances", []):
-            inst = Instance(d.get("role", "member"), pid=d.get("pid"),
-                            name=d.get("name"), status=S_WAIT, title=d.get("title", ""))
-            if not proc_alive(inst.pid):
-                inst.status = S_RESTART
-                inst.note = "启动时已掉线"
-                threading.Thread(target=self._restart_flow,
-                                 args=(inst,), daemon=True).start()
-            else:
-                for pid, hwnd, title in enum_game_windows():
-                    if pid == inst.pid:
-                        inst.title = title
-                        if LOGGED_IN_RE.search(title):
-                            inst.status = S_ONLINE
-                        elif "([0])" in title:
-                            inst.status = S_PLANT
-                            threading.Thread(target=self._do_plant,
-                                             args=(inst, hwnd), daemon=True).start()
-                        break
-            with self.lock:
-                self.instances.append(inst)
-            self._log("恢复实例 p%d（%s）" % (inst.pid, inst.role_cn))
 
     def _persist_instances(self):
         with self.lock:
