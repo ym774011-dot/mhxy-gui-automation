@@ -1865,34 +1865,54 @@ def _bag_button_pos(hwnd):
         return 492, 588
 
 
+_BAG_RETRY_COOLDOWN = 6.0     # ★2026-09-07 开包失败后的冷却期（秒）
+_BAG_FAIL_TS = {}             # gateway -> 上次开包失败时间戳
+
+
 def _bag_ensure_open(gateway, hwnd, tries=5) -> bool:
     """点击右下角背包按钮确保背包打开（真实点击开包最稳，兼容 MPCG._open_bag）。
 
     ★2026-09-07：_bag_visible 可能返回 None（通道失败状态未知），未知时
       等待重读、禁止盲点——盲点会把开着的包关掉，形成开关打架循环。
+    ★2026-09-07 二次加固（用户实测"队长一直点背包"）：
+      1) 失败冷却：开包失败后 6s 内再调用直接返回 False 不再点按钮，
+         打断"开包失败→20s 后整轮重试→又连点 5 次"的重试风暴
+         （automation.log 实证 00:44~00:59 连续 15 分钟刷"背包无法打开"）；
+      2) 点击确认窗口 4×0.15~0.3s → 6×0.25~0.4s（~2s）：面板动画/通道
+         迟滞导致的"点了但没确认到"会触发下一次点击 = 把开着的包点关。
     """
     v = _bag_visible(gateway)
     if v is True:
+        _BAG_FAIL_TS.pop(gateway, None)
         return True
+    if time.time() - _BAG_FAIL_TS.get(gateway, 0.0) < _BAG_RETRY_COOLDOWN:
+        return False   # 冷却期内：状态未知/刚失败过，不点按钮
     for _ in range(max(1, int(tries))):
         if v is None:
             # 通道瞬时失败：等一拍重读，绝不点按钮
             _sleep(random.uniform(0.5, 0.8))
             v = _bag_visible(gateway)
             if v is True:
+                _BAG_FAIL_TS.pop(gateway, None)
                 return True
             continue
         bx, by = _bag_button_pos(hwnd)
         post_click(hwnd, bx, by, gateway=gateway)
-        for _ in range(4):
-            _sleep(random.uniform(0.15, 0.3))
+        for _ in range(6):
+            _sleep(random.uniform(0.25, 0.4))
             nv = _bag_visible(gateway)
             if nv is True:
+                _BAG_FAIL_TS.pop(gateway, None)
                 return True
             if nv is False:
                 break   # 确认还关着 → 下一轮再点
         v = _bag_visible(gateway)
-    return _bag_visible(gateway) is True
+    ok = _bag_visible(gateway) is True
+    if ok:
+        _BAG_FAIL_TS.pop(gateway, None)
+    else:
+        _BAG_FAIL_TS[gateway] = time.time()
+    return ok
 
 
 def _bag_ensure_close(gateway, hwnd, tries=3) -> bool:

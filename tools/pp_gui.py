@@ -18,6 +18,7 @@
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import threading
@@ -36,6 +37,13 @@ from library.pzxy_ipc import PzxyWorker                                    # noq
 import squad_auto_team as sat                                              # noqa: E402
 import ctypes                                                              # noqa: E402
 from ctypes import wintypes                                                # noqa: E402
+
+# ★2026-09-07 修复：squad_auto_team 用 importlib 从 tasks/library/ZGUI.py 加载
+#   了 ZGUI 模块，pp_gui 直接复用该实例。此前 pp_gui 里所有 ZGUI.* 调用
+#   （看门狗 _team_stats/面板开关、zhuagui_teleport、_reteam 读数）全部
+#   NameError 崩溃并被 except 吞掉——看门狗整夜没工作过（pp_gui.log 实证：
+#   每 15s 报 "name 'ZGUI' is not defined"）。
+ZGUI = sat.ZGUI
 
 PYEXE = sys.executable
 GATEWAY_PLANT = r"E:\DS\mhxy-mcp-gateway\tools\pzxy_plant.py"
@@ -617,6 +625,17 @@ class PPApp(tk.Tk):
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
         cmdlines = running_squad_cmdlines()
+        if not cmdlines:
+            # ★2026-09-07 加固：PowerShell 扫描偶发失败返回空列表时，
+            #   防重检查会失效 → 同一客户端被拉起第二个任务脚本，
+            #   两个脚本互抢背包/面板开关（"开了关关了开"）。空结果重扫一次，
+            #   仍为空则放弃拉起（宁可不跑，不可双跑）。
+            self._log("p%d 任务进程扫描为空（可能扫描失败），重扫一次" % inst.pid)
+            time.sleep(1.5)
+            cmdlines = running_squad_cmdlines()
+            if not cmdlines:
+                self._log("p%d 进程扫描两次为空，跳过拉起（防重复驱动）" % inst.pid)
+                return
         if process_alive_for(cmdlines, inst.pid, inst.role == "leader"):
             self._log("p%d 任务脚本已在跑，跳过" % inst.pid)
             return
@@ -645,8 +664,13 @@ class PPApp(tk.Tk):
         满员自动恢复抓鬼。队员掉线由 GUI 重启重登后走 _rejoin_flow 归队，
         这里只负责队长侧的判定/打断/批准/恢复。"""
         self._log("[看门狗] 启动（目标 %d 人，每 15s 判定）" % expect_members)
+        stale_scan_n = 0
+        self._kill_stale_tasks()   # 启动先清一遍历史僵尸
         while not self._team_watch_stop.wait(15):
             try:
+                stale_scan_n += 1
+                if stale_scan_n % 4 == 0:   # ~每分钟清一次残留任务脚本
+                    self._kill_stale_tasks()
                 if not self.scripts_started or self.teamflow_running:
                     continue
                 leader = next((i for i in self.instances
@@ -726,6 +750,44 @@ class PPApp(tk.Tk):
                               % (pid, cp.strip()))
                 except Exception:
                     pass
+
+    def _kill_stale_tasks(self):
+        """★2026-09-07 新增：清理绑定已死游戏 PID 的残留任务脚本。
+
+        客户端崩溃重启后 PID 变化，旧任务脚本（cmdline 含 pzxy_p<旧pid>）
+        不会自己退出，整夜累积（00:59 实证一次清出 9 个）。僵尸脚本虽不直接
+        点击现役客户端，但持续空转重试死通道耗 CPU，且干扰进程防重扫描。
+        """
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+              "Where-Object { $_.CommandLine -match "
+              "'run_unlimited_test|member_sell_loop' } | "
+              "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
+                               capture_output=True, encoding="gbk",
+                               errors="replace", timeout=30)
+        except Exception as e:
+            self._log("残留任务清理查询失败: %s" % e)
+            return
+        alive = {p for p, _h, _t in enum_game_windows()}
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if "|" not in line:
+                continue
+            cp, cl = line.split("|", 1)
+            m = re.search(r"pzxy_p(\d+)", cl)
+            if not m:
+                continue
+            bind_pid = int(m.group(1))
+            if bind_pid in alive:
+                continue
+            try:
+                subprocess.run(["taskkill", "/F", "/PID", cp.strip()],
+                               capture_output=True, timeout=15)
+                self._log("已清理残留任务脚本（绑定死 PID %d，系统 PID %s）"
+                          % (bind_pid, cp.strip()))
+            except Exception:
+                pass
 
     def _reteam(self, leader_pid, expect_members):
         """缺员补救：队长回[139,80] →（散队先重建）→ 在线队员并行申请
