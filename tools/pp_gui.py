@@ -199,6 +199,7 @@ class PPApp(tk.Tk):
         self._watch_interrupted = False   # 当前处于"缺员已打断抓鬼"状态
         self._reteam_running = False
         self._watch_started = False
+        self._rejoining = set()           # 正在归队流程的实例 pid（防双驱动）
 
         self._build_ui()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
@@ -442,17 +443,20 @@ class PPApp(tk.Tk):
                          args=(inst,), daemon=True).start()
 
     def _find_cap_world(self):
-        """从在线队长客户端读队长世界坐标（开面板刷新懒加载）。"""
+        """从在线队长客户端读队长世界坐标（★read_pos_closed 保证面板关闭）。"""
         with self.lock:
             leaders = [i for i in self.instances
                        if i.role == "leader" and i.status == S_ONLINE]
         if not leaders:
             return None
-        return sat._read_pos_via_panel(find_hwnd_by_pid(leaders[0].pid),
-                                       "file://pzxy_p%d" % leaders[0].pid)
+        return sat.read_pos_closed(find_hwnd_by_pid(leaders[0].pid),
+                                   "file://pzxy_p%d" % leaders[0].pid)
 
     def _rejoin_flow(self, inst):
         try:
+            if inst.pid in self._rejoining:
+                return
+            self._rejoining.add(inst.pid)
             if inst.role == "leader":
                 sat.prep_leader(inst.pid)
             else:
@@ -466,6 +470,7 @@ class PPApp(tk.Tk):
         except Exception as e:
             self._log("p%d 归队异常: %s" % (inst.pid, e))
         finally:
+            self._rejoining.discard(inst.pid)
             inst.status, inst.note = S_ONLINE, "重登完成"
             time.sleep(2.0)
             self._spawn_task(inst)
@@ -580,6 +585,12 @@ class PPApp(tk.Tk):
                     self._log("[autoTeam] 阵法未确认（不阻断任务）")
             else:
                 self._log("[autoTeam] 未满员，跳过阵法")
+                # approve_loop 结束时队伍面板是开着的，关掉再拉任务，
+                # 否则任务点击落在面板上
+                lhwnd = find_hwnd_by_pid(leader.pid)
+                if lhwnd:
+                    ZGUI.post_click(lhwnd, 570, 583,
+                                    gateway="file://pzxy_p%d" % leader.pid)
             self._finish_tasks(insts)
         except Exception as e:
             import traceback
@@ -717,8 +728,10 @@ class PPApp(tk.Tk):
                     pass
 
     def _reteam(self, leader_pid, expect_members):
-        """缺员补救：队长回[139,80] →（散队则重建）→ 在线队员并行申请 →
-        批准至满员 → 天覆阵 → 恢复任务。"""
+        """缺员补救：队长回[139,80] →（散队先重建）→ 在线队员并行申请
+        （跳过正在归队的，防双驱动同一客户端）→ 批准至满员 → 天覆阵 →
+        恢复任务。★时序铁律：approve_loop 结束面板开着 → 直接 do_formation
+        （其自管图标开关与双窗口关闭），中间不得插关面板点击。"""
         self._reteam_running = True
         try:
             lw = "file://pzxy_p%d" % leader_pid
@@ -739,7 +752,8 @@ class PPApp(tk.Tk):
                     return
             with self.lock:
                 members = [i for i in self.instances
-                           if i.role != "leader" and i.status == S_ONLINE]
+                           if i.role != "leader" and i.status == S_ONLINE
+                           and i.pid not in self._rejoining]
             if members:
                 self._log("[看门狗] %d 名在线队员并行申请归队" % len(members))
 
@@ -758,9 +772,6 @@ class PPApp(tk.Tk):
                     t.join(600)
             got = sat.approve_loop(leader_pid, expect_members, timeout_s=420.0)
             self._log("[看门狗] 补组批准结束: %s/%s" % (got, expect_members))
-            hwnd = find_hwnd_by_pid(leader_pid)
-            if hwnd:
-                ZGUI.post_click(hwnd, 570, 583, gateway=lw)   # 关面板
             if got and got >= expect_members:
                 sat.do_formation(leader_pid)
                 self._watch_interrupted = False
@@ -771,6 +782,10 @@ class PPApp(tk.Tk):
                     self._spawn_task(i)
                 self._log("[看门狗] 满员，抓鬼已恢复 ✓")
             else:
+                # 未满员：关掉批准面板再等下一轮，不给任务留遮挡
+                hwnd = find_hwnd_by_pid(leader_pid)
+                if hwnd:
+                    ZGUI.post_click(hwnd, 570, 583, gateway=lw)
                 self._log("[看门狗] 仍未满员，掉线队员回来后继续下一轮")
         finally:
             self._reteam_running = False

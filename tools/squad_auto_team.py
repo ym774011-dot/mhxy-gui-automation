@@ -42,6 +42,26 @@ def _log(msg):
     print("[autoTeam] %s" % msg, flush=True)
 
 
+def read_pos_closed(hwnd, gw, tries=3):
+    """读自身坐标（每次尝试点图标刷新懒加载），结束保证面板关闭。
+
+    ★开关成对铁律：_read_pos_via_panel 每次调用都点击一次图标（切换），
+    尝试 n 次后若 n 为奇数则面板开着，必须补一次关闭——否则走位/任务
+    点击全落在面板上（2026-09-07 复盘发现的重试引入 BUG）。
+    """
+    pos, n = None, 0
+    for _ in range(max(1, tries)):
+        n += 1
+        pos = _read_pos_via_panel(hwnd, gw)
+        if pos is not None:
+            break
+        time.sleep(2.0)
+    if n % 2 == 1:
+        ZGUI.post_click(hwnd, 570, 583, gateway=gw)   # 补关，成对
+        time.sleep(0.8)
+    return pos
+
+
 def _read_pos_via_panel(hwnd, gw, open_already=False):
     """点图标开面板刷新懒加载 → 读 队伍数据[1].地图数据（散人=自己）。"""
     if not open_already:
@@ -87,15 +107,7 @@ def prep_leader(leader_pid):
     _teleport(leader_pid)
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
-    pos = None
-    for k in range(3):
-        pos = _read_pos_via_panel(lhwnd, lw)
-        if pos is not None:
-            break
-        _log("队长坐标第%d次读不到，重试…" % (k + 1))
-        time.sleep(2.0)
-    ZGUI.post_click(lhwnd, 570, 583, gateway=lw)   # 关面板
-    time.sleep(0.8)
+    pos = read_pos_closed(lhwnd, lw)
     _log("队长当前位置: %s" % (pos,))
     if pos is None:
         # 传送落点是统一的 [132,83]（2026-09-06 五开实测），读不到面板时兜底假设
@@ -118,19 +130,11 @@ def prep_leader(leader_pid):
         time.sleep(4.0)
         pos = (pos[0] + (CAP_TARGET[0] - pos[0]) * 0.5,
                pos[1] + (CAP_TARGET[1] - pos[1]) * 0.5)  # 盲估计，走完再验证
-    pos = _read_pos_via_panel(lhwnd, lw)
-    for k in range(2):
-        if pos is not None:
-            break
-        _log("到达验证读不到坐标，重试…")
-        time.sleep(2.0)
-        pos = _read_pos_via_panel(lhwnd, lw)
+    pos = read_pos_closed(lhwnd, lw)
     _log("到达验证: %s（目标 %s）" % (pos, CAP_TARGET))
     if pos is None or abs(CAP_TARGET[0] - pos[0]) > 40 or abs(CAP_TARGET[1] - pos[1]) > 40:
         _log("[fail] 队长未到达 [139,80]")
         return None
-    ZGUI.post_click(lhwnd, 570, 583, gateway=lw)   # 关面板
-    time.sleep(0.8)
     return pos
 
 
