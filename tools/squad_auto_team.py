@@ -161,38 +161,62 @@ def prep_leader(leader_pid):
     return pos
 
 
-def create_team(leader_pid, cap_world):
-    """队长建队。成功返回 True（面板已关闭）；失败返回 False（面板已复位为关）。
+def create_team(leader_pid, cap_world, tries=3):
+    """队长建队（★2026-09-07 按用户口述流程重写）：
 
-    ★2026-09-07 修复奇偶配对（用户实测"图标点2次取消旗子，点身体建不了队"）：
-      旧代码末尾无条件点图标"关面板"，但失败路径（身体点击没建上队）时
-      中间那次图标点击已把旗子面板关掉，末尾再点=又打开 → 重试的首次
-      图标点击把面板点关 → 点身体永远无效 → 重试死循环
-      （01:44 实证"建队失败，重试一次→建队失败，只拉任务不组队"）。
-      点击语义：无队=旗子模式（点=开，再点=关）；有队=点=开面板。
-      改为：只有验证成功（面板被中间那次点击打开）才补关。
+      1) 走回锚点 [139,80]（首轮也点一次保证站位；失败后必须走回——
+         失败的"点身体"会变成走路指令把队长带离原位）
+      2) 点组队图标（旗子模式：开面板）
+      3) 鼠标移到队长身体点击（建队）
+      4) 再点组队图标查看是否成功（读 stats 裁决）
+      5) 未成功 → 画面点一次右键清理鼠标 → 点锚点走回 → 循环重试
+
+    每轮图标点击严格配对（开/关各一次）；成功返回 True（面板已关闭），
+    全部轮次失败返回 False（面板已复位为关）。
     """
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
-    coff = ZGUI._screen_offset_xy(lw)
-    sx, sy = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
-    ZGUI._team_click_icon(lhwnd, lw)    # 旗子模式：开面板
-    time.sleep(0.6)
-    ZGUI._team_click_body(lhwnd, lw, sx, sy)
-    time.sleep(1.0)
-    ZGUI._team_click_icon(lhwnd, lw)    # 成功→开有队面板；失败→关旗子面板
-    time.sleep(1.2)
-    st = ZGUI._team_stats(lw)
-    _log("建队后 stats（应为 1）: %s" % (st,))
-    ok = bool(st) and st[0] >= 1 and bool(st[2])
-    if ok:
-        # 成功路径：面板开着（上一步打开），补关（后续批准/阵法各自决定面板状态）
-        ZGUI.post_click(lhwnd, 570, 583, gateway=lw)
+    for k in range(max(1, int(tries))):
+        coff = ZGUI._screen_offset_xy(lw)
+        if coff is None or lhwnd is None:
+            _log("建队: tp/窗口不可用，等 3s 重试")
+            time.sleep(3.0)
+            continue
+        # 1) 走回锚点
+        ax, ay = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
+        if 0 <= ax <= 800 and 0 <= ay <= 600:
+            ZGUI.post_click(lhwnd, ax + random.randint(-2, 2),
+                            ay + random.randint(-2, 2), gateway=lw)
+            time.sleep(3.0)   # 等走位停稳
+        # 2) 点组队图标（旗子模式：开）
+        ZGUI._team_click_icon(lhwnd, lw)
         time.sleep(0.8)
-    else:
-        # 失败路径：旗子面板已被上一步关闭，保持关闭——重试的首次图标点击=重新打开
-        _log("建队未生效（点身体未创建队伍），面板已复位为关，可直接重试")
-    return ok
+        # 3) 鼠标移到队长身体点击（建队）；走位后刷新偏移再投影
+        coff = ZGUI._screen_offset_xy(lw)
+        if coff is None:
+            ZGUI._team_click_icon(lhwnd, lw)   # 配对补关
+            time.sleep(0.6)
+            continue
+        sx, sy = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
+        ZGUI._team_click_body(lhwnd, lw, sx, sy)
+        # 4) 再点组队图标查看是否成功
+        time.sleep(1.0)
+        ZGUI._team_click_icon(lhwnd, lw)
+        time.sleep(1.2)
+        st = ZGUI._team_stats(lw)
+        _log("建队第%d次 stats（应为 1）: %s" % (k + 1, (st,)))
+        ok = bool(st) and st[0] >= 1 and bool(st[2])
+        if ok:
+            # 有队面板开着（上一步打开），补关
+            ZGUI.post_click(lhwnd, 570, 583, gateway=lw)
+            time.sleep(0.8)
+            return True
+        # 5) 失败：右键清理鼠标 → 走回锚点由下一轮开头执行
+        _log("建队第%d次未生效：右键清理鼠标，走回锚点重试" % (k + 1))
+        ZGUI.post_right_click(lhwnd, random.randint(390, 430),
+                              random.randint(240, 280), gateway=lw)
+        time.sleep(1.0)
+    return False
 
 
 def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True):
