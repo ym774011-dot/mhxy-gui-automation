@@ -2006,6 +2006,9 @@ def zhuagui_team_create(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
     锚点≈相机中心带，再由 _team_click_body 上移）。
     ★队伍数据是面板懒加载：建队后头顶令牌即成功标志，但 Lua 读 队伍数据
     需先点一次图标打开队伍信息面板，故校验前补一次图标点击。
+    ★2026-09-06 实测坑：解散前的旧懒加载快照会残留（如 (1,0,'二号美人')），
+    stats 校验无法区分"真建队"与"脏数据"——本函数返回 True 只表示点击
+    序列已执行，编排层应靠队员申请是否入列做最终裁决。
     创建成功返回 True。
     """
     if hwnd is None:
@@ -2070,6 +2073,9 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
     流程（用户 2026-09-06 手动演示实测）：第 1 轮点图标打开队伍信息面板，
     之后每轮点"请求列表"→点首个申请者卡片→"允许"；允许后申请列表自动
     关闭，下一轮重开即可（无需再点图标——图标会把面板关掉）。
+    ★2026-09-06 22:20 全流程实测：p7.申请列表 计数恒为 0（数据结构里
+    读不到申请），故不能以 app==0 判"申请清空"提前退出——那会在第 1 轮
+    就放弃。改为只看成员数递增（1→2→…→expect），轮数耗尽即止。
     返回最终成员数（不可读=-1）。
     """
     if hwnd is None:
@@ -2088,7 +2094,7 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
             logger.info("队伍面板不可读（tp 缺失?），中止审批")
             return -1
         mem, app, leader = st
-        if mem >= expect_members or app == 0:
+        if mem >= expect_members:
             if verbose:
                 logger.info("审批结束：成员=%d 申请=%d" % (mem, app))
             return mem

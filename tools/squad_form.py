@@ -33,7 +33,7 @@ spec.loader.exec_module(ZGUI)
 sys.path.insert(0, HERE)
 from member_sell_loop import find_hwnd_by_pid  # noqa: E402
 
-_TITLE_RE = re.compile(r"胖子西游-\((.+)\((\d+)\)\)")
+_TITLE_RE = re.compile(r"胖子西游-\s*\((.+?)[\[\(](\d+)[\]\)]\)")
 
 
 def role_of(pid):
@@ -89,25 +89,16 @@ def main():
         return 1
 
     # 3) 队员依次申请
+    # ★2026-09-06 22:18 实测：p7.申请列表 计数恒读 0，无法在队长端核对
+    # "申请已入列"——改为固定等待，由阶段 4 的批准循环做最终裁决。
     for pid in pids:
         name, rid = role_of(pid)
         gw = "file://pzxy_p%d" % pid
         hwnd = find_hwnd_by_pid(pid)
-        st = ZGUI._team_stats(lgw)
-        app_before = st[1] if st else -1
         ok = ZGUI.zhuagui_team_join(gw, hwnd=hwnd, verbose=True,
                                     leader_world_xy=lxy)
-        # 核对队长端申请列表
-        joined_req = False
-        deadline = time.time() + 10.0
-        while time.time() < deadline:
-            time.sleep(1.0)
-            st = ZGUI._team_stats(lgw)
-            if st and st[1] > app_before:
-                joined_req = True
-                break
-        print("队员 p%d=%s(%s): 申请%s" % (pid, name, rid,
-              "已入列" if joined_req else "未见入列(可能已入队/点击落空)"), flush=True)
+        print("队员 p%d=%s(%s): 已点队长身体（申请是否生效由批准阶段裁决）"
+              % (pid, name, rid), flush=True)
         time.sleep(args.apply_wait)
 
     # 4) 队长批准全部
