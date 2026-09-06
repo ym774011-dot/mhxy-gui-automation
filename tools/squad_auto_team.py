@@ -229,11 +229,16 @@ def create_team(leader_pid, cap_world, tries=3):
                 fresh = ZGUI._team_self_world_xy(lw)
                 if fresh:
                     use_xy = fresh
-        # 4) 点身体建队
-        sx, sy = int(use_xy[0] + coff[0]), int(use_xy[1] + coff[1])
-        if not (0 <= sx <= 800 and 0 <= sy <= 600):
-            sx, sy = 400, 370     # 兜底：相机跟随，自身脚底约屏幕中心偏下
-            _log("建队第%d次 投影越界，改用固定屏幕点 (400,370)" % (k + 1))
+        # 4) 点身体建队（第 2 轮起改用固定屏幕点：相机跟随，自身脚底约在
+        #    屏幕中心偏下；投影坐标若因偏移误差点空，换个判据再试）
+        if k >= 1:
+            sx, sy = 400, 370
+            _log("建队第%d次 改用固定屏幕点 (400,370)（上一轮投影点空）" % (k + 1))
+        else:
+            sx, sy = int(use_xy[0] + coff[0]), int(use_xy[1] + coff[1])
+            if not (0 <= sx <= 800 and 0 <= sy <= 600):
+                sx, sy = 400, 370
+                _log("建队第%d次 投影越界，改用固定屏幕点 (400,370)" % (k + 1))
         _log("建队第%d次 点身体屏幕位 (%d,%d)" % (k + 1, sx, sy))
         ZGUI._team_click_body(lhwnd, lw, sx, sy)
         # 4) 零点击验证：顶部头像栏（实时渲染，无懒加载脏数据）
