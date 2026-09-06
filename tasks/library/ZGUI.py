@@ -1272,15 +1272,21 @@ _BONUS_ENABLED = os.environ.get("MHXY_ZG_BONUS", "1") != "0"
 
 
 def zhuagui_bonus_battle(gateway=DEFAULT_GATEWAY, verbose=False,
-                         max_battle_wait=180.0, **kw):
+                         max_battle_wait=180.0, hwnd=None, **kw):
     """扫本图稀有怪并顺手打一只。命中并打完返回怪名，未命中/未进战返回 None。
 
     复用抓鬼 CALL 通道 `客户端:发送数据(0,3,6,标识,1)` 与 _call_guard 防重冷却。
-    CALL 后最多等 8s 进战：未进战（距离太远/不可交互）直接放弃不阻塞跑批；
+    ★2026-09-06 修复（用户实测：CALL 出了对话框但没点击进战斗）：知了王/星宿/
+    远古 CALL 后弹出"是否挑战"对话，必须点对话选项才进战——旧逻辑只干等 8s。
+    对话与抓鬼鬼同款红字 UI（选项不进 tp.窗口.对话栏.选项，实测恒 0 条），
+    走红字像素检测点**首行**（预设=开战选项）。点击前自动存截图到
+    test_data/bonus_dialog_*.png 留证：若首行实为"取消"，据图改点 rows[1] 即可。
     进战后挂机等战斗结束（自动战斗），上限 max_battle_wait。
     """
     if not _BONUS_ENABLED:
         return None
+    if hwnd is None:
+        hwnd = get_hwnd()
     code = r"""
 local t = tp.地图.地图单位
 if type(t) ~= 'table' then __out = '' return end
@@ -1313,14 +1319,41 @@ __out = ''
     _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
     _call_guard["gid"] = gid
     _call_guard["ts"] = _now
-    # 等进战（最多 ~8s）；不进战说明距离太远或不可交互，放弃不阻塞跑批
+    # ★CALL 后等对话弹出 → 点首行（开战选项）→ 等进战
+    clicked = False
+    t_dlg = time.time()
+    while time.time() - t_dlg < 5.0:
+        if zhuagui_in_battle(gateway):
+            break
+        rows = _zhongkui_detect_rows(gateway) if hwnd else []
+        if rows:
+            try:
+                _img, _, _ = grab_client(hwnd)
+                _shot = os.path.join(os.path.dirname(os.path.dirname(
+                    os.path.abspath(__file__))), "test_data",
+                    "bonus_dialog_%s.png" % time.strftime("%Y%m%d_%H%M%S"))
+                _img.save(_shot)
+                logger.info("稀有怪对话截图：%s" % _shot)
+            except Exception:
+                pass
+            b = rows[0]
+            post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                       random.randint(b["y0"], b["y1"]), gateway=gateway)
+            clicked = True
+            if verbose:
+                logger.info("已点稀有怪对话首行 (x%d-%d,y%d-%d)"
+                            % (b["x0"], b["x1"], b["y0"], b["y1"]))
+            break
+        _sleep(random.uniform(0.4, 0.6))
+    # 等进战（点了对话给足进战加载时间；没对话则维持原 8s 放弃逻辑）
     t0 = time.time()
-    while time.time() - t0 < 8.0:
+    battle_wait = 12.0 if clicked else 8.0
+    while time.time() - t0 < battle_wait:
         if zhuagui_in_battle(gateway):
             break
         _sleep(random.uniform(0.5, 0.8))
     if not zhuagui_in_battle(gateway):
-        logger.info("稀有怪 %s CALL 后未进战（距离太远/不可交互），跳过" % bname)
+        logger.info("稀有怪 %s CALL 后未进战（距离太远/不可交互/对话未点中），跳过" % bname)
         return None
     # 战斗挂机等结束
     t1 = time.time()
