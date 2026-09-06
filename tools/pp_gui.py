@@ -44,6 +44,10 @@ from ctypes import wintypes                                                # noq
 #   NameError 崩溃并被 except 吞掉——看门狗整夜没工作过（pp_gui.log 实证：
 #   每 15s 报 "name 'ZGUI' is not defined"）。
 ZGUI = sat.ZGUI
+# ★2026-09-07 同款修复：_watch_team_stats/_reteam 里用到的 find_hwnd_by_pid
+#   也没有 import（01:29 实证 "[看门狗] 异常: name 'find_hwnd_by_pid' is
+#   not defined"），与 ZGUI 一样复用 squad_auto_team 的实例。
+find_hwnd_by_pid = sat.find_hwnd_by_pid
 
 PYEXE = sys.executable
 GATEWAY_PLANT = r"E:\DS\mhxy-mcp-gateway\tools\pzxy_plant.py"
