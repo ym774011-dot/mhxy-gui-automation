@@ -194,6 +194,11 @@ class PPApp(tk.Tk):
         import collections
         self._click_q = collections.deque(maxlen=80)
         self._hook_proc, self._hook = start_mouse_hook(self._on_global_click)
+        # ★队伍完整性看门狗：队长侧随时判定队员数，缺员打断抓鬼→补组队→满员恢复
+        self._team_watch_stop = threading.Event()
+        self._watch_interrupted = False   # 当前处于"缺员已打断抓鬼"状态
+        self._reteam_running = False
+        self._watch_started = False
 
         self._build_ui()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
@@ -590,6 +595,13 @@ class PPApp(tk.Tk):
             i.status, i.note = S_ONLINE, "运行中"
             self._spawn_task(i)
         self._log("[autoTeam] 组队+任务脚本启动完成")
+        # 启动队伍完整性看门狗（有队长才启动；仅启动一次）
+        leader = next((i for i in insts if i.role == "leader"), None)
+        if leader is not None and not self._watch_started:
+            self._watch_started = True
+            threading.Thread(target=self._team_watchdog,
+                             args=(leader.pid, len(insts)),
+                             daemon=True).start()
 
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
@@ -615,6 +627,153 @@ class PPApp(tk.Tk):
                       % (inst.pid, inst.role_cn, role_name, gw))
         except Exception as e:
             self._log("p%d 任务脚本启动失败: %s" % (inst.pid, e))
+
+    # ---------- 队伍完整性看门狗（队长侧） ----------
+    def _team_watchdog(self, leader_pid, expect_members):
+        """每 15s 判定队伍人数：满员不动；缺员 → 打断抓鬼 → 补组队 →
+        满员自动恢复抓鬼。队员掉线由 GUI 重启重登后走 _rejoin_flow 归队，
+        这里只负责队长侧的判定/打断/批准/恢复。"""
+        self._log("[看门狗] 启动（目标 %d 人，每 15s 判定）" % expect_members)
+        while not self._team_watch_stop.wait(15):
+            try:
+                if not self.scripts_started or self.teamflow_running:
+                    continue
+                leader = next((i for i in self.instances
+                               if i.pid == leader_pid), None)
+                if leader is None or leader.status != S_ONLINE:
+                    continue   # 队长不在（掉线重登中），等归队流程
+                st = self._watch_team_stats(leader_pid)
+                mem = st[0] if st else -1
+                if mem < 0:
+                    continue   # 瞬时读不到（通道/面板），下轮再看
+                if mem >= expect_members:
+                    if self._watch_interrupted:
+                        self._watch_interrupted = False
+                        self._log("[看门狗] 队伍满员 %d/%d，恢复抓鬼"
+                                  % (mem, expect_members))
+                        with self.lock:
+                            online = [i for i in self.instances
+                                      if i.status == S_ONLINE]
+                        for i in online:
+                            self._spawn_task(i)
+                    continue
+                # 缺员
+                if not self._watch_interrupted:
+                    self._watch_interrupted = True
+                    self._log("[看门狗] 检测到缺员 %d/%d → 打断抓鬼，启动补组队"
+                              % (mem, expect_members))
+                    self._kill_task_for(leader_pid, leader=True)
+                if not self._reteam_running:
+                    threading.Thread(target=self._reteam,
+                                     args=(leader_pid, expect_members),
+                                     daemon=True).start()
+            except Exception as e:
+                self._log("[看门狗] 异常: %s" % e)
+
+    def _watch_team_stats(self, leader_pid):
+        """读队伍统计；数据未刷新则点图标开面板重读（读完成对关面板，
+        防残留选目标模式干扰后续点击）。"""
+        lw = "file://pzxy_p%d" % leader_pid
+        st = ZGUI._team_stats(lw)
+        if st:
+            return st
+        hwnd = find_hwnd_by_pid(leader_pid)
+        if not hwnd:
+            return None
+        ZGUI.post_click(hwnd, 570, 583, gateway=lw)   # 开面板刷新懒加载
+        time.sleep(1.2)
+        st = ZGUI._team_stats(lw)
+        ZGUI.post_click(hwnd, 570, 583, gateway=lw)   # 关面板（成对）
+        time.sleep(0.6)
+        return st
+
+    def _kill_task_for(self, pid, leader=True):
+        """按网关通道打断该实例的任务脚本进程（打断抓鬼用）。"""
+        ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+              "Where-Object { $_.CommandLine -match "
+              "'run_unlimited_test|member_sell_loop' } | "
+              "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }")
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
+                               capture_output=True, encoding="gbk",
+                               errors="replace", timeout=30)
+        except Exception as e:
+            self._log("打断任务脚本查询失败: %s" % e)
+            return
+        token = "pzxy_p%d" % pid
+        key = "run_unlimited_test" if leader else "member_sell_loop"
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if "|" not in line:
+                continue
+            cp, cl = line.split("|", 1)
+            if key in cl and token in cl:
+                try:
+                    subprocess.run(["taskkill", "/F", "/PID", cp.strip()],
+                                   capture_output=True, timeout=15)
+                    self._log("已打断 p%d 任务脚本（系统 PID %s）"
+                              % (pid, cp.strip()))
+                except Exception:
+                    pass
+
+    def _reteam(self, leader_pid, expect_members):
+        """缺员补救：队长回[139,80] →（散队则重建）→ 在线队员并行申请 →
+        批准至满员 → 天覆阵 → 恢复任务。"""
+        self._reteam_running = True
+        try:
+            lw = "file://pzxy_p%d" % leader_pid
+            # 队长回等待点（在队中传送可能无效，走位仍有效；失败沿用旧坐标）
+            cap = sat.prep_leader(leader_pid)
+            if cap is not None:
+                self.cap_world = cap
+            cap = self.cap_world
+            if cap is None:
+                self._log("[看门狗] 补组失败：无队长坐标")
+                return
+            st = ZGUI._team_stats(lw)
+            mem = st[0] if st else 0
+            if mem <= 1:
+                self._log("[看门狗] 队伍已散（%s 人）→ 重新建队" % mem)
+                if not sat.create_team(leader_pid, cap):
+                    self._log("[看门狗] 重新建队失败，下轮再试")
+                    return
+            with self.lock:
+                members = [i for i in self.instances
+                           if i.role != "leader" and i.status == S_ONLINE]
+            if members:
+                self._log("[看门狗] %d 名在线队员并行申请归队" % len(members))
+
+                def _apply(m):
+                    try:
+                        sat.member_tp_and_apply(m.pid, cap, tries=2,
+                                                tp_first=False)
+                    except Exception as e:
+                        self._log("p%d 归队申请异常: %s" % (m.pid, e))
+
+                ts = [threading.Thread(target=_apply, args=(m,), daemon=True)
+                      for m in members]
+                for t in ts:
+                    t.start()
+                for t in ts:
+                    t.join(600)
+            got = sat.approve_loop(leader_pid, expect_members, timeout_s=420.0)
+            self._log("[看门狗] 补组批准结束: %s/%s" % (got, expect_members))
+            hwnd = find_hwnd_by_pid(leader_pid)
+            if hwnd:
+                ZGUI.post_click(hwnd, 570, 583, gateway=lw)   # 关面板
+            if got and got >= expect_members:
+                sat.do_formation(leader_pid)
+                self._watch_interrupted = False
+                with self.lock:
+                    online = [i for i in self.instances
+                              if i.status == S_ONLINE]
+                for i in online:
+                    self._spawn_task(i)
+                self._log("[看门狗] 满员，抓鬼已恢复 ✓")
+            else:
+                self._log("[看门狗] 仍未满员，掉线队员回来后继续下一轮")
+        finally:
+            self._reteam_running = False
 
     # ---------- 监控（掉线闭环） ----------
     def _monitor_loop(self):
@@ -818,6 +977,10 @@ class PPApp(tk.Tk):
         会导致窗口关不掉，os._exit 保证必关）。"""
         try:
             self._persist_instances()
+        except Exception:
+            pass
+        try:
+            self._team_watch_stop.set()
         except Exception:
             pass
         try:
