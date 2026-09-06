@@ -103,8 +103,14 @@ def plant(pid, name, port):
     return r.returncode == 0
 
 
-def running_squad_cmdlines():
-    """当前在跑的小队相关 python 进程命令行列表（PowerShell CIM 查询）。"""
+def running_squad_cmdlines_ex():
+    """(可信, 命令行列表)。★2026-09-07：
+
+    - 可信=True 且列表为空 → PowerShell 查询成功，确实没有任务进程在跑；
+    - 可信=False → 查询异常/返回码非 0，结果不可信（此时不能当"没在跑"）。
+    区分两者：00:59 停止全部任务后扫描空是正常的，不能据此拒拉
+    （01:21 实证：防重守卫误判，五个实例全部跳过拉起）。
+    """
     ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
           "Where-Object { $_.CommandLine -match 'run_unlimited_test|member_sell_loop' } | "
           "ForEach-Object { $_.CommandLine }")
@@ -112,9 +118,17 @@ def running_squad_cmdlines():
         r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
                            capture_output=True, text=True,
                            encoding="gbk", errors="replace", timeout=30)
-        return [l.strip() for l in (r.stdout or "").splitlines() if l.strip()]
+        if r.returncode != 0:
+            return False, []
+        return True, [l.strip() for l in (r.stdout or "").splitlines() if l.strip()]
     except Exception:
-        return []
+        return False, []
+
+
+def running_squad_cmdlines():
+    """当前在跑的小队相关 python 进程命令行列表（PowerShell CIM 查询）。"""
+    _ok, lst = running_squad_cmdlines_ex()
+    return lst
 
 
 def process_alive_for(cmdlines, pid, leader):

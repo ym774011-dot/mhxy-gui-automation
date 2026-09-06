@@ -32,7 +32,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, ROOT)
 
 from zhuagui_squad import (LOGGED_IN_RE, ROLE_RE, enum_game_windows,      # noqa: E402
-                           plant, process_alive_for, running_squad_cmdlines)
+                           plant, process_alive_for, running_squad_cmdlines_ex)
 from library.pzxy_ipc import PzxyWorker                                    # noqa: E402
 import squad_auto_team as sat                                              # noqa: E402
 import ctypes                                                              # noqa: E402
@@ -624,17 +624,17 @@ class PPApp(tk.Tk):
 
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
-        cmdlines = running_squad_cmdlines()
-        if not cmdlines:
-            # ★2026-09-07 加固：PowerShell 扫描偶发失败返回空列表时，
-            #   防重检查会失效 → 同一客户端被拉起第二个任务脚本，
-            #   两个脚本互抢背包/面板开关（"开了关关了开"）。空结果重扫一次，
-            #   仍为空则放弃拉起（宁可不跑，不可双跑）。
-            self._log("p%d 任务进程扫描为空（可能扫描失败），重扫一次" % inst.pid)
+        # ★2026-09-07 加固：区分"扫描失败"与"真的没在跑"。此前扫描异常返回
+        #   空列表 → 防重失效 → 同客户端可能被拉起两个任务脚本互抢背包；
+        #   但也不能把"真的没在跑"（如 00:59 手动全停后）误判为失败拒拉
+        #   （01:21 实证五实例全部跳过拉起）。以 PowerShell 返回码为准。
+        ok, cmdlines = running_squad_cmdlines_ex()
+        if not ok:
+            self._log("p%d 任务进程扫描失败，重扫一次" % inst.pid)
             time.sleep(1.5)
-            cmdlines = running_squad_cmdlines()
-            if not cmdlines:
-                self._log("p%d 进程扫描两次为空，跳过拉起（防重复驱动）" % inst.pid)
+            ok, cmdlines = running_squad_cmdlines_ex()
+            if not ok:
+                self._log("p%d 进程扫描两次失败，跳过拉起（结果不可信防双跑）" % inst.pid)
                 return
         if process_alive_for(cmdlines, inst.pid, inst.role == "leader"):
             self._log("p%d 任务脚本已在跑，跳过" % inst.pid)
