@@ -1101,7 +1101,9 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
             "for i = 1, #t do\n"
             "  local v = t[i] or {}\n"
             "  local nm = tostring(v.名称 or '')\n"
-            "  if nm:find('" + target_map + "', 1, true) == 1 then\n"
+            "  local cz = tostring(v.称谓 or '')\n"
+            "  -- 前缀锚定名称（普陀山接引人）或称谓含目标图名（土地公公|凌波城传送）\n"
+            "  if nm:find('" + target_map + "', 1, true) == 1 or cz:find('" + target_map + "', 1, true) then\n"
             "    local wx = tonumber(tostring(v.x or '')) or 0\n"
             "    local wy = tonumber(tostring(v.y or '')) or 0\n"
             "    __out = nm .. '|' .. (wx + ox) .. ',' .. (wy + oy)\n"
@@ -1148,6 +1150,9 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
                        random.randint(b["y0"], b["y1"]), gateway=gateway)
             _sleep(random.uniform(0.4, 0.7))
     return False
+
+
+_MISMATCH = {"task": "", "n": 0}  # ★2026-09-06 同一鬼"天眼落点被弹回"累计计数（防循环烧天眼）
 
 
 def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
@@ -1204,30 +1209,79 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
             # 此时不消耗天眼瞬移（没有目标坐标），直接返回等待队长处理。
             logger.warning("确保任务：组员模式但任务栏无抓鬼任务（等队长接任务）")
         return False
-    # 有任务：天眼瞬移
+    # ★2026-09-06 省天眼决策树（用户要求：不能循环烧天眼，浪费且无收益）：
+    #   异图 → 先试免费接引人跨图（成功=0消耗）
+    #   → 跨不动才天眼（常规机制：落点=鬼坐标）
+    #   → 天眼仍被弹回（=鬼刷在传送门旁实锤）→ 再跨；跨不动 → 回长安重接止血
+    #   → 同一鬼错位累计>=2次后停用天眼（损失封顶，等鬼刷新/换任务）
+    def _mis(a, b):
+        return bool(a and b and a != b and b not in a and a not in b)
+
+    global _MISMATCH
+    tname = task.get("name") or ""
+    if _MISMATCH["task"] != tname:
+        _MISMATCH = {"task": tname, "n": 0}  # 换鬼重置计数
+
+    target_map0 = snap.get("target_map") or ""
+    cur_map0 = snap.get("map") or ""
+    if _mis(cur_map0, target_map0):
+        # 异图：接引人免费跨图优先（乾坤殿↔五庄观 37 轮烧 37 符实锤后的止血位）
+        if _npc_hop_map(gateway, hwnd, target_map0):
+            logger.info("确保任务：异图(%s→%s)接引人跨图成功（省1个天眼符）"
+                        % (cur_map0, target_map0))
+            _sleep(random.uniform(0.8, 1.4))
+            return True
+        if _MISMATCH["n"] >= 2:
+            # 该鬼已实证反复错位且跨图不可用 → 停用天眼，直接回长安重接
+            #（新鬼新坐标才是唯一出路；重接内部自带取消冷却等待，期间零消耗）
+            if member_mode:
+                logger.warning("确保任务：鬼 %s 反复错位且接引人不可用（%d次），"
+                               "组员停用天眼等队长重接" % (tname, _MISMATCH["n"]))
+                return False
+            logger.warning("确保任务：鬼 %s 反复错位且接引人不可用（%d次），"
+                           "停用天眼，直接回长安重接（防烧符）" % (tname, _MISMATCH["n"]))
+            try:
+                if zhuagui_go_back_changan(gateway):
+                    ok_r, msg_r = zhuagui_retake_task(gateway)
+                    logger.info("确保任务：重接结果 %s" % msg_r)
+                else:
+                    logger.warning("确保任务：回长安失败，本轮放弃")
+            except Exception as _e:
+                logger.warning("确保任务：重接异常 %s" % _e)
+            return False
+    # 天眼瞬移（同图直达鬼坐标 / 异图无接引人时的常规手段）
     if not zhuagui_use_tianyan(gateway):
         logger.warning("确保任务：使用天眼失败")
         return False
     _sleep(random.uniform(1.2, 1.8))  # ★2026-09-05 提速 2.0~3.0 → 1.2~1.8（天眼瞬移本身瞬时生效）
-    # ★2026-09-03 瞬移后校验目标地图：天眼落点=任务目标坐标，若该坐标恰为
-    # 地图传送门，角色会踩门被自动传入另一张地图（如大唐境外(633,36)↔五庄观），
-    # 导致地图单位无目标怪、CALL 找不到标识 → 本轮失败。地图不匹配须回长安重接。
-    # ★2026-09-05 提速：目标地图+当前地图 2 次调用合并为 1 次快照
+    # 瞬移后校验目标地图：天眼落点=任务目标坐标，若该坐标恰为地图传送门
+    # （乾坤殿(633,36)↔五庄观 等实锤），角色踩门被自动弹回相邻图。
     snap2 = _snapshot(gateway)
-    target_map = snap2["target_map"]
+    target_map = snap2["target_map"] or target_map0
     cur_map = snap2["map"] or ""
-    if target_map and cur_map and (cur_map != target_map
-                                   and target_map not in cur_map and cur_map not in target_map):
-        # ★2026-09-06 根治无限循环：原逻辑直接 return False → 天眼每轮落同一
-        # 传送门坐标被弹回同一相邻图（普陀山↔大唐国境卡 31 轮、长寿村↔长寿郊外
-        # 卡 32 轮，实测）。兜底：找 "<目标图>接引人" 点"送我过去"跨回目标图。
+    if _mis(cur_map, target_map):
+        _MISMATCH["n"] += 1
+        # 落点被弹回 = 鬼在传送门旁实锤 → 接引人跨回（免费）
         if _npc_hop_map(gateway, hwnd, target_map):
             logger.info("确保任务：落点错位（目标=%s 实际=%s），接引人跨图回目标图成功"
                         % (target_map, cur_map))
             _sleep(random.uniform(0.8, 1.4))  # 落地稳定
             return True
-        logger.warning("确保任务：瞬移落点地图错位（目标地图=%s 实际=%s），接引人跨图不可用，需回长安重接"
+        # 跨不动 → 回长安重接止血（新鬼新坐标），绝不空转下一轮再烧天眼
+        if member_mode:
+            logger.warning("确保任务：落点错位（目标=%s 实际=%s）且接引人不可用；"
+                           "组员不能重接，等队长处理（错位计数=%d）" % (target_map, cur_map, _MISMATCH["n"]))
+            return False
+        logger.warning("确保任务：落点错位（目标=%s 实际=%s）且接引人不可用，回长安重接止血"
                        % (target_map, cur_map))
+        try:
+            if zhuagui_go_back_changan(gateway):
+                ok_r, msg_r = zhuagui_retake_task(gateway)
+                logger.info("确保任务：重接结果 %s" % msg_r)
+            else:
+                logger.warning("确保任务：回长安失败，本轮放弃")
+        except Exception as _e:
+            logger.warning("确保任务：重接异常 %s" % _e)
         return False
     return True
 
@@ -1592,6 +1646,10 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
         if killed:
             _LAST_ROUND_STAGES["bonus_battle"] = round(time.time() - _t_bn, 2)
             msg = msg + " 顺手打:" + "+".join(killed)
+    if ok:
+        # ★2026-09-06 本轮成功 = 错位循环已解除，重置防烧符计数
+        global _MISMATCH
+        _MISMATCH = {"task": "", "n": 0}
     return ok, msg
 
 
