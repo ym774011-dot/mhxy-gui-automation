@@ -1483,6 +1483,22 @@ __out = ''
     _call_guard["gid"] = gid
     _call_guard["ts"] = _now
     # ★CALL 后等对话弹出 → 点首行（开战选项）→ 等进战
+    # ★2026-09-06 实测（tools/bonus_dialog_calib.py 现场标定）：对话还有一种
+    #   "我正在战斗中，请勿扰。"（怪被别的队伍占用，无可点选项）——这不是点击
+    #   范围问题，跳过是正确行为。据此：无红字行=疑似被占用，存截图留证。
+    def _bonus_shot(tag):
+        try:
+            _img, _, _ = grab_client(hwnd)
+            _root = os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))))
+            _shot = os.path.join(_root, "test_data",
+                                 "bonus_%s_%s.png" % (tag, time.strftime("%Y%m%d_%H%M%S")))
+            os.makedirs(os.path.dirname(_shot), exist_ok=True)
+            _img.save(_shot)
+            return _shot
+        except Exception:
+            return ""
+
     clicked = False
     t_dlg = time.time()
     while time.time() - t_dlg < 5.0:
@@ -1490,15 +1506,9 @@ __out = ''
             break
         rows = _zhongkui_detect_rows(gateway) if hwnd else []
         if rows:
-            try:
-                _img, _, _ = grab_client(hwnd)
-                _shot = os.path.join(os.path.dirname(os.path.dirname(
-                    os.path.abspath(__file__))), "test_data",
-                    "bonus_dialog_%s.png" % time.strftime("%Y%m%d_%H%M%S"))
-                _img.save(_shot)
+            _shot = _bonus_shot("dialog")
+            if _shot:
                 logger.info("稀有怪对话截图：%s" % _shot)
-            except Exception:
-                pass
             b = rows[0]
             post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
                        random.randint(b["y0"], b["y1"]), gateway=gateway)
@@ -1516,7 +1526,12 @@ __out = ''
             break
         _sleep(random.uniform(0.5, 0.8))
     if not zhuagui_in_battle(gateway):
-        logger.info("稀有怪 %s CALL 后未进战（距离太远/不可交互/对话未点中），跳过" % bname)
+        if clicked:
+            logger.info("稀有怪 %s 已点对话首行仍未进战（选项可能点错/距离远），跳过" % bname)
+        else:
+            _shot = _bonus_shot("skip")
+            logger.info("稀有怪 %s 无可点选项（大概率正被其他队伍占用'请勿扰'），跳过%s"
+                        % (bname, ("，截图:%s" % _shot) if _shot else ""))
         return None
     # 战斗挂机等结束
     t1 = time.time()
