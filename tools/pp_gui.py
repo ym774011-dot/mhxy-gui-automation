@@ -33,6 +33,7 @@ sys.path.insert(0, ROOT)
 from zhuagui_squad import (LOGGED_IN_RE, ROLE_RE, enum_game_windows,      # noqa: E402
                            plant, process_alive_for, running_squad_cmdlines)
 from library.pzxy_ipc import PzxyWorker                                    # noqa: E402
+import squad_auto_team as sat                                              # noqa: E402
 import ctypes                                                              # noqa: E402
 from ctypes import wintypes                                                # noqa: E402
 
@@ -51,6 +52,7 @@ S_PLANT = "播种中"
 S_WAIT = "待登录"
 S_ONLINE = "已登录"
 S_RESTART = "重启中"
+S_TEAM = "组队中"
 
 
 def post_click(hwnd, x, y):
@@ -139,6 +141,9 @@ class PPApp(tk.Tk):
         self._last_click_t = 0.0
         self._prev_btn = False
         self._port_i = 0
+        # 组队协调（登录后先组队，组完才拉任务）
+        self.cap_world = None      # 队长就绪后的世界坐标 [139,80]
+        self.team_done = False     # 组队阶段结束（满员/放弃）
 
         self._build_ui()
         self._restore_instances()
@@ -313,6 +318,87 @@ class PPApp(tk.Tk):
                        int(c["y"]) + random.randint(-2, 2))
         self._log("p%d 登录点击重放完毕，等待进入场景…" % inst.pid)
 
+    # ---------- 组队协调（登录后先去大唐官府组队，组完才拉任务） ----------
+    def _dispatch_after_login(self, inst):
+        """登录后：队长→走位+建队+批准；队员→传送+申请。组完才拉任务。"""
+        with self.lock:
+            has_members = any(i.role == "member" for i in self.instances)
+        if not has_members or self.team_done:
+            # 没有队员（单队长）或组队阶段已结束 → 直接跑任务
+            self._spawn_task(inst)
+            return
+        if inst.role == "leader":
+            threading.Thread(target=self._leader_team_flow,
+                             args=(inst,), daemon=True).start()
+        else:
+            threading.Thread(target=self._member_team_flow,
+                             args=(inst,), daemon=True).start()
+
+    def _leader_team_flow(self, inst):
+        inst.status, inst.note = S_TEAM, "传送+走位[139,80]"
+        cap = sat.prep_leader(inst.pid)
+        if cap is None:
+            self._log("[autoTeam] 队长准备失败，30s 后重试一次")
+            time.sleep(30)
+            cap = sat.prep_leader(inst.pid)
+        if cap is None:
+            self._log("[autoTeam] 队长准备失败，放弃组队直接拉任务")
+            self.team_done = True
+            inst.status = S_ONLINE
+            self._spawn_task(inst)
+            return
+        self.cap_world = cap
+        with self.lock:
+            n_members = sum(1 for i in self.instances if i.role == "member")
+        expect = 1 + n_members
+        self._log("[autoTeam] 队长已就位 [139,80]，开始建队（目标 %d 人，等待队员登录申请…）"
+                  % expect)
+        if not sat.create_team(inst.pid, cap):
+            self._log("[autoTeam] 建队失败，重试一次")
+            if not sat.create_team(inst.pid, cap):
+                self._log("[autoTeam] 建队失败，放弃组队")
+                self.team_done = True
+                inst.status = S_ONLINE
+                self._spawn_task(inst)
+                return
+        mem = sat.approve_loop(inst.pid, expect, timeout_s=1800.0)
+        self._log("[autoTeam] 批准结束: 成员=%s/目标=%s" % (mem, expect))
+        if mem and mem >= expect:
+            if sat.do_formation(inst.pid):
+                self._log("[autoTeam] 天覆阵完成 ✓")
+        else:
+            self._log("[autoTeam] 未满 %d 人（成员=%s），跳过阵法直接开工" % (expect, mem))
+        self.team_done = True
+        inst.status = S_ONLINE
+        time.sleep(2.0)
+        with self.lock:
+            insts = list(self.instances)
+        for i in insts:
+            if i.status == S_ONLINE:
+                self._spawn_task(i)   # 组完才给全队拉任务（已在跑的自动跳过）
+        self._log("[autoTeam] 组队阶段结束，任务脚本已按角色拉起")
+
+    def _member_team_flow(self, inst):
+        t0 = time.time()
+        while self.cap_world is None and not self.team_done \
+                and time.time() - t0 < 2400.0:
+            time.sleep(5)
+        if self.team_done:
+            self._log("p%d 组队已结束（迟到），直接拉起任务" % inst.pid)
+            self._spawn_task(inst)
+            return
+        if self.cap_world is None:
+            self._log("p%d 等不到队长就绪，直接拉起任务" % inst.pid)
+            self._spawn_task(inst)
+            return
+        inst.status, inst.note = S_TEAM, "传送+申请入队"
+        sat.member_tp_and_apply(inst.pid, self.cap_world, tries=5)
+        inst.status, inst.note = S_ONLINE, "已申请待批准"
+        # 等队长那边组队收尾后，由本线程兜底拉自己的任务（若队长没拉）
+        while not self.team_done and time.time() - t0 < 2700.0:
+            time.sleep(5)
+        self._spawn_task(inst)
+
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
         cmdlines = running_squad_cmdlines()
@@ -352,7 +438,7 @@ class PPApp(tk.Tk):
             insts = list(self.instances)
         wins = {pid: (pid, hwnd, title) for pid, hwnd, title in enum_game_windows()}
         for inst in insts:
-            if inst.status in (S_LAUNCH, S_PLANT, S_RESTART):
+            if inst.status in (S_LAUNCH, S_PLANT, S_RESTART, S_TEAM):
                 continue  # 由各自的异步流程负责
             w = wins.get(inst.pid)
             logged = bool(w and LOGGED_IN_RE.search(w[2]))
@@ -360,8 +446,8 @@ class PPApp(tk.Tk):
                 if logged:
                     inst.status = S_ONLINE
                     inst.title = w[2]
-                    self._log("p%d 检测到已登录 ✓ 拉起任务脚本" % inst.pid)
-                    self._spawn_task(inst)
+                    self._log("p%d 检测到已登录 ✓" % inst.pid)
+                    self._dispatch_after_login(inst)
                 elif not w:
                     self._log("p%d 窗口消失（待登录阶段）→ 重启闭环" % inst.pid)
                     self._begin_restart(inst)
