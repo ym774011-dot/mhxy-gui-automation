@@ -683,16 +683,8 @@ class PPApp(tk.Tk):
                                if i.pid == leader_pid), None)
                 if leader is None or leader.status != S_ONLINE:
                     continue   # 队长不在（掉线重登中），等归队流程
-                lw = "file://pzxy_p%d" % leader_pid
-                try:
-                    in_battle = ZGUI.zhuagui_in_battle(lw)
-                except Exception:
-                    in_battle = False
-                # ★2026-09-07：每 2 轮（~30s）无条件强制刷新一次队伍数据
-                #   （战斗中除外，UI 锁定点不开面板）——p7.队伍数据是懒加载
-                #   快照，队员掉线后裸读可能一直返回旧的满员快照。
-                st = self._watch_team_stats(
-                    leader_pid, force_refresh=(hb_n % 2 == 0 and not in_battle))
+                # ★2026-09-07：顶栏读数零点击，战斗中也可判缺员
+                st = self._watch_team_stats(leader_pid)
                 mem = st[0] if st else -1
                 if mem < 0:
                     if hb_n % 4 == 0:
@@ -724,30 +716,17 @@ class PPApp(tk.Tk):
             except Exception as e:
                 self._log("[看门狗] 异常: %s" % e)
 
-    def _watch_team_stats(self, leader_pid, force_refresh=False):
-        """读队伍统计；数据未刷新则点图标开面板重读（读完成对关面板，
-        防残留选目标模式干扰后续点击）。
+    def _watch_team_stats(self, leader_pid):
+        """读队伍统计。
 
-        ★2026-09-07：force_refresh=True 无条件走"点图标开面板→读→关面板"
-          强制重建懒加载快照。实证（01:49）：队员掉线后 p7.队伍数据 裸读
-          一直返回旧的满员快照（脏数据），看门狗全程静默不报缺员，
-          队员对着空气申请 3 次无人批准。战斗中 UI 锁定点不开面板，
-          保留裸读（战斗中本就无法处理缺员）。
+        ★2026-09-07 改用顶部头像栏（tp.窗口.人物框.队伍数据）：
+          游戏实时渲染刷新，无 p7 面板懒加载脏快照问题（02:14 退队标定：
+          退队后顶栏立即 count=0，p7 仍残留 5），且零点击——
+          旧方案每 30s 点图标开面板，抓鬼中反复弹面板扰民（用户明令禁止）。
+          战斗中也可读（纯 Lua 读，不碰 UI），缺员判定不再有战斗盲区。
         """
         lw = "file://pzxy_p%d" % leader_pid
-        if not force_refresh:
-            st = ZGUI._team_stats(lw)
-            if st:
-                return st
-        hwnd = find_hwnd_by_pid(leader_pid)
-        if not hwnd:
-            return None
-        ZGUI.post_click(hwnd, 570, 583, gateway=lw)   # 开面板刷新懒加载
-        time.sleep(1.2)
-        st = ZGUI._team_stats(lw)
-        ZGUI.post_click(hwnd, 570, 583, gateway=lw)   # 关面板（成对）
-        time.sleep(0.6)
-        return st
+        return ZGUI.team_stats_topbar(lw)
 
     def _kill_task_for(self, pid, leader=True):
         """按网关通道打断该实例的任务脚本进程（打断抓鬼用）。"""

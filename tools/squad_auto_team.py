@@ -161,18 +161,43 @@ def prep_leader(leader_pid):
     return pos
 
 
+def _team_panel_ensure(lhwnd, lw, want_open, wait_s=2.0):
+    """把组队面板开关到 want_open 状态（读 本类开关 实际状态配对，防双击）。
+
+    ★2026-09-07：图标点击不再盲点——先读 _team_panel_visible，
+      状态不符才点，点击后轮询确认。None（通道失败）时等待重读不点。
+    返回 True=最终确认符合，False=未确认。
+    """
+    v = ZGUI._team_panel_visible(lw)
+    deadline = time.time() + wait_s
+    while time.time() < deadline:
+        if v is True and want_open:
+            return True
+        if v is False and not want_open:
+            return True
+        if v is not None:   # 状态确认但不符合 → 点一次
+            ZGUI._team_click_icon(lhwnd, lw)
+            for _ in range(5):
+                time.sleep(random.uniform(0.25, 0.4))
+                nv = ZGUI._team_panel_visible(lw)
+                if nv is not None and nv == want_open:
+                    return True
+        else:               # 通道失败：等一拍重读，绝不点
+            time.sleep(random.uniform(0.5, 0.8))
+        v = ZGUI._team_panel_visible(lw)
+    return False
+
+
 def create_team(leader_pid, cap_world, tries=3):
-    """队长建队（★2026-09-07 按用户口述流程重写）：
+    """队长建队（★2026-09-07 按用户口述流程 + 顶栏零点击验证重写）：
 
-      1) 走回锚点 [139,80]（首轮也点一次保证站位；失败后必须走回——
-         失败的"点身体"会变成走路指令把队长带离原位）
-      2) 点组队图标（旗子模式：开面板）
+      1) 走回锚点 [139,80]（失败的"点身体"会变成走路指令带离原位）
+      2) 确保组队面板打开（读本类开关配对，不盲点图标）
       3) 鼠标移到队长身体点击（建队）
-      4) 再点组队图标查看是否成功（读 stats 裁决）
-      5) 未成功 → 画面点一次右键清理鼠标 → 点锚点走回 → 循环重试
+      4) 零点击验证：读顶部头像栏 队伍数据（不再点图标开面板！）
+      5) 未成功 → 关面板（状态配对）→ 右键清理鼠标 → 循环重试
 
-    每轮图标点击严格配对（开/关各一次）；成功返回 True（面板已关闭），
-    全部轮次失败返回 False（面板已复位为关）。
+    成功返回 True（面板已关闭）；全部失败返回 False（面板已复位为关）。
     """
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
@@ -188,30 +213,27 @@ def create_team(leader_pid, cap_world, tries=3):
             ZGUI.post_click(lhwnd, ax + random.randint(-2, 2),
                             ay + random.randint(-2, 2), gateway=lw)
             time.sleep(3.0)   # 等走位停稳
-        # 2) 点组队图标（旗子模式：开）
-        ZGUI._team_click_icon(lhwnd, lw)
-        time.sleep(0.8)
+        # 2) 确保面板打开（读状态配对）
+        if not _team_panel_ensure(lhwnd, lw, want_open=True):
+            _log("建队第%d次：组队面板无法打开，重试" % (k + 1))
+            continue
         # 3) 鼠标移到队长身体点击（建队）；走位后刷新偏移再投影
         coff = ZGUI._screen_offset_xy(lw)
         if coff is None:
-            ZGUI._team_click_icon(lhwnd, lw)   # 配对补关
-            time.sleep(0.6)
+            _team_panel_ensure(lhwnd, lw, want_open=False)
             continue
         sx, sy = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
         ZGUI._team_click_body(lhwnd, lw, sx, sy)
-        # 4) 再点组队图标查看是否成功
-        time.sleep(1.0)
-        ZGUI._team_click_icon(lhwnd, lw)
-        time.sleep(1.2)
-        st = ZGUI._team_stats(lw)
-        _log("建队第%d次 stats（应为 1）: %s" % (k + 1, (st,)))
+        # 4) 零点击验证：顶部头像栏（实时渲染，无懒加载脏数据）
+        time.sleep(1.5)
+        st = ZGUI.team_stats_topbar(lw)
+        _log("建队第%d次 顶栏stats（应为 1）: %s" % (k + 1, (st,)))
         ok = bool(st) and st[0] >= 1 and bool(st[2])
+        # 5) 收尾：面板确保关闭（状态配对），成功失败都关
+        _team_panel_ensure(lhwnd, lw, want_open=False)
         if ok:
-            # 有队面板开着（上一步打开），补关
-            ZGUI.post_click(lhwnd, 570, 583, gateway=lw)
-            time.sleep(0.8)
             return True
-        # 5) 失败：右键清理鼠标 → 走回锚点由下一轮开头执行
+        # 失败：右键清理鼠标，走回锚点由下一轮开头执行
         _log("建队第%d次未生效：右键清理鼠标，走回锚点重试" % (k + 1))
         ZGUI.post_right_click(lhwnd, random.randint(390, 430),
                               random.randint(240, 280), gateway=lw)

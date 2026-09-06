@@ -2001,6 +2001,57 @@ def _team_stats(gateway):
         return None
 
 
+def team_stats_topbar(gateway=DEFAULT_GATEWAY, **kw):
+    """读顶部头像栏队伍数据 → (成员数, 0, 队长名)；通道失败返回 None。
+
+    ★2026-09-07 新增（用户指路"看正上方头像栏"）：
+      顶部头像栏由游戏实时渲染刷新，无 p7 面板懒加载脏快照问题，
+      且零点击——看门狗/建队验证不再需要点组队图标开面板。
+      02:14 退队标定：退队后本表立即 count=0（三端一致），
+      而 p7.队伍数据 仍残留 count=5（脏数据实锤）。
+      无队伍 = 空表 → (0, 0, '')。返回结构与 _team_stats 同构。
+    """
+    r = _lua_call(gateway, r"""
+local g = tp.窗口 and tp.窗口.人物框 and tp.窗口.人物框.队伍数据
+if type(g) ~= 'table' then __out = '' return end
+local n = 0
+local leader = ''
+for k, v in pairs(g) do
+  if type(v) == 'table' then
+    n = n + 1
+    if v.队长 == true then leader = tostring(v.名称 or '') end
+  end
+end
+__out = string.format('%d|%s', n, leader)
+""")
+    if not r or "|" not in r:
+        return None
+    try:
+        cnt, _, leader = r.partition("|")
+        return int(cnt), 0, leader
+    except ValueError:
+        return None
+
+
+def _team_panel_visible(gateway):
+    """组队面板是否打开（界面数据[7].本类开关）。
+
+    True=开 / False=确认关（面板表常驻，关=开关 false）/ None=通道失败。
+    ★2026-09-07 新增：图标点击从"数次数配对"升级为"读实际状态配对"，
+      根治旗子面板开关打架（同背包 _bag_visible 思路）。
+    """
+    code = (
+        "local p = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[7]\n"
+        "if type(p) ~= 'table' then __out = 'false' return end\n"
+        "local sw = p.本类开关\n"
+        "__out = (sw == true or tostring(sw) == 'true') and 'true' or 'false'\n"
+    )
+    r = _lua_call(gateway, code)
+    if r is None or r == "":
+        return None
+    return r == "true"
+
+
 def _team_self_world_xy(gateway):
     """自身世界坐标（界面数据[7].队伍数据[1].地图数据，队长端读自条目）；无队伍返回 None。"""
     code = r"""
