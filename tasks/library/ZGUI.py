@@ -1896,7 +1896,14 @@ _TEAM_ALLOW_RECT = (514, 370, 541, 378)     # 申请列表"允许"（用户标�
 # 申请者卡片选中点（用户 21:44 标定 (162,166) 实测选中成功；卡距~112）
 # ★注意：点名字行(y≈287)/头像下部都不选中，必须点头像上部 (162,166)
 _TEAM_APPLY_SLOTS = ((162, 166), (274, 166), (386, 166), (498, 166))
-_TEAM_BODY_LIFT = 35                        # 身体点击：世界脚底锚点上移量（半身高，实测命中）
+# 身体点击：世界脚底锚点上移量（半身高；2026-09-06 22:2x 用户标定再+10 → 45）
+_TEAM_BODY_LIFT = 45
+# 队伍面板"阵型"按钮 / 阵型窗口"天覆阵" / "选定阵型"确认（用户 22:2x 标定，左键）
+_TEAM_FORMATION_RECT = (128, 146, 154, 155)
+_TEAM_FORM_TIANFU_RECT = (259, 134, 305, 148)
+_TEAM_FORM_CONFIRM_RECT = (202, 387, 238, 397)
+_TEAM_FORM_CLOSE_POS = (624, 113)           # 阵型窗口关闭
+_TEAM_PANEL_CLOSE_POS = (703, 108)          # 队伍窗口关闭
 
 _TEAM_STATS_LUA = r"""
 if type(tp) ~= 'table' then __out = '-' return end
@@ -2116,6 +2123,34 @@ def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
             logger.info("审批轮%d 未观察到成员/申请变化，继续下一轮" % (rnd + 1))
     st = _team_stats(gateway)
     return st[0] if st else -1
+
+
+def zhuagui_team_formation(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
+    """队长选阵型"天覆阵"（用户 2026-09-06 22:2x 标定，全左键）。
+
+    前置：队伍已成立。流程：点主队图标开队伍面板 → 点"阵型"(128,146)-
+    (154,155) → 点"天覆阵"(259,134)-(305,148) → 点"选定阵型"(202,387)-
+    (238,397) 确认 → 关阵型窗口 (624,113) → 关队伍窗口 (703,108)。
+    """
+    if hwnd is None:
+        hwnd = get_hwnd()
+
+    def _rect_click(rect):
+        post_click(hwnd, random.randint(rect[0], rect[2]),
+                   random.randint(rect[1], rect[3]), gateway=gateway)
+        _sleep(random.uniform(0.6, 0.9))
+
+    _team_click_icon(hwnd, gateway)              # 打开队伍面板
+    _rect_click(_TEAM_FORMATION_RECT)            # "阵型"
+    _rect_click(_TEAM_FORM_TIANFU_RECT)          # "天覆阵"
+    _rect_click(_TEAM_FORM_CONFIRM_RECT)         # "选定阵型"
+    post_click(hwnd, _TEAM_FORM_CLOSE_POS[0], _TEAM_FORM_CLOSE_POS[1], gateway=gateway)
+    _sleep(random.uniform(0.5, 0.8))
+    post_click(hwnd, _TEAM_PANEL_CLOSE_POS[0], _TEAM_PANEL_CLOSE_POS[1], gateway=gateway)
+    _sleep(random.uniform(0.5, 0.8))
+    if verbose:
+        logger.info("阵型流程已执行：天覆阵选定，阵型/队伍窗口已关闭")
+    return True
 
 
 def tianyan_read_pos(gateway):
