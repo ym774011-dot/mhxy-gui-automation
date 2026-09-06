@@ -1879,6 +1879,212 @@ def _bag_ensure_close(gateway, hwnd, tries=3) -> bool:
     return not _bag_visible(gateway)
 
 
+# ============================================================
+# ★2026-09-06 自动组队（用户 20:06 手动演示 + 20:11 标定全流程）
+#   主队图标 (570,583) 左键 → 点角色身体：队长点自己身体=创建队伍；
+#   队员点队长身体=发入队申请。队长再点图标 → "请求列表"
+#   (460,140)-(509,152) 打开申请列表 → 点申请者卡片 → "允许"
+#   (514,370)-(541,378)。允许后面板自动关闭，必须重开（图标→请求
+#   列表）循环，直到 4 名队员全部入队。
+#   数据面复用 界面数据[7]：队伍数据=成员表(仅队长端有值)，申请列表=入队申请。
+#   ★tp 依赖：全部走 tp.主界面/tp.屏幕；tp 被服务器事件抹除时（2026-09-06
+#   20:28 实证，换图不恢复、仅重登重建）整套自动化同死，属同一运维事件。
+# ============================================================
+_TEAM_ICON_POS = (570, 583)                 # 主队图标（客户区，用户标定）
+_TEAM_REQLIST_RECT = (460, 140, 509, 152)   # "请求列表"按钮（用户标定）
+_TEAM_ALLOW_RECT = (514, 370, 541, 378)     # 申请列表"允许"（用户标定）
+# 申请者卡片名字行点击点（截图标定：卡宽~112，首卡名字中心 x≈159，y≈287）
+_TEAM_APPLY_SLOTS = ((159, 287), (271, 287), (383, 287), (495, 287))
+
+_TEAM_STATS_LUA = r"""
+if type(tp) ~= 'table' then __out = '-' return end
+local j = tp.主界面 and tp.主界面.界面数据
+local p7 = type(j) == 'table' and j[7]
+if type(p7) ~= 'table' then __out = '-' return end
+local td = p7.队伍数据
+local mem, leader = 0, ''
+if type(td) == 'table' then
+  for _, v in pairs(td) do
+    if type(v) == 'table' then
+      mem = mem + 1
+      if v.队长 then leader = tostring(v.名称 or '') end
+    end
+  end
+end
+local app = 0
+if type(p7.申请列表) == 'table' then
+  for _ in pairs(p7.申请列表) do app = app + 1 end
+end
+__out = mem .. '|' .. app .. '|' .. leader
+"""
+
+
+def _team_stats(gateway):
+    """队伍面板统计 → (成员数, 申请数, 队长名)；tp/面板不可用返回 None。"""
+    r = _lua_call(gateway, _TEAM_STATS_LUA)
+    if not r or r == "-":
+        return None
+    try:
+        mem, app, leader = r.split("|", 2)
+        return int(mem), int(app), leader
+    except ValueError:
+        return None
+
+
+def _team_self_world_xy(gateway):
+    """自身世界坐标（界面数据[7].队伍数据[1].地图数据，队长端读自条目）；无队伍返回 None。"""
+    code = r"""
+if type(tp) ~= 'table' then __out = '' return end
+local j = tp.主界面 and tp.主界面.界面数据
+local p7 = type(j) == 'table' and j[7]
+local td = type(p7) == 'table' and p7.队伍数据
+local v = type(td) == 'table' and td[1]
+local md = type(v) == 'table' and v.地图数据
+if type(md) ~= 'table' then __out = '' return end
+__out = tostring(md.x) .. ',' .. tostring(md.y)
+"""
+    r = _lua_call(gateway, code) or ""
+    if "," not in r:
+        return None
+    try:
+        x, y = r.split(",", 1)
+        return float(x), float(y)
+    except ValueError:
+        return None
+
+
+def _screen_offset_xy(gateway):
+    """tp.屏幕.xy（世界→屏幕换算偏移，客户端各自相机）；tp 不可用返回 None。"""
+    code = r"""
+if type(tp) ~= 'table' then __out = '' return end
+local o = tp.屏幕 and tp.屏幕.xy
+if type(o) ~= 'table' then __out = '' return end
+__out = tostring(o.x) .. ',' .. tostring(o.y)
+"""
+    r = _lua_call(gateway, code) or ""
+    if "," not in r:
+        return None
+    try:
+        x, y = r.split(",", 1)
+        return float(x), float(y)
+    except ValueError:
+        return None
+
+
+def _team_click_icon(hwnd, gateway, tries=2):
+    """点主队图标（每次间隔~0.5s，弹面板/锁定目标模式都需要一拍）。"""
+    for _ in range(max(1, tries)):
+        post_click(hwnd, _TEAM_ICON_POS[0], _TEAM_ICON_POS[1], gateway=gateway)
+        _sleep(random.uniform(0.45, 0.7))
+
+
+def _team_click_body(hwnd, gateway, sx, sy):
+    """点角色身体（世界坐标已换算成屏幕坐标 sx,sy），带小抖动。"""
+    post_click(hwnd, sx + random.randint(-4, 4), sy + random.randint(-6, 2),
+               gateway=gateway)
+    _sleep(random.uniform(0.4, 0.7))
+
+
+def zhuagui_team_create(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
+                        world_xy=None, **kw):
+    """队长创建队伍：点主队图标 → 点自己身体 → 校验队伍数据出现。
+
+    world_xy: 队长当前世界坐标 (x,y)（如重登前从队伍数据读到的）；缺省点
+    屏幕中下 (400,430) 兜底（站立时相机近似锁定自身，实测踩点在中心带）。
+    创建成功返回 True。
+    """
+    if hwnd is None:
+        hwnd = get_hwnd()
+    off = _screen_offset_xy(gateway)
+    if world_xy is not None and off is not None:
+        sx, sy = int(world_xy[0] + off[0]), int(world_xy[1] + off[1])
+    else:
+        sx, sy = 400, 430
+    for attempt in range(3):
+        _team_click_icon(hwnd, gateway)
+        _team_click_body(hwnd, gateway, sx, sy)
+        for _ in range(8):
+            _sleep(random.uniform(0.4, 0.6))
+            st = _team_stats(gateway)
+            if st and st[0] >= 1 and st[2]:
+                if verbose:
+                    logger.info("队伍创建成功：队长=%s 成员=%d（第%d次尝试）"
+                                % (st[2], st[0], attempt + 1))
+                return True
+        if verbose:
+            logger.info("创建第%d次尝试未观察到队伍数据，重试" % (attempt + 1))
+    return False
+
+
+def zhuagui_team_join(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
+                      leader_world_xy=None, **kw):
+    """队员申请入队：点主队图标 → 点队长身体（世界坐标+本机屏幕偏移换算）。
+
+    申请是否入列由队长端申请列表核对（编排器负责），本函数只管发出点击。
+    """
+    if hwnd is None:
+        hwnd = get_hwnd()
+    if leader_world_xy is None:
+        logger.info("缺少队长世界坐标，无法申请入队")
+        return False
+    off = _screen_offset_xy(gateway)
+    if off is None:
+        logger.info("tp 不可用，无法换算队长屏幕位置")
+        return False
+    sx, sy = int(leader_world_xy[0] + off[0]), int(leader_world_xy[1] + off[1])
+    _team_click_icon(hwnd, gateway)
+    _team_click_body(hwnd, gateway, sx, sy)
+    if verbose:
+        logger.info("已点队长身体 (%d,%d) 发出入队申请" % (sx, sy))
+    return True
+
+
+def zhuagui_team_approve_all(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
+                             expect_members=5, max_rounds=8, **kw):
+    """队长循环批准入队申请，直到成员数达 expect_members 或申请清空。
+
+    每轮：点图标 → "请求列表" → 点首个申请者卡片 → "允许"
+    （允许后面板自动关闭，下一轮重新打开）。返回最终成员数（不可读=-1）。
+    """
+    if hwnd is None:
+        hwnd = get_hwnd()
+    rx = random.randint(_TEAM_REQLIST_RECT[0], _TEAM_REQLIST_RECT[2])
+    ry = random.randint(_TEAM_REQLIST_RECT[1], _TEAM_REQLIST_RECT[3])
+    ax = random.randint(_TEAM_ALLOW_RECT[0], _TEAM_ALLOW_RECT[2])
+    ay = random.randint(_TEAM_ALLOW_RECT[1], _TEAM_ALLOW_RECT[3])
+    for rnd in range(max(1, max_rounds)):
+        st = _team_stats(gateway)
+        if st is None:
+            logger.info("队伍面板不可读（tp 缺失?），中止审批")
+            return -1
+        mem, app, leader = st
+        if mem >= expect_members or app == 0:
+            if verbose:
+                logger.info("审批结束：成员=%d 申请=%d" % (mem, app))
+            return mem
+        _team_click_icon(hwnd, gateway)
+        post_click(hwnd, rx, ry, gateway=gateway)            # "请求列表"
+        _sleep(random.uniform(0.5, 0.8))
+        slot = _TEAM_APPLY_SLOTS[0]                          # 每批总点首卡
+        post_click(hwnd, slot[0], slot[1], gateway=gateway)  # 选中申请者
+        _sleep(random.uniform(0.3, 0.5))
+        post_click(hwnd, ax, ay, gateway=gateway)            # "允许"
+        if verbose:
+            logger.info("审批轮%d：已点申请者+允许（成员%d 申请%d）"
+                        % (rnd + 1, mem, app))
+        ok = False
+        for _ in range(10):
+            _sleep(random.uniform(0.5, 0.7))
+            st2 = _team_stats(gateway)
+            if st2 and (st2[0] > mem or st2[1] < app):
+                ok = True
+                break
+        if not ok and verbose:
+            logger.info("审批轮%d 未观察到成员/申请变化，继续下一轮" % (rnd + 1))
+    st = _team_stats(gateway)
+    return st[0] if st else -1
+
+
 def tianyan_read_pos(gateway):
     """确认背包中存在天眼符，返回其图标中心坐标 (x,y)；未找到返回 (0,0)。
 
