@@ -1,3 +1,2 @@
 @echo off
-cd /d %~dp0
-start "PP GUI" /D "%~dp0" E:\py\python.exe tools\pp_gui.py
+start "PP GUI" /D "E:\DS\mhxy-gui-automation" E:\py\python.exe "E:\DS\mhxy-gui-automation\tools\pp_gui.py"
