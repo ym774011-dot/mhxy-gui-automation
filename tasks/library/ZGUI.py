@@ -1578,7 +1578,9 @@ __out = ''
             logger.info("稀有怪 %s 无可点选项（大概率正被其他队伍占用'请勿扰'），跳过%s"
                         % (bname, ("，截图:%s" % _shot) if _shot else ""))
         return None
-    # 战斗挂机等结束
+    # 战斗挂机等结束（★进战即后台触发「自动」按钮判定，5s 后点击开启）
+    _threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
+                      daemon=True).start()
     t1 = time.time()
     while zhuagui_in_battle(gateway) and time.time() - t1 < float(max_battle_wait):
         _sleep(random.uniform(1.2, 1.8))
@@ -1822,14 +1824,17 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
     return ok, msg
 
 
-def _bag_visible(gateway) -> bool:
-    """查询道具背包面板是否可见（用 Lua 直接判定）。
+def _bag_visible(gateway):
+    """查询道具背包面板是否可见。True=开 / False=确认关 / None=通道失败状态未知。
 
     ★2026-09-03 修复：改用 `tp.主界面.界面数据[3]` 行囊面板的 `本类开关` 字段
       直接判定（true=打开）。旧判据"物品数据计数>0"在面板关闭后数据可能残留
       （恒 true），不可靠。面板3 为道具行囊（状态=道具、当前类型=包裹），
       其余"包裹"类面板(14/52/53) 本类开关=false，不会混淆。
       兼容网关序列化：布尔 true 或字符串 'true' 都视为开。
+    ★2026-09-07 修复：Lua 通道失败（返回 None/空）时返回 None（状态未知），
+      调用方不得把"未知"当"关闭"去盲点开关按钮——否则开着的包被点关，
+      下一轮又点开 → 背包反复开关（用户实测"开了关关了开"循环的机制）。
     """
     code = (
         "local p = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[3]\n"
@@ -1837,7 +1842,10 @@ def _bag_visible(gateway) -> bool:
         "local sw = p.本类开关\n"
         "__out = (sw == true or tostring(sw) == 'true') and 'true' or 'false'\n"
     )
-    return (_lua_call(gateway, code) or "") == "true"
+    r = _lua_call(gateway, code)
+    if r is None or r == "":
+        return None
+    return r == "true"
 
 
 def _bag_button_pos(hwnd):
@@ -1858,31 +1866,58 @@ def _bag_button_pos(hwnd):
 
 
 def _bag_ensure_open(gateway, hwnd, tries=5) -> bool:
-    """点击右下角背包按钮确保背包打开（真实点击开包最稳，兼容 MPCG._open_bag）。"""
-    if _bag_visible(gateway):
+    """点击右下角背包按钮确保背包打开（真实点击开包最稳，兼容 MPCG._open_bag）。
+
+    ★2026-09-07：_bag_visible 可能返回 None（通道失败状态未知），未知时
+      等待重读、禁止盲点——盲点会把开着的包关掉，形成开关打架循环。
+    """
+    v = _bag_visible(gateway)
+    if v is True:
         return True
     for _ in range(max(1, int(tries))):
+        if v is None:
+            # 通道瞬时失败：等一拍重读，绝不点按钮
+            _sleep(random.uniform(0.5, 0.8))
+            v = _bag_visible(gateway)
+            if v is True:
+                return True
+            continue
         bx, by = _bag_button_pos(hwnd)
         post_click(hwnd, bx, by, gateway=gateway)
         for _ in range(4):
             _sleep(random.uniform(0.15, 0.3))
-            if _bag_visible(gateway):
+            nv = _bag_visible(gateway)
+            if nv is True:
                 return True
-    return _bag_visible(gateway)
+            if nv is False:
+                break   # 确认还关着 → 下一轮再点
+        v = _bag_visible(gateway)
+    return _bag_visible(gateway) is True
 
 
 def _bag_ensure_close(gateway, hwnd, tries=3) -> bool:
-    """若背包面板仍打开则再次点击按钮将其关闭。"""
-    if not _bag_visible(gateway):
+    """若背包面板仍打开则再次点击按钮将其关闭（None=未知时不盲点）。"""
+    v = _bag_visible(gateway)
+    if v is False:
         return True
     for _ in range(max(1, int(tries))):
+        if v is None:
+            _sleep(random.uniform(0.5, 0.8))
+            v = _bag_visible(gateway)
+            if v is False:
+                return True
+            continue
         bx, by = _bag_button_pos(hwnd)
         post_click(hwnd, bx, by, gateway=gateway)
         for _ in range(4):
             _sleep(random.uniform(0.15, 0.3))
-            if not _bag_visible(gateway):
+            nv = _bag_visible(gateway)
+            if nv is False:
                 return True
-    return not _bag_visible(gateway)
+            if nv is True:
+                break   # 确认还开着 → 下一轮再点
+        v = _bag_visible(gateway)
+    return _bag_visible(gateway) is False
 
 
 # ============================================================
@@ -2632,6 +2667,79 @@ def _option_visible(hwnd, opt_x0=116, opt_y0=307, opt_x1=180, opt_y1=320, min_re
         return True
 
 
+# ============================================================
+# ★2026-09-07 战斗自动开关：进战斗 5s 后判定战斗指令菜单的「自动」按钮
+#   是否还在（还在=自动战斗未开启），在则点击开启（用户 2026-09-07 标定：
+#   按钮客户区 (677,328)-(739,358)，模板=战斗_自动按钮.png）。
+# ============================================================
+_AUTO_BTN_RECT = (677, 328, 739, 358)
+_AUTO_BTN_TMPL = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..",
+    "assets", "game_data", "图片数据", "战斗_自动按钮.png")
+_AUTO_BTN_THRESH = 0.72   # TM_CCOEFF_NORMED 命中阈值（模板与素材同源，实测余量大）
+
+
+def _client_shot(hwnd, x0, y0, x1, y1):
+    """截 hwnd 客户区 (x0,y0)-(x1,y1) → BGR 数组；失败返回 None。
+
+    注意：mss 走屏幕像素，目标窗口需前台可见（队长窗口用户全程盯着，
+    满足；后台最小化窗口截到的是遮挡内容，命中失败=不点击，安全降级）。
+    """
+    try:
+        import cv2
+        import mss
+        import win32gui
+        import numpy as np
+        ox, oy = win32gui.ClientToScreen(hwnd, (0, 0))
+        with mss.mss() as sct:
+            raw = sct.grab({"left": ox + x0, "top": oy + y0,
+                            "width": x1 - x0, "height": y1 - y0})
+        img = np.asarray(raw)
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    except Exception:
+        return None
+
+
+def _auto_button_visible(hwnd, thresh=_AUTO_BTN_THRESH):
+    """战斗指令菜单「自动」按钮模板匹配。True=按钮在（自动战斗未开启）。"""
+    try:
+        import cv2
+        import numpy as np
+        x0, y0, x1, y1 = _AUTO_BTN_RECT
+        # 场景取矩形外扩一圈，容忍模板/标定的 1-2px 偏差
+        scene = _client_shot(hwnd, x0 - 12, y0 - 12, x1 + 12, y1 + 12)
+        if scene is None:
+            return False
+        tmpl = cv2.imdecode(
+            np.fromfile(_AUTO_BTN_TMPL, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if tmpl is None:
+            return False
+        th, tw = tmpl.shape[:2]
+        sh, sw = scene.shape[:2]
+        if th > sh or tw > sw:
+            return False
+        res = cv2.matchTemplate(scene, tmpl, cv2.TM_CCOEFF_NORMED)
+        return float(res.max()) >= thresh
+    except Exception:
+        return False
+
+
+def _battle_auto_kick(hwnd, gateway, delay=5.0):
+    """进战斗 delay 秒后：仍在战斗且「自动」按钮还在 → 点击开启自动战斗。"""
+    try:
+        time.sleep(float(delay))
+        if not zhuagui_in_battle(gateway):
+            return
+        if _auto_button_visible(hwnd):
+            x0, y0, x1, y1 = _AUTO_BTN_RECT
+            post_click(hwnd, random.randint(x0 + 8, x1 - 8),
+                       random.randint(y0 + 6, y1 - 6), gateway=gateway)
+            logger.info("「自动」按钮仍在 → 已点击开启自动战斗 (%d,%d)-(%d,%d)"
+                        % (x0, y0, x1, y1))
+    except Exception as e:
+        logger.info("自动战斗判定异常（忽略）: %s" % e)
+
+
 def zhuagui_in_battle(gateway=DEFAULT_GATEWAY, **kw):
     """是否已进入战斗（可靠判据）。
 
@@ -2722,7 +2830,8 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
         if zhuagui_in_battle(gateway):
             # ★战斗中不 CALL：战斗本身已是出发点，直接走完成判定（结算后任务栏更新）
             logger.info("战斗中跳过 CALL 目标，直接等待抓鬼完成...")
-            return _wait_task_done(gateway, start_cnt, timeout, verbose)
+            return _wait_task_done(gateway, start_cnt, timeout, verbose,
+                                   hwnd=hwnd)
         return False, "无野鬼目标（先用天眼瞬移）"
     if verbose:
         logger.info("已CALL触发野鬼对话，等待对话框...")
@@ -2761,20 +2870,27 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
                          opt_x0=opt_x0, opt_y0=opt_y0, opt_x1=opt_x1, opt_y1=opt_y1)
     # ★2026-09-03 追加：点选项后光标移到场景空白（选项在对话框内，悬停会拦截后续点击）
     _mouse_clear(hwnd, gateway)
-    return _wait_task_done(gateway, start_cnt, timeout, verbose)
+    return _wait_task_done(gateway, start_cnt, timeout, verbose, hwnd=hwnd)
 
 
-def _wait_task_done(gateway, start_cnt, timeout, verbose=False):
+def _wait_task_done(gateway, start_cnt, timeout, verbose=False, hwnd=None):
     """点击'送你回地府'后轮询任务栏直到完成（次数递增/清空），带超时与复查。
 
     ★2026-09-03 提取公共完成判定：点'送你回地府'=秒杀发奖（本服），但任务栏
       更新有 8~15s 延迟；战斗中（CALL 后直接进战斗的罕见分支）也可调用本函数，
       战斗结算后任务栏同样会更新。成功判据=次数递增 或 任务栏清空。
+    ★2026-09-07 追加：轮询中一旦发现进战斗，后台触发「自动」按钮判定
+      （进战 5s 后仍在则点击开启自动战斗），战斗不再干等人工。
     """
     if verbose:
         logger.info("已点击'送你回地府'，检测抓鬼完成...")
+    auto_kicked = False
     t0 = time.time()
     while time.time() - t0 < float(timeout):
+        if not auto_kicked and hwnd and zhuagui_in_battle(gateway):
+            auto_kicked = True
+            _threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
+                              daemon=True).start()
         cur = zhuagui_get_task(gateway) or {}
         try:
             cur_cnt = int((cur or {}).get("count") or 0)

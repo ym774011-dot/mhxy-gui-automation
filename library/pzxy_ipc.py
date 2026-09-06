@@ -18,6 +18,7 @@
   命令源码必须 GBK 写入；结果按 GBK 解码。UTF-8 的中文标识符在游戏里是
   另一个不存在的标识符（表现为返回 nil，不报错）——极易踩坑。
 """
+import msvcrt
 import os
 import threading
 import time
@@ -82,36 +83,64 @@ class PzxyWorker(object):
         返回 (ok:bool, value:str)。value 为 ret1 的 tostring 形式或错误消息。
         """
         timeout = self.timeout if timeout is None else timeout
-        # ★2026-09-06 锁覆盖整个命令周期：单文件协议同一时刻只允许一条在途
-        #   命令（worker 每 tick 只消费最新 cmd 文件内容，写快了会覆盖未读
-        #   命令导致丢失）。主线程+采样线程共用实例时完全串行，符合协议语义。
+        # ★2026-09-07 跨进程互斥：GUI（看门狗/组队流程）与任务脚本是两个
+        #   进程，共写同一 cmd/out 文件。仅靠实例线程锁挡不住跨进程竞态，
+        #   命令互相覆盖丢失 → 任务脚本读状态得 None → 把"未知"当"关闭"
+        #   → 背包/面板反复开关（2026-09-07 实测定案）。用锁文件序列化。
+        lock_path = self.cmd_path + '.lock'
         with self._lock:
-            self.seq += 1
-            cid = str(self.seq)
-            payload = ('--WB:%s\n%s' % (cid, lua_src)).encode('gbk', 'replace')
-            # 临时名带 seq 唯一化
-            tmp = '%s.%s.tmp' % (self.cmd_path, cid)
-            with open(tmp, 'wb') as f:
-                f.write(payload)
-            self._replace_with_retry(tmp, self.cmd_path)
-            deadline = time.time() + timeout
-            last_raw = ''
-            while time.time() < deadline:
-                try:
-                    with open(self.out_path, 'rb') as f:
-                        last_raw = f.read().decode('gbk', 'replace')
-                except (IOError, OSError):
-                    last_raw = ''
-                for line in last_raw.splitlines():
-                    if line.startswith(cid + '|'):
-                        parts = line.split('|', 2)
-                        return parts[1] == 'ok', parts[2] if len(parts) > 2 else ''
-                time.sleep(0.04)
-            # ★2026-09-05 超时但 OUT 里有 TICKERR：worker 帧 tick 本身报错（命令可能未执行）
+            lf = open(lock_path, 'a+b')
+            locked = False
+            try:
+                lk_deadline = time.time() + max(10.0, timeout + 5.0)
+                lf.seek(0)
+                while True:
+                    try:
+                        msvcrt.locking(lf.fileno(), msvcrt.LK_NBLCK, 1)
+                        locked = True
+                        break
+                    except OSError:
+                        if time.time() >= lk_deadline:
+                            return False, '(ipc-lock busy)'
+                        time.sleep(0.05)
+                return self._cmd_locked(lua_src, timeout)
+            finally:
+                if locked:
+                    try:
+                        lf.seek(0)
+                        msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass
+                lf.close()
+
+    def _cmd_locked(self, lua_src, timeout):
+        """cmd 的命令周期主体（调用方已持实例锁 + 跨进程锁）。"""
+        self.seq += 1
+        cid = str(self.seq)
+        payload = ('--WB:%s\n%s' % (cid, lua_src)).encode('gbk', 'replace')
+        # 临时名带 seq 唯一化
+        tmp = '%s.%s.tmp' % (self.cmd_path, cid)
+        with open(tmp, 'wb') as f:
+            f.write(payload)
+        self._replace_with_retry(tmp, self.cmd_path)
+        deadline = time.time() + timeout
+        last_raw = ''
+        while time.time() < deadline:
+            try:
+                with open(self.out_path, 'rb') as f:
+                    last_raw = f.read().decode('gbk', 'replace')
+            except (IOError, OSError):
+                last_raw = ''
             for line in last_raw.splitlines():
-                if line.startswith('TICKERR|'):
-                    return False, 'worker-tickerr: %s' % line.split('|', 1)[1]
-            return False, '(timeout %.1fs)' % timeout
+                if line.startswith(cid + '|'):
+                    parts = line.split('|', 2)
+                    return parts[1] == 'ok', parts[2] if len(parts) > 2 else ''
+            time.sleep(0.04)
+        # ★2026-09-05 超时但 OUT 里有 TICKERR：worker 帧 tick 本身报错（命令可能未执行）
+        for line in last_raw.splitlines():
+            if line.startswith('TICKERR|'):
+                return False, 'worker-tickerr: %s' % line.split('|', 1)[1]
+        return False, '(timeout %.1fs)' % timeout
 
     @staticmethod
     def _replace_with_retry(src, dst, timeout=2.0):
