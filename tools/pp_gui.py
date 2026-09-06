@@ -46,6 +46,42 @@ PORTS = [18091, 18092, 18093, 18094, 18095, 18096, 18097, 18098]
 
 user32 = ctypes.windll.user32
 
+# ---- 全局鼠标钩子（低级钩子保证每次点击必捕获，轮询会漏快点击） ----
+WH_MOUSE_LL = 14
+WM_LBUTTONDOWN = 0x0201
+
+
+class _MSLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [("pt", wintypes.POINT), ("mouseData", wintypes.DWORD),
+                ("flags", wintypes.DWORD), ("time", wintypes.DWORD),
+                ("dwExtraInfo", ctypes.c_void_p)]
+
+
+def start_mouse_hook(on_click):
+    """装低级鼠标钩子，左键按下回调 on_click(sx, sy)。返回 (proc, hook)。"""
+    HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int,
+                                  ctypes.c_ssize_t, ctypes.c_ssize_t)
+
+    def handler(n_code, w_param, l_param):
+        if n_code == 0 and w_param == WM_LBUTTONDOWN:
+            s = ctypes.cast(l_param, ctypes.POINTER(_MSLLHOOKSTRUCT)).contents
+            try:
+                on_click(s.pt.x, s.pt.y)
+            except Exception:
+                pass
+        return user32.CallNextHookEx(None, n_code, w_param, l_param)
+
+    proc = HOOKPROC(handler)
+    hook = user32.SetWindowsHookExW(WH_MOUSE_LL, proc, None, 0)
+
+    def pump():
+        msg = wintypes.MSG()
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0):
+            pass
+
+    threading.Thread(target=pump, daemon=True).start()
+    return proc, hook
+
 # ---- 状态常量 ----
 S_LAUNCH = "启动中"
 S_PLANT = "播种中"
@@ -149,6 +185,10 @@ class PPApp(tk.Tk):
         self.team_done = False      # 组队阶段结束
         self.scripts_started = False  # 已点过【启动脚本】（之后重登=自动归队）
         self.teamflow_running = False
+        # 全局鼠标钩子：左键点击进队列，录制时消费
+        import collections
+        self._click_q = collections.deque(maxlen=80)
+        self._hook_proc, self._hook = start_mouse_hook(self._on_global_click)
 
         self._build_ui()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
@@ -234,17 +274,27 @@ class PPApp(tk.Tk):
     def _clicks_store(self):
         return self.cfg.setdefault("login_clicks_by_slot", {})
 
+    def _on_global_click(self, sx, sy):
+        """鼠标钩子回调（钩子线程调用）：入队等 UI 线程消费。"""
+        self._click_q.append((sx, sy))
+
     def _toggle_rec(self):
         if self.recording_target is not None:
             self._stop_rec("手动停止")
             return
         sel = self.tree.selection()
-        if not sel:
-            self._log("请先在列表中选中要录制的实例")
-            return
-        inst = self._inst_by_seq(int(sel[0]))
+        inst = self._inst_by_seq(int(sel[0])) if sel else None
         if inst is None:
-            return
+            # 没选中：自动挑第一个"待登录且未录制"的实例
+            with self.lock:
+                cands = [i for i in self.instances
+                         if i.status in (S_WAIT, S_PLANT)
+                         and not self._clicks_store().get(i.slot)]
+            if not cands:
+                self._log("没有可录制的实例（请先启动游戏并播种，或选中列表实例）")
+                return
+            inst = cands[0]
+            self._log("未选中行，自动选择 %s（p%s）" % (inst.slot, inst.pid))
         self.recording_target = inst
         self.btn_rec.config(text="停止录制(%s)" % inst.slot)
         n = len(self._clicks_store().get(inst.slot, []))
@@ -302,6 +352,15 @@ class PPApp(tk.Tk):
         while time.time() < deadline:
             time.sleep(1.0)
             if not proc_alive(inst.pid):
+                # 启动器型 exe：主进程退出但真客户端窗口已出现 → 收养
+                adopted = self._maybe_adopt(inst)
+                if adopted:
+                    if "([0])" in adopted[2]:
+                        self._do_plant(inst, adopted[1])
+                    elif LOGGED_IN_RE.search(adopted[2]):
+                        inst.status = S_ONLINE
+                        self._after_login(inst)
+                    return
                 inst.status, inst.note = S_LAUNCH, "进程消失，等监控重启"
                 return
             for pid, hwnd, title in enum_game_windows():
@@ -313,7 +372,7 @@ class PPApp(tk.Tk):
                     if LOGGED_IN_RE.search(title):
                         # 已经是登录好的窗口（异常情况），直接当在线
                         inst.status, inst.note = S_ONLINE, "窗口已登录"
-                        self._spawn_task(inst)
+                        self._after_login(inst)
                         return
         inst.status, inst.note = S_LAUNCH, "120s 未见到窗口"
 
@@ -502,6 +561,24 @@ class PPApp(tk.Tk):
             except Exception as e:
                 self._log("监控异常: %s" % e)
 
+    def _untracked_windows(self):
+        with self.lock:
+            managed = {i.pid for i in self.instances}
+        return [(p, h, t) for p, h, t in enum_game_windows() if p not in managed]
+
+    def _maybe_adopt(self, inst):
+        """进程消失但存在游离游戏窗口（启动器型 exe 拉起真客户端后自己退出）
+        → 收养该窗口为新 PID，避免误判掉线重复开游戏。返回窗口三元组或 None。"""
+        orphans = self._untracked_windows()
+        if not orphans:
+            return None
+        pid, hwnd, title = orphans[0]
+        old = inst.pid
+        inst.pid, inst.name, inst.title = pid, "p%d" % pid, title
+        self._log("p%s 进程消失，但发现游离游戏窗口 PID=%d → 收养（不重启）"
+                  % (old, pid))
+        return (pid, hwnd, title)
+
     def _monitor_once(self):
         with self.lock:
             insts = list(self.instances)
@@ -518,14 +595,34 @@ class PPApp(tk.Tk):
                     self._log("p%d 检测到已登录 ✓" % inst.pid)
                     self._after_login(inst)
                 elif not w:
-                    self._log("p%d 窗口消失（待登录阶段）→ 重启闭环" % inst.pid)
-                    self._begin_restart(inst)
+                    adopted = self._maybe_adopt(inst)
+                    if adopted and LOGGED_IN_RE.search(adopted[2]):
+                        inst.status = S_ONLINE
+                        self._after_login(inst)
+                    elif adopted and "([0])" in adopted[2]:
+                        inst.status = S_PLANT
+                        threading.Thread(target=self._do_plant,
+                                         args=(inst, adopted[1]),
+                                         daemon=True).start()
+                    else:
+                        self._log("p%d 窗口消失（待登录阶段）→ 重启闭环" % inst.pid)
+                        self._begin_restart(inst)
             elif inst.status == S_ONLINE:
                 if not logged:
-                    reason = "进程消失" if not proc_alive(inst.pid) else \
-                        ("退回登录界面" if (w and "([0])" in w[2]) else "窗口/标题异常")
-                    self._log("p%d 掉线判定: %s → 重启闭环" % (inst.pid, reason))
-                    self._begin_restart(inst)
+                    adopted = self._maybe_adopt(inst)
+                    if adopted and LOGGED_IN_RE.search(adopted[2]):
+                        inst.status, inst.title = S_ONLINE, adopted[2]
+                        self._log("p%d 收养后仍在线 ✓" % inst.pid)
+                    elif adopted and "([0])" in adopted[2]:
+                        inst.status = S_PLANT
+                        threading.Thread(target=self._do_plant,
+                                         args=(inst, adopted[1]),
+                                         daemon=True).start()
+                    else:
+                        reason = "进程消失" if not proc_alive(inst.pid) else \
+                            ("退回登录界面" if (w and "([0])" in w[2]) else "窗口/标题异常")
+                        self._log("p%d 掉线判定: %s → 重启闭环" % (inst.pid, reason))
+                        self._begin_restart(inst)
 
     def _begin_restart(self, inst):
         inst.status = S_RESTART
@@ -598,30 +695,28 @@ class PPApp(tk.Tk):
     def _poll_record(self):
         inst = self.recording_target
         if inst is None:
-            self._prev_btn = False
+            self._click_q.clear()
             return
         # ★该号登录成功即自动停止（登录后的游戏点击不录）
         if inst.status == S_ONLINE or LOGGED_IN_RE.search(inst.title or ""):
+            self._click_q.clear()
             self._stop_rec("%s 已登录" % inst.slot)
             return
-        down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)
-        if down and not self._prev_btn:
-            pt = wintypes.POINT()
-            user32.GetCursorPos(ctypes.byref(pt))
-            h = hwnd_at_screen(pt.x, pt.y)
-            if h:
-                cx, cy = screen_to_client(h, pt.x, pt.y)
-                now = time.time()
-                dt = round(now - self._last_click_t, 2) if self._last_click_t else 0.6
-                self._last_click_t = now
-                clicks = self._clicks_store().setdefault(inst.slot, [])
-                clicks.append({"x": int(cx), "y": int(cy), "dt": dt})
-                if len(clicks) > 40:
-                    del clicks[:-40]
-                self.lbl_rec.config(text="录制中: %s（已录 %d 步）"
-                                    % (inst.slot, len(clicks)))
-                self._log("录制 %s 点击 (%d,%d) dt=%.2f" % (inst.slot, cx, cy, dt))
-        self._prev_btn = down
+        clicks = self._clicks_store().setdefault(inst.slot, [])
+        while self._click_q:
+            sx, sy = self._click_q.popleft()
+            h = hwnd_at_screen(sx, sy)
+            if not h:
+                continue
+            cx, cy = screen_to_client(h, sx, sy)
+            now = time.time()
+            dt = round(now - self._last_click_t, 2) if self._last_click_t else 0.6
+            self._last_click_t = now
+            clicks.append({"x": int(cx), "y": int(cy), "dt": dt})
+            if len(clicks) > 40:
+                del clicks[:-40]
+            self.lbl_rec.config(text="录制中: %s（已录 %d 步）" % (inst.slot, len(clicks)))
+            self._log("录制 %s 点击 (%d,%d) dt=%.2f" % (inst.slot, cx, cy, dt))
 
     def _refresh_tree(self):
         with self.lock:
