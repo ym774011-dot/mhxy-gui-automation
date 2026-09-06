@@ -10,8 +10,10 @@
           worker（--name p<pid>，文件通道互不干扰）；已登录且 worker 活着
           的直接可用（捕获穿登录存活）；已登录但无 worker 的无法补救 → 跳过。
   Phase B 观察登录：轮询标题，出现 [4位以上数字ID] 即视为该窗口已登录；
-          第一个登录的拉起 run_unlimited_test.py（完整跑批），其后每个
-          拉起 member_sell_loop.py（纯出售）。全部就位后退出。
+          用户【按任意键】后自动跑组队链路（squad_auto_team：散人传送大唐
+          官府 → 队长走位[139,80] → 建队/申请/批准 → 天覆阵），组完才拉起
+          任务（第一个登录的 run_unlimited_test.py 完整跑批，其余
+          member_sell_loop.py 纯出售）。
 
 用法（5 个窗口全部停在登录界面后执行）:
     E:/py/python.exe tools/zhuagui_squad.py
@@ -256,6 +258,32 @@ def main():
     if not to_spawn:
         print("[完成] 全部进程都在跑，无需启动。")
         return 0
+
+    # ---- 自动组队（2026-09-06 新增：按键后第一时间跑，组完才拉起任务）----
+    # 顺序铁律：散人先传送大唐官府 → 队长走到[139,80] → 建队/申请/批准 → 天覆阵。
+    # ★队员在队伍里不能传送，必须先传后组。
+    leader_pid = next((pid for pid, info in to_spawn if info.get("leader")), None)
+    member_pids = [pid for pid, info in to_spawn if not info.get("leader")]
+    team_ok = False
+    if leader_pid and member_pids:
+        print("=" * 60)
+        print("[autoTeam] 开始自动组队：队长=%d 队员=%s" % (leader_pid, member_pids))
+        try:
+            from squad_auto_team import auto_team
+            team_ok = auto_team(leader_pid, member_pids)
+        except Exception as e:
+            print("[autoTeam] 异常: %s" % e)
+            team_ok = False
+        if team_ok:
+            print("[autoTeam] 组队+天覆阵完成 ✓")
+        else:
+            print("[autoTeam] 组队未完成。回车=继续拉起任务（无队模式），Ctrl+C=中止")
+            try:
+                input()
+            except (KeyboardInterrupt, EOFError):
+                return 1
+    elif leader_pid is None:
+        print("[autoTeam] 无队长可分配，跳过自动组队")
 
     spawned = []
     for pid, info in to_spawn:

@@ -1,0 +1,201 @@
+# -*- coding: utf-8 -*-
+"""squad_auto_team.py — 登录后一键组队链路（2026-09-06 22:52 实测 5/5 通过）。
+
+顺序铁律：
+  1. 全员散人传送 大唐官府（★队伍成员不能传送，必须先传后组）
+  2. 队长走到 [139,80]（世界 2780,1600），方便队员点到队长身体
+     ★用户规则：走位途中不点组队图标（会开关面板/进旗子模式干扰走路），
+     走前可点图标查坐标，到达后再点图标验证。
+  3. 建队 → 队员申请 → 循环批准至满员 → 天覆阵
+
+用法：
+    from squad_auto_team import auto_team
+    ok = auto_team(leader_pid=23736, member_pids=[21324, 24488, 15652, 17312])
+"""
+import importlib.util
+import os
+import random
+import sys
+import time
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.normpath(os.path.join(_HERE, ".."))
+_spec = importlib.util.spec_from_file_location(
+    "ZGUI", os.path.join(_ROOT, "tasks", "library", "ZGUI.py"))
+ZGUI = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ZGUI)
+sys.path.insert(0, _HERE)
+from member_sell_loop import find_hwnd_by_pid  # noqa: E402
+
+sys.path.insert(0, r"E:\DS\tmp")
+try:
+    from shot5 import shot
+except Exception:
+    shot = None
+
+CAP_TARGET = (2780.0, 1600.0)     # 网格 [139,80]
+ARRIVE_WORLD = (2640.0, 1660.0)   # 传送统一落点（网格 [132,83]）
+TP_DEST = "大唐官府"
+
+
+def _gw(pid):
+    return "file://pzxy_p%d" % pid
+
+
+def _log(msg):
+    print("[autoTeam] %s" % msg, flush=True)
+
+
+def _read_pos_via_panel(hwnd, gw, open_already=False):
+    """点图标开面板刷新懒加载 → 读 队伍数据[1].地图数据（散人=自己）。"""
+    if not open_already:
+        ZGUI.post_click(hwnd, 570, 583, gateway=gw)
+        time.sleep(1.0)
+    r = ZGUI._lua_call(gw, r"""
+if type(tp) ~= 'table' then __out = '' return end
+local j = tp.主界面 and tp.主界面.界面数据
+local p7 = type(j) == 'table' and j[7]
+local td = type(p7) == 'table' and p7.队伍数据
+local v = type(td) == 'table' and td[1]
+local md = type(v) == 'table' and v.地图数据
+if type(md) ~= 'table' then __out = '' return end
+__out = tostring(md.x) .. ',' .. tostring(md.y)
+""", timeout=10.0) or ""
+    if "," not in r:
+        return None
+    x, y = r.split(",", 1)
+    try:
+        return float(x), float(y)
+    except ValueError:
+        return None
+
+
+def _state(pid):
+    r = ZGUI._lua_call(_gw(pid), r"""
+if type(tp) ~= 'table' then __out = 'noTP' return end
+local o = tp.屏幕 and tp.屏幕.xy
+local off = type(o) == 'table' and (tostring(math.floor(o.x)) .. ',' .. tostring(math.floor(o.y))) or '?'
+local mid = tostring(tp.地图 and tp.地图.地图编号)
+__out = 'map=' .. mid .. ' off=' .. off
+""", timeout=10.0) or "noTP"
+    return r
+
+
+def auto_team(leader_pid, member_pids, expect_members=None, dest=TP_DEST):
+    """登录后完整组队链路。返回 True=满员+阵法完成。"""
+    pids = [leader_pid] + list(member_pids)
+    expect = expect_members or len(pids)
+
+    # ---- 1) 全员散人传送 ----
+    _log("阶段1: 全员传送 %s（散人）" % dest)
+    for pid in pids:
+        hwnd = find_hwnd_by_pid(pid)
+        if not hwnd:
+            _log("p%d: 找不到窗口，跳过传送" % pid)
+            continue
+        before = _state(pid)
+        ZGUI.zhuagui_teleport(_gw(pid), hwnd=hwnd, dest=dest, verbose=True)
+        time.sleep(1.0)
+        _log("p%d: %s -> %s" % (pid, before, _state(pid)))
+
+    # ---- 2) 队长走位 [139,80] ----
+    _log("阶段2: 队长走位 [139,80]")
+    lw = _gw(leader_pid)
+    lhwnd = find_hwnd_by_pid(leader_pid)
+    # 走前检查（允许点图标）：开面板读坐标，读完关面板
+    pos = _read_pos_via_panel(lhwnd, lw)
+    ZGUI.post_click(lhwnd, 570, 583, gateway=lw)   # 关面板
+    time.sleep(0.8)
+    _log("队长当前位置: %s" % (pos,))
+    if pos is None:
+        _log("[fail] 读不到队长坐标，中止")
+        return False
+    for i in range(4):
+        dx, dy = CAP_TARGET[0] - pos[0], CAP_TARGET[1] - pos[1]
+        if abs(dx) <= 20 and abs(dy) <= 20:
+            break
+        off = ZGUI._screen_offset_xy(lw)
+        if off is None:
+            _log("[fail] tp 不可用")
+            return False
+        sx, sy = int(CAP_TARGET[0] + off[0]), int(CAP_TARGET[1] + off[1])
+        if not (0 <= sx <= 800 and 0 <= sy <= 600):
+            _log("[fail] 目标不在队长视野 (%d,%d)，需瞬移，中止" % (sx, sy))
+            return False
+        _log("走位点击 (%d,%d)（偏差 %.0f,%.0f）——途中不点组队图标" % (sx, sy, dx, dy))
+        ZGUI.post_click(lhwnd, sx, sy, gateway=lw)
+        time.sleep(4.0)
+        pos = (pos[0] + (CAP_TARGET[0] - pos[0]) * 0.5,
+               pos[1] + (CAP_TARGET[1] - pos[1]) * 0.5)  # 盲估计，走完再验证
+    # 到达后点图标开面板验证
+    pos = _read_pos_via_panel(lhwnd, lw)
+    _log("到达验证: %s（目标 %s）" % (pos, CAP_TARGET))
+    if pos is None or abs(CAP_TARGET[0] - pos[0]) > 40 or abs(CAP_TARGET[1] - pos[1]) > 40:
+        _log("[fail] 队长未到达 [139,80]")
+        return False
+    cap_world = pos
+    # 关面板再建队
+    ZGUI.post_click(lhwnd, 570, 583, gateway=lw)
+    time.sleep(0.8)
+
+    # ---- 3) 建队 ----
+    _log("阶段3: 建队")
+    coff = ZGUI._screen_offset_xy(lw)
+    sx, sy = int(cap_world[0] + coff[0]), int(cap_world[1] + coff[1])
+    ZGUI._team_click_icon(lhwnd, lw)
+    time.sleep(0.6)
+    ZGUI._team_click_body(lhwnd, lw, sx, sy)
+    time.sleep(1.0)
+    ZGUI._team_click_icon(lhwnd, lw)   # 开面板刷新+验证
+    time.sleep(1.2)
+    st = ZGUI._team_stats(lw)
+    _log("建队后 stats（应为 1）: %s" % (st,))
+    if not st or st[0] < 1 or not st[2]:
+        _log("[fail] 建队失败")
+        return False
+    # 关面板：approve_all 第 0 轮会点图标开面板（若已开会把它关掉→后续点击全偏）
+    ZGUI.post_click(lhwnd, 570, 583, gateway=lw)
+    time.sleep(0.8)
+
+    # ---- 4) 队员申请 ----
+    _log("阶段4: 队员申请")
+    for pid in member_pids:
+        gw = _gw(pid)
+        hwnd = find_hwnd_by_pid(pid)
+        off = ZGUI._screen_offset_xy(gw)
+        if off is None or hwnd is None:
+            _log("p%d: tp/窗口不可用，跳过" % pid)
+            continue
+        jx, jy = int(cap_world[0] + off[0]), int(cap_world[1] + off[1])
+        if not (0 <= jx <= 800 and 0 <= jy <= 600):
+            _log("p%d: 队长不在视野 (%d,%d)，跳过" % (pid, jx, jy))
+            continue
+        ZGUI._team_click_icon(hwnd, gw)
+        time.sleep(0.6)
+        ZGUI._team_click_body(hwnd, gw, jx, jy)
+        _log("p%d: 已点队长身体 (%d,%d)" % (pid, jx, jy))
+        time.sleep(2.0)
+
+    # ---- 5) 循环批准 ----
+    _log("阶段5: 批准至 %d 人" % expect)
+    n = ZGUI.zhuagui_team_approve_all(lw, hwnd=lhwnd, verbose=True,
+                                      expect_members=expect, max_rounds=8)
+    st = ZGUI._team_stats(lw)
+    _log("批准后 stats: %s" % (st,))
+    if not st or st[0] < expect:
+        _log("[fail] 未满 %d 人" % expect)
+        return False
+
+    # ---- 6) 天覆阵 ----
+    _log("阶段6: 天覆阵")
+    ZGUI.zhuagui_team_formation(lw, hwnd=lhwnd, verbose=True)
+    time.sleep(1.0)
+    r = ZGUI._lua_call(lw, r"""
+if type(tp) ~= 'table' then __out = 'noTP' return end
+local p7 = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[7]
+__out = tostring(p7 and p7.当前阵法) .. '/' .. tostring(p7 and p7.当前阵型)
+""", timeout=10.0)
+    _log("阵法验证: %s" % r)
+    if shot:
+        shot(leader_pid, r"E:\DS\mhxy-gui-automation\test_data\auto_team_final.png")
+    return "天覆阵" in (r or "")
