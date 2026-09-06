@@ -480,57 +480,116 @@ class PPApp(tk.Tk):
                          args=(insts,), daemon=True).start()
 
     def _teamflow_and_tasks(self, insts):
+        """★多线程并行版：阶段内各实例并行，阶段间保持顺序铁律。
+
+        阶段1 全员并行散人传送（先传后组：队伍成员不能传送）
+        阶段2 队长走位[139,80]（走位途中不点组队图标）
+        阶段3 建队
+        阶段4 队员并行申请入队
+        阶段5 队长批准至满员 → 天覆阵
+        任一阶段失败的兜底与旧版一致：降级为"只拉任务不组队"。
+        """
         try:
             leader = next((i for i in insts if i.role == "leader"), None)
             members = [i for i in insts if i.role != "leader"]
-            cap = None
-            if leader:
-                leader.status, leader.note = S_TEAM, "传送+走位[139,80]"
+
+            # ---- 阶段1：全员并行传送 ----
+            self._log("[autoTeam] 阶段1: %d 人并行传送 %s"
+                      % (len(insts), sat.TP_DEST))
+            tp_ok = {}
+
+            def _tp_one(inst):
+                inst.status, inst.note = S_TEAM, "传送%s" % sat.TP_DEST
+                try:
+                    tp_ok[inst.pid] = sat._teleport(inst.pid)
+                    self._log("p%d 传送%s" % (inst.pid,
+                              "完成 ✓" if tp_ok.get(inst.pid) else "失败"))
+                except Exception as e:
+                    tp_ok[inst.pid] = False
+                    self._log("p%d 传送异常: %s" % (inst.pid, e))
+
+            ts = [threading.Thread(target=_tp_one, args=(i,), daemon=True)
+                  for i in insts]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(180)
+
+            if leader is None:
+                self._log("[autoTeam] 无队长在线，队员只传送待命")
+                self._finish_tasks(insts)
+                return
+
+            # ---- 阶段2：队长走位 [139,80] ----
+            leader.status, leader.note = S_TEAM, "走位[139,80]"
+            self._log("[autoTeam] 阶段2: 队长走位[139,80]")
+            cap = sat.prep_leader(leader.pid)
+            if cap is None:
+                self._log("[autoTeam] 队长准备失败，20s 后重试一次")
+                time.sleep(20)
                 cap = sat.prep_leader(leader.pid)
-                if cap is None:
-                    self._log("[autoTeam] 队长准备失败，重试一次")
-                    time.sleep(20)
-                    cap = sat.prep_leader(leader.pid)
-                if cap is not None:
-                    self.cap_world = cap
-                    self._log("[autoTeam] 队长已就位 [139,80]，建队…")
-                    if not sat.create_team(leader.pid, cap):
-                        self._log("[autoTeam] 建队失败，重试一次")
-                        if not sat.create_team(leader.pid, cap):
-                            self._log("[autoTeam] 建队失败，只拉任务不组队")
-                            cap = None
+            if cap is None:
+                self._log("[autoTeam] 队长走位失败，只拉任务不组队")
+                self._finish_tasks(insts)
+                return
+            self.cap_world = cap
+
+            # ---- 阶段3：建队 ----
+            self._log("[autoTeam] 阶段3: 建队")
+            if not sat.create_team(leader.pid, cap):
+                self._log("[autoTeam] 建队失败，重试一次")
+                if not sat.create_team(leader.pid, cap):
+                    self._log("[autoTeam] 建队失败，只拉任务不组队")
+                    self._finish_tasks(insts)
+                    return
+
+            # ---- 阶段4：队员并行申请（阶段1 已传送，不再重复传）----
+            self._log("[autoTeam] 阶段4: %d 名队员并行申请入队" % len(members))
+
+            def _apply_one(m):
+                m.status, m.note = S_TEAM, "申请入队"
+                try:
+                    # 阶段1 传送失败的就地补传
+                    sat.member_tp_and_apply(m.pid, cap, tries=2,
+                                            tp_first=not tp_ok.get(m.pid))
+                except Exception as e:
+                    self._log("p%d 申请异常: %s" % (m.pid, e))
+
+            ts = [threading.Thread(target=_apply_one, args=(m,), daemon=True)
+                  for m in members]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(900)
+
+            # ---- 阶段5：批准 + 天覆阵 ----
+            self._log("[autoTeam] 阶段5: 队长批准申请")
+            mem = sat.approve_loop(leader.pid, 1 + len(members),
+                                   timeout_s=600.0)
+            self._log("[autoTeam] 批准结束: 成员=%s/目标=%s"
+                      % (mem, 1 + len(members)))
+            if mem and mem >= 1 + len(members):
+                if sat.do_formation(leader.pid):
+                    self._log("[autoTeam] 天覆阵完成 ✓")
                 else:
-                    self._log("[autoTeam] 队长走位失败，只拉任务不组队")
-            for m in members:
-                m.status, m.note = S_TEAM, "传送+申请入队"
-            if cap:
-                for m in members:
-                    sat.member_tp_and_apply(m.pid, cap, tries=2)
-                mem = sat.approve_loop(leader.pid, 1 + len(members),
-                                       timeout_s=600.0)
-                self._log("[autoTeam] 批准结束: 成员=%s/目标=%s"
-                          % (mem, 1 + len(members)))
-                if mem and mem >= 1 + len(members):
-                    if sat.do_formation(leader.pid):
-                        self._log("[autoTeam] 天覆阵完成 ✓")
-                else:
-                    self._log("[autoTeam] 未满员，跳过阵法")
-            elif members and not leader:
-                # 没有队长在场：队员只传送待命
-                for m in members:
-                    ZGUI.zhuagui_teleport("file://pzxy_p%d" % m.pid,
-                                          hwnd=find_hwnd_by_pid(m.pid),
-                                          dest="大唐官府", verbose=True)
-            self.scripts_started = True
-            self.team_done = True
-            for i in insts:
-                i.status, i.note = S_ONLINE, "运行中"
-                self._spawn_task(i)
-            self._log("[autoTeam] 组队+任务脚本启动完成")
+                    self._log("[autoTeam] 阵法未确认（不阻断任务）")
+            else:
+                self._log("[autoTeam] 未满员，跳过阵法")
+            self._finish_tasks(insts)
         except Exception as e:
+            import traceback
             self._log("[autoTeam] 组队流程异常: %s" % e)
+            self._log(traceback.format_exc())
         finally:
             self.teamflow_running = False
+
+    def _finish_tasks(self, insts):
+        self.scripts_started = True
+        self.team_done = True
+        for i in insts:
+            i.status, i.note = S_ONLINE, "运行中"
+            self._spawn_task(i)
+        self._log("[autoTeam] 组队+任务脚本启动完成")
 
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
@@ -742,9 +801,17 @@ class PPApp(tk.Tk):
 
     def _log(self, msg):
         stamp = time.strftime("%H:%M:%S")
-        self.logq.append("%s %s" % (stamp, msg))
+        line = "%s %s" % (stamp, msg)
+        self.logq.append(line)
         if len(self.logq) > 400:
             del self.logq[:-200]
+        # ★日志落盘：GUI 关掉/异常退出后仍有完整证据可查
+        try:
+            with open(os.path.join(ROOT, "pp_gui.log"), "a",
+                      encoding="utf-8", errors="replace") as f:
+                f.write(time.strftime("%m-%d ") + line + "\n")
+        except Exception:
+            pass
 
     def _on_close(self):
         """关闭兜底：存配置 → 卸载鼠标钩子 → 强制退出（钩子/后台线程不清场

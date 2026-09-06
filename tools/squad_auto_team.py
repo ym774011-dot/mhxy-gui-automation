@@ -87,13 +87,20 @@ def prep_leader(leader_pid):
     _teleport(leader_pid)
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
-    pos = _read_pos_via_panel(lhwnd, lw)
+    pos = None
+    for k in range(3):
+        pos = _read_pos_via_panel(lhwnd, lw)
+        if pos is not None:
+            break
+        _log("队长坐标第%d次读不到，重试…" % (k + 1))
+        time.sleep(2.0)
     ZGUI.post_click(lhwnd, 570, 583, gateway=lw)   # 关面板
     time.sleep(0.8)
     _log("队长当前位置: %s" % (pos,))
     if pos is None:
-        _log("[fail] 读不到队长坐标")
-        return None
+        # 传送落点是统一的 [132,83]（2026-09-06 五开实测），读不到面板时兜底假设
+        _log("面板读不到，按传送统一落点 [132,83] 兜底走位")
+        pos = ARRIVE_WORLD
     for i in range(4):
         dx, dy = CAP_TARGET[0] - pos[0], CAP_TARGET[1] - pos[1]
         if abs(dx) <= 20 and abs(dy) <= 20:
@@ -112,6 +119,12 @@ def prep_leader(leader_pid):
         pos = (pos[0] + (CAP_TARGET[0] - pos[0]) * 0.5,
                pos[1] + (CAP_TARGET[1] - pos[1]) * 0.5)  # 盲估计，走完再验证
     pos = _read_pos_via_panel(lhwnd, lw)
+    for k in range(2):
+        if pos is not None:
+            break
+        _log("到达验证读不到坐标，重试…")
+        time.sleep(2.0)
+        pos = _read_pos_via_panel(lhwnd, lw)
     _log("到达验证: %s（目标 %s）" % (pos, CAP_TARGET))
     if pos is None or abs(CAP_TARGET[0] - pos[0]) > 40 or abs(CAP_TARGET[1] - pos[1]) > 40:
         _log("[fail] 队长未到达 [139,80]")
@@ -141,9 +154,15 @@ def create_team(leader_pid, cap_world):
     return bool(st) and st[0] >= 1 and bool(st[2])
 
 
-def member_tp_and_apply(member_pid, cap_world, tries=4):
-    """队员上线：传送大唐官府 → 反复向队长身体申请（队长可能尚未就绪）。"""
-    _teleport(member_pid)
+def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True):
+    """队员上线：传送大唐官府 → 反复向队长身体申请（队长可能尚未就绪）。
+
+    tp_first=False 跳过传送（GUI 并行流程阶段1 已统一传送）。
+    """
+    if tp_first:
+        _teleport(member_pid)
+    else:
+        _log("p%d: 阶段1已传送，直接申请" % member_pid)
     gw = _gw(member_pid)
     for k in range(max(1, tries)):
         hwnd = find_hwnd_by_pid(member_pid)

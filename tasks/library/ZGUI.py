@@ -193,6 +193,7 @@ def _wait_cancel_cooldown(gateway, cooldown=_CANCEL_COOLDOWN):
 
 # 文件通道单例（gateway 传 "file://pzxy" 时启用，方案②：零 frida 依赖）
 _FILE_WORKERS = {}  # ★2026-09-06 多开：worker名 -> PzxyWorker（file://pzxy_p<pid> 每实例独立通道）
+_FILE_WORKERS_LOCK = _threading.Lock()  # ★2026-09-07 并行组队：worker 惰性创建防竞态
 
 
 def _worker_name_from_gateway(gateway):
@@ -220,12 +221,17 @@ def _lua_call_file(code: str, timeout: float, gateway="file://pzxy"):
         name = _worker_name_from_gateway(gateway) or ""
         w = _FILE_WORKERS.get(name)
         if w is None:
-            _root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
-            if _root not in sys.path:
-                sys.path.insert(0, _root)
-            from library.pzxy_ipc import PzxyWorker
-            w = PzxyWorker(name=name)
-            _FILE_WORKERS[name] = w
+            # ★并发安全：多线程同时首调会各自建 worker 写同一 cmd 文件互相
+            #   覆盖丢命令（GUI 组队流程 5 实例并行后必踩），创建需持锁
+            with _FILE_WORKERS_LOCK:
+                w = _FILE_WORKERS.get(name)
+                if w is None:
+                    _root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+                    if _root not in sys.path:
+                        sys.path.insert(0, _root)
+                    from library.pzxy_ipc import PzxyWorker
+                    w = PzxyWorker(name=name)
+                    _FILE_WORKERS[name] = w
         if not w.is_alive():
             return None
         ok, val = w.cmd(code, timeout=min(timeout, 5.0))
