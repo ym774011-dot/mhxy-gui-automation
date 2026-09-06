@@ -165,40 +165,53 @@ def member_tp_and_apply(member_pid, cap_world, tries=4):
     _log("p%d: 申请轮次结束（是否入队由队长批准裁决）" % member_pid)
 
 
-def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=6.0):
-    """队长循环批准申请直到满员/超时。返回最终成员数。
-
-    流程与 22:20 实测一致：点图标开面板一次 → 循环 请求列表→首卡(162,166)→
-    允许（允许后申请列表自动关，重开请求列表即可）。面板全程保持打开。
-    """
+def approve_open_panel(leader_pid):
+    """批准流程第一步：点图标打开队伍面板（面板全程保持开）。"""
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
-    ZGUI._team_click_icon(lhwnd, lw)       # 开面板
+    ZGUI._team_click_icon(lhwnd, lw)
     time.sleep(1.2)
-    t0 = time.time()
-    last_mem = -1
-    while time.time() - t0 < timeout_s:
-        st = ZGUI._team_stats(lw)
-        mem = st[0] if st else -1
-        if mem != last_mem:
-            _log("当前成员数: %s（目标 %d）" % (mem, expect_members))
-            last_mem = mem
-        if mem >= expect_members:
-            return mem
-        ZGUI.post_click(lhwnd, random.randint(460, 509),
-                        random.randint(140, 152), gateway=lw)
-        time.sleep(random.uniform(0.9, 1.2))
-        st = ZGUI._team_stats(lw)
-        mem = st[0] if st else -1
-        if mem >= expect_members:
-            return mem
+
+
+def approve_round(leader_pid):
+    """单轮批准：请求列表 → 点首卡(162,166) → 允许。需先 approve_open_panel。"""
+    lw = _gw(leader_pid)
+    lhwnd = find_hwnd_by_pid(leader_pid)
+    ZGUI.post_click(lhwnd, random.randint(460, 509),
+                    random.randint(140, 152), gateway=lw)
+    time.sleep(random.uniform(0.9, 1.2))
+    st = ZGUI._team_stats(lw)
+    mem = st[0] if st else -1
+    if mem >= 1:
         ZGUI.post_click(lhwnd, 162 + random.randint(-2, 2),
                         166 + random.randint(-2, 2), gateway=lw)
         time.sleep(random.uniform(0.5, 0.8))
         ZGUI.post_click(lhwnd, random.randint(514, 541),
                         random.randint(370, 378), gateway=lw)
         time.sleep(random.uniform(1.5, 2.2))
-    st = ZGUI._team_stats(lw)
+    return mem
+
+
+def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=6.0):
+    """队长循环批准申请直到满员/超时。返回最终成员数。
+
+    流程与 22:20 实测一致：点图标开面板一次 → 循环 请求列表→首卡(162,166)→
+    允许（允许后申请列表自动关，重开请求列表即可）。面板全程保持打开。
+    """
+    approve_open_panel(leader_pid)
+    t0 = time.time()
+    last_mem = -1
+    while time.time() - t0 < timeout_s:
+        st = ZGUI._team_stats(_gw(leader_pid))
+        mem = st[0] if st else -1
+        if mem != last_mem:
+            _log("当前成员数: %s（目标 %d）" % (mem, expect_members))
+            last_mem = mem
+        if mem >= expect_members:
+            return mem
+        approve_round(leader_pid)
+        time.sleep(poll_s)
+    st = ZGUI._team_stats(_gw(leader_pid))
     return st[0] if st else -1
 
 
