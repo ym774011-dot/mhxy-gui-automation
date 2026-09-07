@@ -2929,6 +2929,64 @@ def _battle_auto_kick(hwnd, gateway, delay=5.0):
         logger.info("自动战斗判定异常（忽略）: %s" % e)
 
 
+_AUTO_STATE_LUA = r"""
+local b = tp.战斗类
+if type(b) ~= 'table' then __out = '0|-' return end
+local inb = false
+local u = b.参战单位
+if type(u) == 'table' then
+  local n = 0
+  for _ in pairs(u) do n = n + 1 end
+  if n > 0 and tonumber(b.敌方数量 or 0) > 0 then inb = true end
+end
+local rp = tostring(b.回合进程 or '')
+if rp ~= '' and rp ~= '等待回合' and rp ~= 'nil' then inb = true end
+local a = b.窗口 and b.窗口.自动栏
+local vis = (type(a) == 'table' and a.可视 == true)
+if vis then inb = true end
+__out = (inb and '1' or '0') .. '|' .. (vis and tostring(a.状态 or '') or '-')
+"""
+
+
+def zhuagui_auto_battle_state(gateway=DEFAULT_GATEWAY, **kw):
+    """→ (是否战斗中, 「自动」按钮状态 str|None)。战斗 UI 未开时状态为 None。
+
+    状态语义（2026-09-07 脱战残留校准）：自动已开启时='取消'（按钮变为
+    可取消），未开启时='自动'。★读 Lua 判定，后台/被遮挡窗口也能用，
+    不依赖截屏模板（那是 _auto_button_visible，仅前台可靠）。
+    """
+    r = _lua_call(gateway, _AUTO_STATE_LUA) or ""
+    if "|" not in r:
+        return False, None
+    f, s = r.split("|", 1)
+    return f == "1", (s if s != "-" else None)
+
+
+def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **kw):
+    """★战斗中确保自动战斗已开启（队员侧看护用；返回 'clicked'/'auto_on'/'idle'）。
+
+    判据：战斗中 且 战斗窗口"自动栏".可视 且 状态 ~= '取消'（未开启）
+    → 点击用户标定的「自动」按钮矩形 (677,328)-(739,358)。
+    状态='取消'（已开启）时不点击，防止把自动点关。
+    """
+    if hwnd is None:
+        hwnd = get_hwnd()
+    if not hwnd:
+        return "idle"
+    inb, st = zhuagui_auto_battle_state(gateway)
+    if not inb:
+        return "idle"
+    if st == "取消":
+        return "auto_on"
+    x0, y0, x1, y1 = _AUTO_BTN_RECT
+    post_click(hwnd, random.randint(x0 + 8, x1 - 8),
+               random.randint(y0 + 6, y1 - 6), gateway=gateway)
+    msg = "战斗中「自动」未开启（状态=%s）→ 已点击 (%d,%d)-(%d,%d)" % (st, x0, y0, x1, y1)
+    (log.info if log else logger.info)(msg)
+    _BATTLE_LATCH["ts"] = time.time()
+    return "clicked"
+
+
 def zhuagui_in_battle(gateway=DEFAULT_GATEWAY, **kw):
     """是否已进入战斗（可靠判据，2026-09-07 三信号增强）。
 

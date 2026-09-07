@@ -19,6 +19,7 @@ import logging
 import os
 import random
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -89,6 +90,24 @@ def find_hwnd_by_pid(pid):
     return 0
 
 
+def _auto_battle_watchdog(pid, gw, log):
+    """★2026-09-07 队员自动战斗看护线程（用户实测：只有队长会点「自动」，队员不会）。
+
+    每 ~5s 用 Lua 状态判定（不依赖截屏，后台窗口可用）：
+      战斗中 且「自动」按钮状态 ~= '取消'（未开启）→ 点击开启。
+    与队长的 _battle_auto_kick（截屏模板）互不冲突：已开启时状态='取消'，
+    两边都不会再点，杜绝"点两次=关掉自动"。
+    """
+    while True:
+        try:
+            hwnd = find_hwnd_by_pid(pid)
+            if hwnd:
+                ZGUI.zhuagui_ensure_auto_battle(hwnd, gw, log=log)
+        except Exception as e:
+            log.warning("自动战斗看护异常（忽略）: %s" % e)
+        time.sleep(5.0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pid", type=int, required=True)
@@ -118,6 +137,9 @@ def main():
     hwnd = find_hwnd_by_pid(args.pid)
     if hwnd:
         ZGUI.set_target_hwnd(hwnd)
+    # ★2026-09-07 队员自动战斗看护（后台线程，5s 轮询，战斗中点开「自动」）
+    threading.Thread(target=_auto_battle_watchdog,
+                     args=(args.pid, gw, log), daemon=True).start()
     while True:
         try:
             hwnd = find_hwnd_by_pid(args.pid) or hwnd
