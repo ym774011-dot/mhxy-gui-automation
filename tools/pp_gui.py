@@ -161,6 +161,62 @@ def kill_task_process(pid):
                    capture_output=True, text=True, timeout=30)
 
 
+# ---------- 内存清理（2026-09-07 用户需求：5 开内存压力大时修剪工作集） ----------
+class _PMCI(ctypes.Structure):
+    _fields_ = [("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t)]
+
+
+def _ws_bytes(pid):
+    """读进程工作集字节数；失败返回 None。"""
+    h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED
+    if not h:
+        return None
+    try:
+        pmc = _PMCI()
+        pmc.cb = ctypes.sizeof(pmc)
+        if ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
+            return int(pmc.WorkingSetSize)
+        return None
+    finally:
+        ctypes.windll.kernel32.CloseHandle(h)
+
+
+def trim_process_ws(pid):
+    """EmptyWorkingSet 修剪进程工作集（不终止进程，页按需换回）。
+
+    返回 (前字节, 后字节)；打不开进程/修剪失败返回 None。
+    """
+    PROCESS_SET_QUOTA = 0x0100
+    h = ctypes.windll.kernel32.OpenProcess(0x1000 | PROCESS_SET_QUOTA, False, pid)
+    if not h:
+        return None
+    try:
+        before = _ws_bytes(pid) or 0
+        if not ctypes.windll.psapi.EmptyWorkingSet(h):
+            return None
+        after = _ws_bytes(pid) or 0
+        return (before, after)
+    finally:
+        ctypes.windll.kernel32.CloseHandle(h)
+
+
+def human_bytes(n):
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return "%.0f%s" % (n, unit) if unit in ("B", "KB") else "%.1f%s" % (n, unit)
+        n /= 1024.0
+    return "%dGB" % n
+
+
 class Instance:
     _seq = 0
     _role_count = {}
@@ -221,6 +277,7 @@ class PPApp(tk.Tk):
 
         self._build_ui()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
+        threading.Thread(target=self._auto_trim_loop, daemon=True).start()
         self.after(200, self._tick)
 
     def _bridge_sat_log(self):
@@ -274,6 +331,13 @@ class PPApp(tk.Tk):
                    command=self._browse).pack(side="left")
         ttk.Button(top, text="全部停止", width=10,
                    command=self._stop_all).pack(side="left", padx=4)
+        # ★2026-09-07 内存清理：EmptyWorkingSet 修剪游戏进程工作集（不杀进程）
+        ttk.Button(top, text="清理内存", width=10,
+                   command=self._trim_memory).pack(side="left", padx=4)
+        self.var_auto_trim = tk.BooleanVar(
+            value=bool(self.cfg.get("auto_trim", False)))
+        ttk.Checkbutton(top, text="每30分钟自动", variable=self.var_auto_trim,
+                        command=self._toggle_auto_trim).pack(side="left")
 
         bar = ttk.Frame(self)
         bar.pack(fill="x", padx=8, pady=2)
@@ -734,6 +798,52 @@ class PPApp(tk.Tk):
                       "（缺员时看门狗自动补组）")
         finally:
             self.after(0, lambda: self.btn_pause.config(state="normal"))
+
+    # ---------- 内存清理（手动按钮 + 每30分钟自动） ----------
+    def _trim_memory(self):
+        threading.Thread(target=self._trim_memory_work, daemon=True).start()
+
+    def _trim_memory_work(self):
+        """修剪全部游戏进程工作集（EmptyWorkingSet，不杀进程不断线）。
+
+        注意：修剪后游戏页按需换回，角色下一次操作可能轻微卡顿一下——
+        所以自动清理默认关，且只在用户勾选后每 30 分钟做一次。
+        """
+        wins = enum_game_windows()
+        if not wins:
+            self._log("[内存] 没有游戏进程可清理")
+            return
+        total_b = total_a = 0
+        n = 0
+        for pid, _h, _t in wins:
+            r = trim_process_ws(pid)
+            if r:
+                total_b += r[0]
+                total_a += r[1]
+                n += 1
+        if n:
+            self._log("[内存] 已修剪 %d 个游戏进程：%s → %s（释放 %s）"
+                      % (n, human_bytes(total_b), human_bytes(total_a),
+                         human_bytes(max(0, total_b - total_a))))
+        else:
+            self._log("[内存] 修剪失败（进程打不开，权限不足？）")
+
+    def _toggle_auto_trim(self):
+        self.cfg["auto_trim"] = bool(self.var_auto_trim.get())
+        self._save_cfg()
+        self._log("[内存] 自动清理%s" % ("已开启（每30分钟）" if self.cfg["auto_trim"]
+                                    else "已关闭"))
+
+    def _auto_trim_loop(self):
+        last = 0.0
+        while True:
+            time.sleep(30)
+            try:
+                if self.var_auto_trim.get() and time.time() - last >= 1800:
+                    last = time.time()
+                    self._trim_memory_work()
+            except Exception:
+                pass
 
     def _finish_tasks(self, insts):
         self.scripts_started = True
