@@ -90,17 +90,26 @@ def enum_game_windows():
 
 
 def plant(pid, name, port):
-    """登录界面播种：复用 pzxy_plant（--pid 定点 + --name 通道隔离）。"""
+    """登录界面播种：复用 pzxy_plant（--pid 定点 + --name 通道隔离）。
+
+    返回 (ok:bool, reason:str)——reason=pzxy_plant 输出末尾几行（失败原因）。
+    ★2026-09-07：此前失败只 print 到控制台（GUI 为 pythonw 时直接丢失），
+    播种偶发失败在日志里查不到任何原因，无法排查。
+    """
     print("[播种] PID=%d name=%s port=%d ..." % (pid, name, port))
-    r = subprocess.run(
-        [PYEXE, os.path.join(GATEWAY_DIR, "tools", "pzxy_plant.py"),
-         "--pid", str(pid), "--name", name, "--port", str(port)],
-        capture_output=True, text=True, encoding="gbk", errors="replace",
-        timeout=180)
+    try:
+        r = subprocess.run(
+            [PYEXE, os.path.join(GATEWAY_DIR, "tools", "pzxy_plant.py"),
+             "--pid", str(pid), "--name", name, "--port", str(port)],
+            capture_output=True, text=True, encoding="gbk", errors="replace",
+            timeout=180)
+    except subprocess.TimeoutExpired:
+        return False, "pzxy_plant 180s 超时"
     tail = (r.stdout or "").strip().splitlines()[-3:]
     for line in tail:
         print("   | " + line)
-    return r.returncode == 0
+    reason = " | ".join(x.strip() for x in tail) or ("returncode=%d" % r.returncode)
+    return r.returncode == 0, reason
 
 
 def running_squad_cmdlines_ex():
@@ -177,10 +186,11 @@ def main():
             squad.append((pid, name))
             continue
         if "([0])" in title:
-            if plant(pid, name, ports[i % len(ports)]):
+            ok_p, why = plant(pid, name, ports[i % len(ports)])
+            if ok_p:
                 squad.append((pid, name))
             else:
-                print("[失败] PID=%d 播种失败，跳过" % pid)
+                print("[失败] PID=%d 播种失败：%s" % (pid, why))
         else:
             skip.append((pid, title))
             print("[跳过] PID=%d 已登录但无 worker（无法中途播种）: %r" % (pid, title))

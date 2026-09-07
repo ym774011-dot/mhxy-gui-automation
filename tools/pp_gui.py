@@ -430,12 +430,21 @@ class PPApp(tk.Tk):
     def _do_plant(self, inst, hwnd):
         inst.status, inst.note = S_PLANT, ""
         self._log("p%d 检测到登录界面，开始播种…" % inst.pid)
-        port = PORTS[self._port_i % len(PORTS)]
-        self._port_i += 1
-        ok = plant(inst.pid, inst.name, port)
+        ok, why = self._plant_try(inst)
+        retried = False
+        if not ok:
+            # ★2026-09-07 失败原因落日志（此前只打控制台，pythonw 下丢失）
+            self._log("p%d 播种失败：%s（3s 后重试）" % (inst.pid, why))
+            inst.status, inst.note = S_PLANT, "播种失败，重试中"
+            time.sleep(3)
+            retried = True
+            ok, why = self._plant_try(inst)
         if ok:
-            inst.status, inst.note = S_WAIT, "播种成功"
-            self._log("p%d 播种成功 ✓（%s）" % (inst.pid, inst.name))
+            inst.status, inst.note = S_WAIT, "播种成功" + ("(重试)" if retried else "")
+            self._log("p%d %s ✓" % (inst.pid, inst.note))
+            # ★2026-09-07 修复：登录点击重放必须覆盖"重试成功"路径——旧代码
+            #   只在首次成功分支里做，重试成功后实例停在登录界面永不登录
+            #   （01:34 四连 / 10:21 共 5 例实锤）。
             if self._clicks_store().get(inst.slot):
                 threading.Thread(target=self._replay_login,
                                  args=(inst, hwnd), daemon=True).start()
@@ -443,16 +452,15 @@ class PPApp(tk.Tk):
                 self._log("p%d 等待手动登录（%s 无登录录制：选中该实例点【录制登录点击】"
                           "后手动登录一次即可）" % (inst.pid, inst.slot))
         else:
-            inst.status, inst.note = S_PLANT, "播种失败，重试中"
-            time.sleep(3)
-            ok2 = plant(inst.pid, inst.name, port)
-            if ok2:
-                inst.status, inst.note = S_WAIT, "播种成功(重试)"
-                self._log("p%d 播种成功(重试) ✓" % inst.pid)
-            else:
-                inst.status, inst.note = S_PLANT, "播种失败"
-                self._log("p%d 播种失败 ✗（窗口将保持登录界面，可手动处理）"
-                          % inst.pid)
+            inst.status, inst.note = S_PLANT, "播种失败"
+            self._log("p%d 播种失败 ✗：%s（窗口将保持登录界面，可手动处理）"
+                      % (inst.pid, why))
+
+    def _plant_try(self, inst):
+        """单次播种尝试；每次换一个端口（首试失败可能是端口/网关残留竞争）。"""
+        port = PORTS[self._port_i % len(PORTS)]
+        self._port_i += 1
+        return plant(inst.pid, inst.name, port)
 
     def _replay_login(self, inst, hwnd):
         """重放该实例自己录制的登录点击（掉线重登录闭环）。"""
