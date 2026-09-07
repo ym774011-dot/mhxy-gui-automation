@@ -234,7 +234,7 @@ def create_team(leader_pid, cap_world, tries=3):
         if sc is None or not (0 <= sc[0] <= 800 and 0 <= sc[1] <= 600):
             sc = (400.0, 300.0)          # 相机锁中心兜底（脚底≈屏幕中心）
             _log("建队第%d次 屏幕位读不到，用中心兜底 (400,300)" % (k + 1))
-        _log("建队第%d次 脚底屏幕位 (%d,%d) → 身体点上移 45" % (k + 1, sc[0], sc[1]))
+        _log("建队第%d次 脚底屏幕位 (%d,%d) → 身体点上移 %d" % (k + 1, sc[0], sc[1], ZGUI._TEAM_BODY_LIFT))
         ZGUI._team_click_body(lhwnd, lw, int(sc[0]), int(sc[1]))
         # 5) 零点击验证：顶部头像栏（无队=0，建队成功=1）
         time.sleep(1.5)
