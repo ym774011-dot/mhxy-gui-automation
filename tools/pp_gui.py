@@ -212,6 +212,7 @@ class PPApp(tk.Tk):
         self._reteam_running = False
         self._watch_started = False
         self._rejoining = set()           # 正在归队流程的实例 pid（防双驱动）
+        self.paused = False               # ★暂停接管：True=自动化全面撒手
 
         # ★2026-09-07 可观测性：squad_auto_team 的 _log 原本只 print 到
         #   stdout（GUI 无控制台 → 全程丢失）。组队/走位/建队每一步的内部
@@ -284,6 +285,11 @@ class PPApp(tk.Tk):
         self.btn_member.pack(side="left", padx=6)
         ttk.Button(bar, text="启动脚本", width=12,
                    command=self._start_all_tasks).pack(side="left", padx=6)
+        # ★2026-09-07 暂停/恢复：暂停=人工接管（停任务脚本+冻结看门狗/掉线闭环）；
+        #   恢复=跳过组队直接拉任务脚本（与【启动脚本】的组队流程区分开）
+        self.btn_pause = ttk.Button(bar, text="⏸ 暂停接管", width=12,
+                                    command=self._toggle_pause)
+        self.btn_pause.pack(side="left", padx=6)
         # 录制：先在列表选中实例，再点此按钮；该号登录成功自动停止
         self.btn_rec = ttk.Button(bar, text="录制登录点击", width=14,
                                   command=self._toggle_rec)
@@ -502,6 +508,9 @@ class PPApp(tk.Tk):
 
     def _rejoin_flow(self, inst):
         try:
+            if self.paused:
+                self._log("p%d 暂停中，跳过自动归队" % inst.pid)
+                return
             if inst.pid in self._rejoining:
                 return
             self._rejoining.add(inst.pid)
@@ -523,11 +532,15 @@ class PPApp(tk.Tk):
         finally:
             self._rejoining.discard(inst.pid)
             inst.status, inst.note = S_ONLINE, "重登完成"
-            time.sleep(2.0)
-            self._spawn_task(inst)
+            if not self.paused:
+                time.sleep(2.0)
+                self._spawn_task(inst)
 
     def _start_all_tasks(self):
         """【启动脚本】= 组队（传送/走位/申请/批准/天覆阵）→ 按角色拉任务。"""
+        if self.paused:
+            self._log("[暂停中] 请先点【恢复挂机】再启动脚本")
+            return
         if self.teamflow_running:
             self._log("组队流程进行中，请稍候…")
             return
@@ -651,6 +664,59 @@ class PPApp(tk.Tk):
         finally:
             self.teamflow_running = False
 
+    # ---------- 暂停接管 / 恢复挂机（2026-09-07 用户需求） ----------
+    def _toggle_pause(self):
+        """暂停⇄恢复切换。杀任务脚本/扫描可能耗时（PowerShell 查询），
+        放后台线程跑，UI 只即时改按钮文字与状态。"""
+        if self.teamflow_running or self._reteam_running:
+            self._log("组队/补组流程进行中，等本轮结束再暂停")
+            return
+        self.btn_pause.config(state="disabled")
+        if not self.paused:
+            self.paused = True            # 先立旗，防看门狗/监控再发起新动作
+            self.btn_pause.config(text="▶ 恢复挂机")
+            threading.Thread(target=self._pause_all, daemon=True).start()
+        else:
+            self.btn_pause.config(text="⏸ 暂停接管")
+            threading.Thread(target=self._resume_all, daemon=True).start()
+
+    def _pause_all(self):
+        """暂停：人工接管游戏。停全部任务脚本 + 冻结看门狗/掉线闭环。
+
+        与【全部停止】的区别：不杀游戏进程、worker 不动；暂停期间窗口
+        掉线/崩溃等一律不自动处理（用户在玩，GUI 完全撒手）。
+        """
+        try:
+            self._log("[暂停] 自动化冻结：停任务脚本，看门狗/掉线闭环挂起（可人工接管）")
+            with self.lock:
+                insts = [i for i in self.instances if i.status == S_ONLINE]
+            for i in insts:
+                i.note = "已暂停(人工接管)"
+                self._kill_task_for(i.pid, leader=(i.role == "leader"))
+            self._log("[暂停] 完成：任务脚本已全部停止")
+        finally:
+            self.after(0, lambda: self.btn_pause.config(state="normal"))
+
+    def _resume_all(self):
+        """恢复：跳过组队（不跑【启动脚本】的组队流程），按角色直接
+        重新拉起任务脚本 + 解冻看门狗/掉线闭环。
+
+        若接管期间队伍散了，看门狗检测缺员后会按需自动补组——那是
+        看门狗自身的常驻逻辑，与本按钮无关（本按钮永不触发组队）。
+        """
+        try:
+            self._log("[恢复] 解冻：跳过组队，按角色直接拉起任务脚本")
+            with self.lock:
+                insts = [i for i in self.instances if i.status == S_ONLINE]
+            for i in insts:
+                i.note = "运行中"
+                self._spawn_task(i)
+            self.scripts_started = True
+            self._log("[恢复] 完成：任务脚本已拉起，看门狗/掉线闭环恢复"
+                      "（缺员时看门狗自动补组）")
+        finally:
+            self.after(0, lambda: self.btn_pause.config(state="normal"))
+
     def _finish_tasks(self, insts):
         self.scripts_started = True
         self.team_done = True
@@ -713,6 +779,8 @@ class PPApp(tk.Tk):
         self._kill_stale_tasks()   # 启动先清一遍历史僵尸
         while not self._team_watch_stop.wait(15):
             try:
+                if self.paused:
+                    continue   # ★暂停接管：看门狗只挂起不动作（恢复后自动续）
                 stale_scan_n += 1
                 hb_n += 1
                 if stale_scan_n % 4 == 0:   # ~每分钟清一次残留任务脚本
@@ -853,6 +921,9 @@ class PPApp(tk.Tk):
         （其自管图标开关与双窗口关闭），中间不得插关面板点击。"""
         self._reteam_running = True
         try:
+            if self.paused:
+                self._log("[看门狗] 暂停生效，跳过本轮补组")
+                return
             lw = "file://pzxy_p%d" % leader_pid
             # 队长回等待点（在队中传送可能无效，走位仍有效；失败沿用旧坐标）
             cap = sat.prep_leader(leader_pid)
@@ -962,6 +1033,8 @@ class PPApp(tk.Tk):
         return None
 
     def _monitor_once(self):
+        if self.paused:
+            return   # ★暂停接管：不掉线判定/不重启/不播种（用户在玩，GUI 撒手）
         with self.lock:
             insts = list(self.instances)
         wins = {pid: (pid, hwnd, title) for pid, hwnd, title in enum_game_windows()}
