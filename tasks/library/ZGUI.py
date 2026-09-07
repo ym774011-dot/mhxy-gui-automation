@@ -317,6 +317,11 @@ def _lp(x, y):
 _last_mouse = [400, 300]  # 客户区坐标缓存（上次点击终点，近似当前引擎鼠标位）
 _last_mouse_ts = [0.0]    # ★2026-09-05 提速：鼠标位读取节流（1.5s 内复用缓存，省一次 Lua RPC）
 _call_guard = {"gid": "", "ts": 0.0}  # ★2026-09-03 防重复 CALL 目标冷却（多 call 弹框防护）
+# ★2026-09-07 进战闩锁（用户机制澄清：野鬼私有，进战后再 CALL=战斗中弹第二次框）：
+#   任何"已进战斗/对话框已弹出"信号都会刷新本闩锁；闩锁期内一律禁止再发 CALL。
+#   20s 只覆盖战斗 UI 收尾的状态滞后，战斗结束后很快自动解闩，不拖慢下一只。
+_BATTLE_LATCH = {"ts": 0.0}
+_BATTLE_LATCH_S = 20.0
 
 
 def _read_engine_mouse(gateway):
@@ -1519,6 +1524,10 @@ __out = ''
     _now = time.time()
     if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
         return None
+    # ★2026-09-07 进战闩锁：战斗中/战斗刚结束的滞后窗口内，绝不再发 CALL
+    #   （含稀有怪——打鬼战斗期间顺手 CALL 稀有怪=同款"战斗中弹框"）
+    if _now - _BATTLE_LATCH["ts"] < _BATTLE_LATCH_S:
+        return None
     if verbose:
         logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
     _sleep(random.uniform(0.15, 0.4))
@@ -2679,15 +2688,25 @@ def zhuagui_click_ghost(gateway=DEFAULT_GATEWAY, **kw):
     """
     # ★2026-09-05 提速：战斗检查+任务名提取+目标标识查找 原为 3 次独立 Lua 调用，
     #   合并为 1 次（服务端同一 Lua 态内顺序执行，语义不变）。
+    # ★2026-09-07 闩锁前置（用户机制澄清：进战后再 CALL=战斗中弹第二次框）：
+    #   进战闩锁期内直接不发任何包。战斗判定同步升级为三信号（同 zhuagui_in_battle）。
+    if time.time() - _BATTLE_LATCH["ts"] < _BATTLE_LATCH_S:
+        return False
     code = r"""
 local b = tp.战斗类
 if type(b) == 'table' then
+  local inb = false
   local u = b.参战单位
   if type(u) == 'table' then
     local n = 0
     for _ in pairs(u) do n = n + 1 end
-    if n > 0 and tonumber(b.敌方数量 or 0) > 0 then __out = 'BATTLE' return end
+    if n > 0 and tonumber(b.敌方数量 or 0) > 0 then inb = true end
   end
+  local rp = tostring(b.回合进程 or '')
+  if rp ~= '' and rp ~= '等待回合' and rp ~= 'nil' then inb = true end
+  local a = b.窗口 and b.窗口.自动栏
+  if type(a) == 'table' and a.可视 == true then inb = true end
+  if inb then __out = 'BATTLE' return end
 end
 local target = ''
 local t = tp.窗口.任务栏.任务
@@ -2719,6 +2738,7 @@ __out = ''
 """
     r = _lua_call(gateway, code) or ""
     if r == "BATTLE":
+        _BATTLE_LATCH["ts"] = time.time()   # ★命中战斗 → 武装闩锁，战斗结束前绝不再 CALL
         return False  # 战斗中禁止 CALL（用户反馈战斗内弹提示框）
     gid = r
     if not gid.isdigit():
@@ -2910,22 +2930,35 @@ def _battle_auto_kick(hwnd, gateway, delay=5.0):
 
 
 def zhuagui_in_battle(gateway=DEFAULT_GATEWAY, **kw):
-    """是否已进入战斗（可靠判据）。
+    """是否已进入战斗（可靠判据，2026-09-07 三信号增强）。
 
     ★2026-09-03 修复：旧判据读 `tp.战斗中` 本服恒为 nil（永远 False）；
       而 `tp.战斗类.背景显示=true` 在脱战后会**残留**（垃圾数据），不能单独使用。
-      可靠判据：`tp.战斗类.参战单位` 存在且含单位表 且 敌方数量>0。
-      实测脱战后 参战单位 为空表/nil → False。
+    ★2026-09-07 增强（脱机校准：脱战时 参战=0/回合=等待回合/自动栏不可视；
+      但『敌方数量』脱战也残留 7，不能单用）——以下任一即判战斗中：
+      a) 参战单位非空 且 敌方数量>0（原判据）
+      b) 回合进程 ~= '等待回合'（战斗中在 等待/命令/执行 回合间轮转）
+      c) 战斗窗口"自动栏".可视 == true（战斗 UI 专属按钮）
+    命中即刷新进战闩锁 _BATTLE_LATCH（战斗结束前禁止再 CALL）。
     """
     r = _lua_call(gateway, r"""
 local b = tp.战斗类
 if type(b) ~= 'table' then __out = 'false' return end
+local inb = false
 local u = b.参战单位
-if type(u) ~= 'table' then __out = 'false' return end
-local n = 0
-for _ in pairs(u) do n = n + 1 end
-if n > 0 and tonumber(b.敌方数量 or 0) > 0 then __out = 'true' else __out = 'false' end
+if type(u) == 'table' then
+  local n = 0
+  for _ in pairs(u) do n = n + 1 end
+  if n > 0 and tonumber(b.敌方数量 or 0) > 0 then inb = true end
+end
+local rp = tostring(b.回合进程 or '')
+if rp ~= '' and rp ~= '等待回合' and rp ~= 'nil' then inb = true end
+local a = b.窗口 and b.窗口.自动栏
+if type(a) == 'table' and a.可视 == true then inb = true end
+__out = inb and 'true' or 'false'
 """)
+    if r == "true":
+        _BATTLE_LATCH["ts"] = time.time()   # ★命中即武装闩锁：战斗结束前禁止再 CALL
     return r == "true"
 
 
@@ -3021,6 +3054,12 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
             t_wait += 0.6
             ok_dlg = _option_visible(hwnd, opt_x0, opt_y0, opt_x1, opt_y1)
         if not ok_dlg:
+            # ★2026-09-07（用户机制澄清）：重 CALL 前先查战斗——CALL 其实已生效
+            #   并直接进战的情况，再重 CALL 就是"战斗中弹第二次框"。
+            if zhuagui_in_battle(gateway):
+                logger.info("CALL 后未见到对话框但已进战斗 → 跳过重 CALL，直接等待抓鬼完成")
+                return _wait_task_done(gateway, start_cnt, timeout, verbose,
+                                       hwnd=hwnd)
             # 重 CALL 一次（柔和间隔），再等待确认
             time.sleep(random.uniform(0.3, 0.6))
             if zhuagui_click_ghost(gateway):
@@ -3035,6 +3074,9 @@ def zhuagui_enter_battle(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
         return False, "对话框未弹出（CALL未生效）"
     if verbose:
         logger.info("对话框已弹出，点击'送你回地府'...")
+    # ★2026-09-07：对话框已出=本鬼战斗即将开始，武装进战闩锁——
+    #   之后无论哪条路径（本轮/下一轮/稀有怪顺手打）都不许再 CALL，直到战斗结束。
+    _BATTLE_LATCH["ts"] = time.time()
     zhuagui_click_option(gateway, tries=tries, hwnd=hwnd,
                          opt_x0=opt_x0, opt_y0=opt_y0, opt_x1=opt_x1, opt_y1=opt_y1)
     # ★2026-09-03 追加：点选项后光标移到场景空白（选项在对话框内，悬停会拦截后续点击）
