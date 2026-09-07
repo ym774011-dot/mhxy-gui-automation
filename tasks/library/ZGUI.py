@@ -1096,6 +1096,48 @@ __out = table.concat(parts, ' ;; ')
     return opts
 
 
+def _dialog_option_rect(gateway, target_map):
+    """读对话栏选项表，找文本含目标图名的选项矩形。
+
+    ★2026-09-07 建邺城守卫实锤：守卫/驿站类对话的选项进 tp.窗口.对话栏.选项
+      （WORLD_BOSS._read_dialog_sel_rect 同款，实测"传送江南野外"可读可点）；
+      接引人/钟馗类对话选项**不进**该表（读到 0 条）→ 那类继续走红字像素检测。
+    返回 (rect or None, has_options:bool)：
+      rect=(x0,y0,x1,y1) 选中判断矩形（客户区绝对坐标）；None+True=选项表
+      可读但没有含目标图名的选项（此传送NPC不去目标图，应收尾取消）；
+      None+False=选项表为空/读不到（对话框不是守卫类，走旧红字路径）。
+    """
+    code = (
+        "local d = tp.窗口 and tp.窗口.对话栏\n"
+        "if type(d) ~= 'table' or type(d.选项) ~= 'table' then __out = 'EMPTY' return end\n"
+        "local any = false\n"
+        "for i = 1, 16 do\n"
+        "  local e = d.选项[i]\n"
+        "  if type(e) == 'table' then\n"
+        "    local t = tostring(e.基本内容 or e.跳转链接 or '')\n"
+        "    if t ~= '' then any = true end\n"
+        "    if t:find('" + target_map + "', 1, true) then\n"
+        "      local s = e.选中判断\n"
+        "      if type(s) == 'table' then\n"
+        "        __out = 'HIT|' .. tostring(s.x) .. ',' .. tostring(s.y) .. ','\n"
+        "          .. tostring(s.x2) .. ',' .. tostring(s.y2)\n"
+        "        return\n"
+        "      end\n"
+        "    end\n"
+        "  end\n"
+        "end\n"
+        "__out = any and 'NOOPT' or 'EMPTY'\n"
+    )
+    r = _lua_call(gateway, code) or ""
+    if r.startswith("HIT|"):
+        try:
+            x0, y0, x1, y1 = [int(v) for v in r[4:].split(",")]
+            return (x0, y0, x1, y1), True
+        except Exception:
+            return None, True
+    return None, (r == "NOOPT")
+
+
 def _npc_hop_map(gateway, hwnd, target_map, tries=2):
     """天眼落点错位兜底：找当前图 "<目标图>接引人" NPC，点击→对话→点"送我过去"跨图。
 
@@ -1122,7 +1164,12 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
             "  local nm = tostring(v.名称 or '')\n"
             "  local cz = tostring(v.称谓 or '')\n"
             "  -- 前缀锚定名称（普陀山接引人）或称谓含目标图名（土地公公|凌波城传送）\n"
-            "  if nm:find('" + target_map + "', 1, true) == 1 or cz:find('" + target_map + "', 1, true) then\n"
+            "  -- ★2026-09-07 追加：守卫/驿站类传送NPC也作候选（实测建邺城守卫\n"
+            "  --   在 tp.地图.npc 里称谓=空，两条旧规则都匹配不上 → 在建邺城\n"
+            "  --   去江南野外永远烧天眼）。守卫候选由对话选项文本含目标图名\n"
+            "  --   二次确认（见 _dialog_option_rect），防误点无关守卫。\n"
+            "  if nm:find('" + target_map + "', 1, true) == 1 or cz:find('" + target_map + "', 1, true)\n"
+            "     or nm:find('守卫', 1, true) or nm:find('驿站', 1, true) then\n"
             "    local wx = tonumber(tostring(v.x or '')) or 0\n"
             "    local wy = tonumber(tostring(v.y or '')) or 0\n"
             "    __out = nm .. '|' .. (wx + ox) .. ',' .. (wy + oy)\n"
@@ -1139,19 +1186,40 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
         post_click(hwnd, int(sx) + random.randint(-3, 3),
                    int(sy) + random.randint(-3, 3), gateway=gateway)
         _sleep(random.uniform(0.8, 1.2))
-        # ★2026-09-06 截图实锤（test_data/npc_click_1s.png）：接引人对话与钟馗
-        # 同款 UI，红字选项不进 tp.窗口.对话栏.选项（读到 0 条）——必须走红字
-        # 像素检测。首行=「送我过去」（行2=取消），点首行红字块中心。
+        # ★2026-09-07 守卫/驿站类对话：选项进 tp.窗口.对话栏.选项（接引人/钟馗
+        #   类为空）。有选项时按文本点含目标图名的选项矩形（如建邺城守卫
+        #   "传送江南野外"，WORLD_BOSS 实测同款可点）；选项可读但无匹配 =
+        #   该传送NPC不去目标图 → 右键收尾防误点，换下一轮；选项表空 =
+        #   接引人类对话 → 落回下方红字像素检测。
+        opt, has_opts = _dialog_option_rect(gateway, target_map)
         clicked = False
-        for _ in range(5):
-            rows = _zhongkui_detect_rows(gateway)
-            if rows:
-                b = rows[0]
-                post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
-                           random.randint(b["y0"], b["y1"]), gateway=gateway)
-                clicked = True
-                break
-            _sleep(random.uniform(0.4, 0.6))
+        if opt:
+            ox0, oy0, ox1, oy1 = opt
+            post_click(hwnd, random.randint(ox0, max(ox0 + 1, ox1)),
+                       random.randint(oy0, max(oy0, oy1)), gateway=gateway)
+            clicked = True
+            logger.info("跨图：%s 对话点含'%s'的选项矩形%s" % (nx, target_map, opt))
+        elif has_opts:
+            logger.info("跨图：%s 对话选项不含'%s'（不去目标图），右键收尾"
+                        % (nx, target_map))
+            post_right_click(hwnd, random.randint(300, 420),
+                             random.randint(300, 380), gateway=gateway)
+            _sleep(random.uniform(0.5, 0.8))
+            continue
+        else:
+            # ★2026-09-06 截图实锤（test_data/npc_click_1s.png）：接引人对话与
+            # 钟馗同款 UI，红字选项不进 tp.窗口.对话栏.选项（读到 0 条）——
+            # 必须走红字像素检测。首行=「送我过去」（行2=取消），点首行红字块
+            # 中心。（守卫类对话已在上面按文本点过 → 不进本循环防重复点击）
+            for _ in range(5):
+                rows = _zhongkui_detect_rows(gateway)
+                if rows:
+                    b = rows[0]
+                    post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                               random.randint(b["y0"], b["y1"]), gateway=gateway)
+                    clicked = True
+                    break
+                _sleep(random.uniform(0.4, 0.6))
         if not clicked:
             continue  # 对话没弹出 → 重新点 NPC
         # 等跨图完成（含走路+切换），轮询校验地图
