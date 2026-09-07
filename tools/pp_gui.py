@@ -217,6 +217,102 @@ def human_bytes(n):
     return "%dGB" % n
 
 
+# ---------- 弹窗检测与自动点掉（2026-09-07 用户需求） ----------
+# 场景：崩溃弹窗（应用程序错误/WER 停止工作）不点掉，进程就卡着不退，
+# 掉线闭环没法重新拉起游戏。策略：按进程名找弹窗宿主（游戏本尊 + WerFault），
+# 枚举其 #32770 对话框，优先点「确定/关闭程序」按钮（PostMessage BM_CLICK）。
+_POPUP_IMAGES = {"胖子西游.exe", "werfault.exe"}
+_BTN_PREFER = ("确定", "关闭程序", "关闭", "是", "ok", "close")
+
+
+def _pids_by_image():
+    """按镜像名取弹窗宿主 PID 集合（胖子西游 + WerFault）。"""
+    k32 = ctypes.windll.kernel32
+    psapi = ctypes.windll.psapi
+    arr = (wintypes.DWORD * 4096)()
+    cb = wintypes.DWORD()
+    if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr),
+                               ctypes.byref(cb)):
+        return set()
+    n = min(4096, cb.value // ctypes.sizeof(wintypes.DWORD))
+    out = set()
+    for i in range(n):
+        pid = arr[i]
+        if not pid:
+            continue
+        h = k32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED
+        if not h:
+            continue
+        try:
+            buf = ctypes.create_unicode_buffer(512)
+            size = wintypes.DWORD(512)
+            # ★本机 kernel32 无 K32QueryFullProcessImageNameW 导出（实测），
+            #   用无前缀版 QueryFullProcessImageNameW（Vista+ 内核32 自带）
+            if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                img = (buf.value or "").rsplit("\\", 1)[-1].lower()
+                if img in _POPUP_IMAGES:
+                    out.add(int(pid))
+        except Exception:
+            pass
+        finally:
+            k32.CloseHandle(h)
+    return out
+
+
+def _enum_dialogs_of(pids):
+    """枚举这些进程名下可见的 #32770 对话框 → [(hwnd, pid, 标题)]。"""
+    user32 = ctypes.windll.user32
+    hits = []
+    PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(h, _lp):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+        if pid.value in pids and user32.IsWindowVisible(h):
+            cls = ctypes.create_unicode_buffer(64)
+            user32.GetClassNameW(h, cls, 64)
+            if cls.value == "#32770":
+                n = user32.GetWindowTextLengthW(h)
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(h, buf, n + 1)
+                hits.append((int(h), int(pid.value), buf.value))
+        return True
+
+    user32.EnumWindows(PROC(cb), 0)
+    return hits
+
+
+def _dismiss_popup(hwnd):
+    """点掉对话框：枚举子按钮，优先「确定/关闭程序/关闭」，BM_CLICK。"""
+    user32 = ctypes.windll.user32
+    buttons = []
+    PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(h, _lp):
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(h, cls, 64)
+        if cls.value == "Button" and user32.IsWindowVisible(h):
+            txt = ctypes.create_unicode_buffer(128)
+            user32.GetWindowTextW(h, txt, 128)
+            buttons.append((int(h), txt.value or ""))
+        return True
+
+    user32.EnumChildWindows(hwnd, PROC(cb), 0)
+    if not buttons:
+        return False
+
+    def score(t):
+        t = t.strip().lower()
+        for i, p in enumerate(_BTN_PREFER):
+            if p in t:
+                return i
+        return 99
+
+    buttons.sort(key=lambda b: score(b[1]))
+    user32.PostMessageW(buttons[0][0], 0x00F5, 0, 0)  # BM_CLICK
+    return True
+
+
 class Instance:
     _seq = 0
     _role_count = {}
@@ -278,6 +374,7 @@ class PPApp(tk.Tk):
         self._build_ui()
         threading.Thread(target=self._monitor_loop, daemon=True).start()
         threading.Thread(target=self._auto_trim_loop, daemon=True).start()
+        threading.Thread(target=self._popup_loop, daemon=True).start()
         self.after(200, self._tick)
 
     def _bridge_sat_log(self):
@@ -845,6 +942,24 @@ class PPApp(tk.Tk):
             except Exception:
                 pass
 
+    def _popup_loop(self):
+        """每 5s 扫游戏/WerFault 名下的系统弹窗并点掉（用户需求：弹窗不点掉
+        进程卡住不掉 → 掉线闭环拉不起游戏）。暂停接管时不代点（用户在玩）。"""
+        while True:
+            time.sleep(5)
+            try:
+                if self.paused:
+                    continue
+                pids = _pids_by_image()
+                if not pids:
+                    continue
+                for hwnd, pid, title in _enum_dialogs_of(pids):
+                    if _dismiss_popup(hwnd):
+                        self._log("p%d 检测到系统弹窗(%s) → 已点确定/关闭"
+                                  % (pid, (title or "")[:30]))
+            except Exception:
+                pass
+
     def _finish_tasks(self, insts):
         self.scripts_started = True
         self.team_done = True
@@ -1213,12 +1328,22 @@ class PPApp(tk.Tk):
         threading.Thread(target=self._restart_flow, args=(inst,), daemon=True).start()
 
     def _restart_flow(self, inst):
-        """掉线全闭环：杀旧任务 → 重启游戏 → 补种 → 重放登录 → 拉起任务。"""
+        """掉线全闭环：杀旧任务 → 强杀卡死旧进程 → 重启游戏 → 补种 → 重放登录 → 拉起任务。"""
         old_pid = inst.pid
         try:
             kill_task_process(old_pid)
         except Exception:
             pass
+        # ★2026-09-07 用户实锤：崩溃弹窗不点掉时旧游戏进程卡着不退，
+        #   直接拉新窗口会挤在一起/登录冲突。重启前强制结束旧进程。
+        if proc_alive(old_pid):
+            try:
+                subprocess.run(["taskkill", "/F", "/PID", str(old_pid)],
+                               capture_output=True, timeout=15)
+                self._log("p%d 旧游戏进程卡死，已强制结束" % old_pid)
+                time.sleep(1.0)
+            except Exception:
+                pass
         gp = self.var_path.get().strip()
         if not gp or not os.path.exists(gp):
             inst.note = "游戏路径无效，重启挂起"
