@@ -655,6 +655,12 @@ __out = ''
     if "," not in r:
         return False
     zx, zy = r.split(",")
+    # ★2026-09-07 用户规则（飞行旗偶发被系统乱传送）：钟馗投影点不在客户区内
+    #   = 人不在钟馗身边，点了一定落空 → 返回 False，让上层"重用飞行旗再飞"。
+    #   旧代码不检查，直接把坐标喂给 post_click，点了没反应还以为点过了。
+    if not (0 <= int(zx) <= 800 and 0 <= int(zy) <= 600):
+        logger.info("钟馗投影点越界 (%s,%s)——旗子乱传送/距离过远，需重飞" % (zx, zy))
+        return False
     n = max(1, int(tries))
     for i in range(n):
         jx = int(zx) + random.randint(-5, 5)
@@ -1329,13 +1335,26 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
             if not zhuagui_go_back_changan(gateway):
                 logger.warning("确保任务：回长安失败")
                 return False
-        if not zhuagui_take_task_v2(gateway, close_dialog=False):
-            # 可能对话框未关，重试一次
+        # ★2026-09-07 用户规则（飞行旗偶发被系统乱传送）：
+        #   第1次接失败先原地重试（可能只是对话没弹出）；
+        #   第2次起 = 找不到/够不着钟馗 → 重用飞行旗再飞一次（force=True），
+        #   最多重飞 2 次；还不行才判失败。
+        ok_take = False
+        for attempt in range(4):
+            if zhuagui_take_task_v2(gateway, close_dialog=False):
+                ok_take = True
+                break
             _zhongkui_close_dialog(gateway)
             time.sleep(random.uniform(0.5, 0.9))
-            if not zhuagui_take_task_v2(gateway, close_dialog=False):
-                logger.warning("确保任务：接任务失败")
-                return False
+            if attempt >= 1:
+                logger.warning("确保任务：长安城接任务失败（第%d次）→ 按用户规则重用飞行旗再飞"
+                               % (attempt + 1))
+                if not zhuagui_go_back_changan(gateway, force=True):
+                    logger.warning("确保任务：重飞失败")
+                    return False
+        if not ok_take:
+            logger.warning("确保任务：接任务失败（含 2 次重飞）")
+            return False
         task = zhuagui_get_task(gateway) or {}
     if not task.get("name"):
         if member_mode:
@@ -2505,13 +2524,18 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
     return True
 
 
-def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229, **kw):
+def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
+                            force=False, **kw):
     """从任意地图回长安城钟馗身边（合成旗地图红点）。
 
     ★2026-09-03 实测成功链路（打鬼完成后常用于回长安接下一只）:
       1) 右键背包中的红色合成旗 → 打开长安城传送大地图
       2) 点击"殷"字旁边红点 (312,229) → 角色飞到钟馗身边
     用户实测确认红点正确坐标 (312,229)（此前尝试 301/306 等偏移均无效）。
+
+    ★2026-09-07 force 参数（用户规则：飞行旗偶发被系统乱传送）：
+      force=True 时即使已在长安城也重新用旗子飞一次——
+      供"长安城但找不到/够不着钟馗"时的重飞兜底。
 
     Returns:
         bool: 是否已回长安城。
@@ -2529,8 +2553,8 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229, **kw)
         if zhuagui_in_battle(gateway):
             logger.warning("回长安：战斗超时未结束")
             return False
-    # 已在长安城直接成功
-    if _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
+    # 已在长安城直接成功（★force=True 跳过：用户规则允许重飞）
+    if not force and _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
         return True
     # ★2026-09-05 修复（用户实拍）：背包关闭时 `界面数据[3].物品数据` 有残留，
     # _zhuagui_find_flag_pos 照样返回旧坐标 → 右键点在关着的背包上 → 大地图打不开
