@@ -677,7 +677,8 @@ class PPApp(tk.Tk):
             self.btn_pause.config(text="▶ 恢复挂机")
             threading.Thread(target=self._pause_all, daemon=True).start()
         else:
-            self.btn_pause.config(text="⏸ 暂停接管")
+            self.paused = False            # ★2026-09-07 修复：漏置回 False
+            self.btn_pause.config(text="⏸ 暂停接管")   # → 恢复后永远冻结
             threading.Thread(target=self._resume_all, daemon=True).start()
 
     def _pause_all(self):
