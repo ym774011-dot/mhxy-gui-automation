@@ -1491,6 +1491,65 @@ _BONUS_CLICK_RECT = {
 _BONUS_ENABLED = os.environ.get("MHXY_ZG_BONUS", "1") != "0"
 
 
+def _bonus_dialog_rows(hwnd):
+    """稀有怪对话框红字行检测（宽区版，2026-09-07，真实截图离线标定）。
+
+    知了王对话含两行红字：第1行=进入战斗，第2行=取消（行距仅 ~3px，
+    对话框随文本长度上下漂移 → 固定矩形会点到取消行，用户 12:30 实测）。
+    算法（对 bonus_dialog_20260907_123310.png 离线验证通过）：
+      扫描对话区 (x100-620, y270-470) 红字行，块合并间距 <=1（两行只差 3px），
+      过滤：填充率 <0.5（红字是笔画，实心色块不是）且 y0<=400
+      （背包工具条"一键/银行/打造/传送"红底按钮在 y429+，对话未弹出时
+      防止误点它）。返回自上而下的红字行，第 1 行=进入战斗。
+    黑屏/窗口遮挡 → grab_client 失败 → 返回 []，调用方退回标定矩形。
+    """
+    try:
+        img, _, _ = grab_client(hwnd)
+        px = img.load()
+        W, H = img.size
+        x_lo, x_hi = 100, min(620, W - 1)
+        y_lo, y_hi = 270, min(470, H - 1)
+        counts = {}
+        for y in range(y_lo, y_hi):
+            c = 0
+            for x in range(x_lo, x_hi, 2):
+                R, G, B = px[x, y]
+                if R > 110 and (R - G) > 55 and (R - B) > 55:
+                    c += 1
+            if c >= 5:
+                counts[y] = c
+        blks = []
+        cur = None
+        for y in sorted(counts):
+            if cur and (y - cur["y1"]) <= 1:
+                cur["y1"] = y
+                cur["c"] += counts[y]
+            else:
+                if cur:
+                    blks.append(cur)
+                cur = {"y0": y, "y1": y, "c": counts[y]}
+        if cur:
+            blks.append(cur)
+        res = []
+        for b in blks:
+            if b["y0"] > 400:
+                continue          # 背包工具条红底按钮区（y429+），非对话选项
+            x0, x1, n = 999, -1, 0
+            for y in range(b["y0"], b["y1"] + 1):
+                for x in range(x_lo, x_hi):
+                    R, G, B = px[x, y]
+                    if R > 110 and (R - G) > 55 and (R - B) > 55:
+                        x0 = min(x0, x)
+                        x1 = max(x1, x)
+                        n += 1
+            w, h = x1 - x0 + 1, b["y1"] - b["y0"] + 1
+            if n >= 20 and (n / float(w * h)) < 0.5:   # 红字笔画 vs 实心色块
+                res.append({"x0": x0, "x1": x1, "y0": b["y0"], "y1": b["y1"]})
+        return res
+    except Exception:
+        return []
+
+
 def zhuagui_bonus_battle(gateway=DEFAULT_GATEWAY, verbose=False,
                          max_battle_wait=180.0, hwnd=None, **kw):
     """扫本图稀有怪并顺手打一只。命中并打完返回怪名，未命中/未进战返回 None。
@@ -1584,7 +1643,7 @@ __out = ''
         if zhuagui_in_battle(gateway):
             break
         if rect:
-            # 有标定矩形：等对话渲染一小会再按矩形点，截图留证
+            # 有标定矩形：等对话渲染一小会再点，截图留证
             if time.time() - t_dlg < random.uniform(0.7, 1.0):
                 _sleep(0.2)
                 continue
@@ -1592,11 +1651,24 @@ __out = ''
             if _shot:
                 logger.info("稀有怪对话截图：%s" % _shot)
             x0, y0, x1, y1 = rect
-            post_click(hwnd, random.randint(x0, x1), random.randint(y0, y1),
-                       gateway=gateway)
-            clicked = True
-            if verbose:
-                logger.info("已按标定矩形点稀有怪对话 (x%d-%d,y%d-%d)"
+            # ★2026-09-07 用户实测：知了王固定矩形点到了下面的"取消"行——
+            #   对话框随文本长度上下漂移（真实截图标定：进战斗行 y302-317、
+            #   取消行 y320-335，标定矩形中心 y=327 恰压在取消行上）。
+            #   改为红字行检测取【最顶行】=进入战斗（取消永远在下面）；
+            #   检测不到（黑屏/无对话）才退回标定矩形原逻辑。
+            rows = _bonus_dialog_rows(hwnd)
+            if rows:
+                b = rows[0]
+                post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                           random.randint(b["y0"], b["y1"]), gateway=gateway)
+                clicked = True
+                logger.info("已点稀有怪对话最顶红字行（进入战斗）(x%d-%d,y%d-%d)，共%d行"
+                            % (b["x0"], b["x1"], b["y0"], b["y1"], len(rows)))
+            else:
+                post_click(hwnd, random.randint(x0, x1), random.randint(y0, y1),
+                           gateway=gateway)
+                clicked = True
+                logger.info("红字行未检出，退回标定矩形 (x%d-%d,y%d-%d)"
                             % (x0, x1, y0, y1))
             break
         rows = _zhongkui_detect_rows(gateway) if hwnd else []
