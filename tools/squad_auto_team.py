@@ -250,18 +250,52 @@ def create_team(leader_pid, cap_world, tries=3):
     return False
 
 
-def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True):
-    """队员上线：传送大唐官府 → 反复向队长身体申请（队长可能尚未就绪）。
+def _read_map(gw):
+    """读当前地图名（联动归队用）；读不到返回 None。"""
+    try:
+        return ZGUI._lua_call(gw, r'''local m=tp.地图
+__out=tostring(m and m.地图名称 or "")''')
+    except Exception:
+        return None
+
+
+def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
+                        leader_pid=None):
+    """队员上线/归队：与队长同图 → 靠近队长 → 反复点队长身体申请。
 
     tp_first=False 跳过传送（GUI 并行流程阶段1 已统一传送）。
+
+    ★2026-09-07 联动修复（队长重登后 4 队员卡"队长不在视野"实锤）：
+      归队路径 tp_first=False 假设"阶段1已传送"，但掉线重登场景没人传过
+      队员 → 队员留在异图（江南野外），队长坐标（大唐官府）投影越界
+      → 空等 3 轮放弃，永远不申请。现在每轮先对账：
+        异图（读双方地图名实测）→ 就地传送（散人才能传）；
+        同图但队长视野外 → 向队长方向点击走近（夹到窗口内）；
+        视野内 → 点队长身体申请。
+      leader_pid 提供后地图对账才生效；未提供维持旧行为。
     """
-    if tp_first:
-        _teleport(member_pid)
-    else:
-        _log("p%d: 阶段1已传送，直接申请" % member_pid)
     gw = _gw(member_pid)
     for k in range(max(1, tries)):
         hwnd = find_hwnd_by_pid(member_pid)
+        if hwnd is None:
+            _log("p%d: 找不到窗口" % member_pid)
+            time.sleep(6)
+            continue
+        # ---- 地图对账（联动核心）----
+        if leader_pid:
+            my_map = _read_map(gw)
+            cap_map = _read_map(_gw(leader_pid))
+            if my_map and cap_map and my_map != cap_map:
+                _log("p%d: 异图(%s≠队长%s) 就地传送" % (member_pid, my_map, cap_map))
+                _teleport(member_pid)
+            elif tp_first and k == 0:
+                _teleport(member_pid)
+            elif not tp_first and k == 0:
+                _log("p%d: 已与队长同图(%s)，直接申请" % (member_pid, my_map or "?"))
+        elif tp_first and k == 0:
+            _teleport(member_pid)
+        elif not tp_first and k == 0:
+            _log("p%d: 阶段1已传送，直接申请" % member_pid)
         off = ZGUI._screen_offset_xy(gw)
         if off is None or hwnd is None:
             _log("p%d: tp/窗口不可用" % member_pid)
@@ -269,8 +303,13 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True):
             continue
         jx, jy = int(cap_world[0] + off[0]), int(cap_world[1] + off[1])
         if not (0 <= jx <= 800 and 0 <= jy <= 600):
-            _log("p%d: 队长不在视野 (%d,%d)" % (member_pid, jx, jy))
-            time.sleep(6)
+            # ★同图但队长在视野外：向其方向点击走近（不再原地空等）
+            wx = min(max(jx, 60), 740)
+            wy = min(max(jy, 60), 540)
+            _log("p%d: 队长不在视野 (%d,%d) → 向其方向走 (%d,%d)"
+                 % (member_pid, jx, jy, wx, wy))
+            ZGUI.post_click(hwnd, wx, wy, gateway=gw)
+            time.sleep(random.uniform(3.0, 4.0))
             continue
         ZGUI._team_click_icon(hwnd, gw)
         time.sleep(0.6)

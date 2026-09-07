@@ -510,7 +510,10 @@ class PPApp(tk.Tk):
             else:
                 cap = self.cap_world or self._find_cap_world()
                 if cap:
-                    sat.member_tp_and_apply(inst.pid, cap, tries=3)
+                    _lp = next((i.pid for i in self.instances
+                                if i.role == "leader" and i.status == S_ONLINE), None)
+                    sat.member_tp_and_apply(inst.pid, cap, tries=3,
+                                            leader_pid=_lp)
                 else:
                     ZGUI.zhuagui_teleport("file://pzxy_p%d" % inst.pid,
                                           hwnd=find_hwnd_by_pid(inst.pid),
@@ -607,9 +610,10 @@ class PPApp(tk.Tk):
             def _apply_one(m):
                 m.status, m.note = S_TEAM, "申请入队"
                 try:
-                    # 阶段1 传送失败的就地补传
+                    # 阶段1 传送失败的就地补传；传 leader_pid 供地图对账联动
                     sat.member_tp_and_apply(m.pid, cap, tries=2,
-                                            tp_first=not tp_ok.get(m.pid))
+                                            tp_first=not tp_ok.get(m.pid),
+                                            leader_pid=leader.pid)
                 except Exception as e:
                     self._log("p%d 申请异常: %s" % (m.pid, e))
 
@@ -878,8 +882,10 @@ class PPApp(tk.Tk):
 
                 def _apply(m):
                     try:
-                        sat.member_tp_and_apply(m.pid, cap, tries=2,
-                                                tp_first=False)
+                        # ★传 leader_pid：地图对账联动（异图就地传送/视野外走近）
+                        sat.member_tp_and_apply(m.pid, cap, tries=3,
+                                                tp_first=False,
+                                                leader_pid=leader_pid)
                     except Exception as e:
                         self._log("p%d 归队申请异常: %s" % (m.pid, e))
 
