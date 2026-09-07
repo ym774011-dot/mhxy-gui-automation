@@ -1158,7 +1158,7 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
     return False
 
 
-_MISMATCH = {"task": "", "n": 0, "ts": 0.0}  # ★2026-09-06 同一鬼"天眼落点被弹回"累计（防循环烧天眼）
+_MISMATCH = {"task": "", "n": 0, "ts": 0.0, "first_ts": 0.0}  # ★2026-09-06 同一鬼"天眼落点被弹回"累计（防循环烧天眼）
 
 # ★2026-09-06 地图编号→名称 学习表（传送圈.目标 存的是地图编号，需译回名称）。
 #   已知种子来自 MPCG/实测；其余在各实例跑图时由 _learn_map_id 自动补全。
@@ -1350,7 +1350,21 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
     _learn_map_id(gateway)  # 顺手学习 地图编号→名称（传送圈译码用）
     tname = task.get("name") or ""
     if _MISMATCH["task"] != tname:
-        _MISMATCH = {"task": tname, "n": 0, "ts": 0.0}  # 换鬼重置计数
+        _MISMATCH = {"task": tname, "n": 0, "ts": 0.0, "first_ts": 0.0}  # 换鬼重置计数
+
+    # ★2026-09-07 限流前置（实证：同一只鬼 50 分钟连烧天眼符）
+    #   旧限流写在"天眼前就已异图"的分支里，而最常见的路径是
+    #   【本就在正确图 → 用天眼 → 落点是传送门被弹回异图】，
+    #   命中不到那个分支 → 每个循环白烧一张天眼。
+    #   改为：不管当前是否异图，动手前先查该鬼的错位限流窗口。
+    if _MISMATCH.get("n", 0) >= 2:
+        _fts = _MISMATCH.get("first_ts") or _MISMATCH.get("ts") or 0.0
+        if _fts and (time.time() - _fts) < 240.0:
+            logger.info("确保任务：鬼 %s 落点反复被弹回（错位%d次），限流 %.0fs 内不再烧天眼"
+                        % (tname, _MISMATCH["n"], 240.0 - (time.time() - _fts)))
+            return False
+        _MISMATCH["n"] = 0        # 窗口过 → 允许再试一次（鬼可能已走开）
+        _MISMATCH["first_ts"] = 0.0
 
     target_map0 = snap.get("target_map") or ""
     cur_map0 = snap.get("map") or ""
@@ -1366,10 +1380,11 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
                         % (cur_map0, target_map0))
             _sleep(random.uniform(0.8, 1.4))
             return True
-        if _MISMATCH["n"] >= 2 and (time.time() - _MISMATCH["ts"]) < 240.0:
+        _fts0 = _MISMATCH.get("first_ts") or _MISMATCH.get("ts") or 0.0
+        if _MISMATCH["n"] >= 2 and _fts0 and (time.time() - _fts0) < 240.0:
             # 该鬼已实证反复错位且两条免费通道都不可用 → 限流：4 分钟内不烧符
             logger.info("确保任务：鬼 %s 卡传送门（错位%d次），限流等待鬼走开（%.0fs 内不烧符）"
-                        % (tname, _MISMATCH["n"], 240.0 - (time.time() - _MISMATCH["ts"])))
+                        % (tname, _MISMATCH["n"], 240.0 - (time.time() - _fts0)))
             return False
     # 天眼瞬移（同图直达鬼坐标 / 异图免费通道都不可用时的常规手段）
     if not zhuagui_use_tianyan(gateway):
@@ -1384,6 +1399,8 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
     if _mis(cur_map, target_map):
         _MISMATCH["n"] += 1
         _MISMATCH["ts"] = time.time()
+        if _MISMATCH["n"] == 1:
+            _MISMATCH["first_ts"] = time.time()   # 限流窗口从第一次错位起算（防滑动续期）
         # 落点被弹回 = 鬼在传送门旁实锤 → 免费通道跨回
         if _npc_hop_map(gateway, hwnd, target_map):
             logger.info("确保任务：落点错位（目标=%s 实际=%s），接引人跨图回目标图成功"
@@ -2533,7 +2550,25 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229, **kw)
     _sleep(random.uniform(1.2, 1.8))  # ★2026-09-05 提速 1.8~2.5 → 1.2~1.8（飞行落地图弹出）
     _mouse_clear(hwnd, gateway)
     mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
-    return mm == "长安城"
+    if mm == "长安城":
+        return True
+    # ★2026-09-07 兜底（实证 08:0x 起反复"回长安失败"空转）：
+    #   红点 (312,229) 是硬编码，旗子大地图/红点布局变化即失效。
+    #   改走已验证可用的免费跨图通道（接引人 → 传送圈），失败原因全部落日志。
+    logger.warning("回长安：合成旗红点点击后仍在 %s（旗位%s 红点%d,%d），改走接引人/传送圈"
+                   % (mm, flagpos, red_x, red_y))
+    if _npc_hop_map(gateway, hwnd, "长安城"):
+        _sleep(random.uniform(0.8, 1.4))
+        if _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
+            logger.info("回长安：接引人跨图成功")
+            return True
+    if _portal_walk_back(gateway, hwnd, "长安城"):
+        _sleep(random.uniform(0.8, 1.4))
+        if _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
+            logger.info("回长安：传送圈走回成功")
+            return True
+    logger.warning("回长安：合成旗/接引人/传送圈三路均未到达长安城")
+    return False
 
 
 def _zhuagui_find_flag_pos(gateway):
