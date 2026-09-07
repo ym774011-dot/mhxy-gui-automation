@@ -1306,6 +1306,7 @@ def _portal_walk_back(gateway, hwnd, target_map, max_wait=25.0):
             tid = str(k)
             break
     if not tid:
+        logger.info("传送圈走回(%s)：目标图编号未学习，跳过" % target_map)
         return False  # 目标图编号未知（等 _learn_map_id 学到后下轮可用）
     code = r"""
 local m = tp.地图
@@ -1329,7 +1330,14 @@ __out = table.concat(parts, ' ;; ')
     r = _lua_call(gateway, code) or ""
     segs = r.split(" ;; ")
     if len(segs) < 4 or segs[2] != segs[0]:
+        # ★2026-09-07 补失败原因日志（此前静默 False，建邺城卡门排查无据）
+        logger.info("传送圈走回(%s)：传递数据滞留旧图或无传送圈（当前=%s 传递名=%s 项数=%d）"
+                    % (target_map, segs[0] if segs else "?",
+                       segs[2] if len(segs) > 2 else "?", max(0, len(segs) - 3)))
         return False  # 传递数据滞留旧图（与当前图名不符），不可用
+    # ★2026-09-07 列出本图传送圈目标，失败时可对账（是否有去目标图的门）
+    logger.info("传送圈走回(%s)：本图传送圈目标=[%s]"
+                % (target_map, ";".join(s.split("|")[0] for s in segs[3:])))
     off = _lua_call(gateway,
                     r'''local o=tp.屏幕.xy __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)''') or "0,0"
     try:
