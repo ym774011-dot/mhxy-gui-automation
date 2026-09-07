@@ -1821,6 +1821,21 @@ __out = tostring(v or '0')
     return (_lua_call(gateway, code) or "0")
 
 
+def _bag_cell_click_pos(x, y):
+    """背包格子点击点：小动画坐标(图标左上角) → 向右下偏移到格子中心附近。
+
+    ★2026-09-07 用户规则：背包使用道具/出售装备，鼠标一律偏到格子中心点
+    附近再点（含天眼符/合成旗/出售点选）。直接点 (x,y) = 格子左上角，
+    偶发点在格线上不响应。
+    依据 bag_dump_20260906_004411 实锤（12 件物品）：格子间距≈51px，
+    小动画.x/y 是图标左上角且图标在格内居中（宽 37~50）⇒
+    格子中心 = 小动画 + (25.5, 25.5)（(51-w)/2 + w/2 = 25.5 恒成立），
+    对全部实测物品该点都落在图标内（WORLD_BOSS 飞行符 +26,+26 同款先例）。
+    """
+    return (int(x) + 25 + random.randint(-3, 3),
+            int(y) + 25 + random.randint(-3, 3))
+
+
 def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
     """出售背包垃圾装备。返回出售件数；背包未开/无可卖/关闭开关返回 0。
 
@@ -1852,8 +1867,8 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
         gid, ix, iy, iname = items[0]
         tried.add((gid, iname))
         same_before = sum(1 for it in items if it[3] == iname)
-        post_click(hwnd, ix + random.randint(-2, 2), iy + random.randint(-2, 2),
-                   gateway=gateway)
+        bcx, bcy = _bag_cell_click_pos(ix, iy)
+        post_click(hwnd, bcx, bcy, gateway=gateway)
         _sleep(random.uniform(0.25, 0.45))
         pick = _bag_pick_state(gateway)
         if pick in ("0", "", "nil"):
@@ -1866,7 +1881,8 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
         # 手未空 = 卖出未生效 → 放回并中止
         if _bag_pick_state(gateway) not in ("0", "", "nil"):
             logger.warning("出售装备：%s(格子%s) 点出售未生效，放回并中止" % (iname, gid))
-            post_click(hwnd, ix, iy, gateway=gateway)
+            pbx, pby = _bag_cell_click_pos(ix, iy)
+            post_click(hwnd, pbx, pby, gateway=gateway)
             _sleep(random.uniform(0.25, 0.45))
             break
         # 手已空 → 关包再开包强制刷新物品数据，按同名数量复核
@@ -2584,7 +2600,8 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
     if x <= 0 or y <= 0:
         logger.warning("天眼符坐标读取失败（背包未打开或无天眼符）")
         return False
-    post_right_click(hwnd, int(x), int(y), gateway=gateway)
+    tyx, tyy = _bag_cell_click_pos(int(x), int(y))
+    post_right_click(hwnd, tyx, tyy, gateway=gateway)
     # 柔和化：使用后短暂停顿，等待瞬移生效（★09-05 提速 0.8~1.4 → 0.6~1.0）
     _sleep(random.uniform(0.6, 1.0))
     # ★2026-09-03 用户明确要求：不要关闭背包！
@@ -2649,7 +2666,8 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
     if flagpos[0] <= 0:
         logger.warning("回长安：找不到红色合成旗")
         return False
-    post_right_click(hwnd, flagpos[0], flagpos[1], gateway=gateway)
+    fgx, fgy = _bag_cell_click_pos(flagpos[0], flagpos[1])
+    post_right_click(hwnd, fgx, fgy, gateway=gateway)
     _sleep(random.uniform(1.0, 1.5))  # ★2026-09-05 提速 1.5~2.2 → 1.0~1.5（等大地图弹出）
     # ★2026-09-03 追加：右键旗子后移开光标（旗子在背包内，悬停会弹 tooltip）
     _mouse_clear(hwnd, gateway)
