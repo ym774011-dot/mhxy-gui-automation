@@ -567,6 +567,23 @@ class PPApp(tk.Tk):
             leader = next((i for i in insts if i.role == "leader"), None)
             members = [i for i in insts if i.role != "leader"]
 
+            # ---- 阶段0：满员检查（2026-09-07 用户规则）----
+            #   先 Lua 读队伍信息：已有队伍且满员 → 跳过整个组队流程直接跑
+            #   任务（重复组队会白传送/点面板，还对在队成员传送无效）。
+            if leader is not None:
+                lw = "file://pzxy_p%d" % leader.pid
+                st = ZGUI.team_stats_topbar(lw)
+                if st is None:
+                    st = ZGUI._team_stats(lw)
+                mem = st[0] if st else -1
+                if mem >= len(insts):
+                    self._log("[autoTeam] Lua 队伍读数 %d/%d 已满员 → 跳过组队，直接执行任务"
+                              % (mem, len(insts)))
+                    self._finish_tasks(insts)
+                    return
+                self._log("[autoTeam] Lua 队伍读数 %d/%d 未满员 → 走组队流程"
+                          % (mem, len(insts)))
+
             # ---- 阶段1：全员并行传送 ----
             self._log("[autoTeam] 阶段1: %d 人并行传送 %s"
                       % (len(insts), sat.TP_DEST))
