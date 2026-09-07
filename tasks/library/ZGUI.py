@@ -1554,7 +1554,7 @@ _LAST_ROUND_STAGES = {}  # ★2026-09-05 提速观测：最近一轮的分段耗
 #   命中稀有名单（知了王/星宿/远古系）就 CALL 开打，打完继续原流程。
 #   只管本图、不跨图、不追公告；MHXY_ZG_BONUS=0 可整体关闭。
 # ============================================================
-_BONUS_NAMES = ("知了王", "星宿", "远古")   # ★2026-09-06 定案：知了王/远古按名称命中；星宿名称多变（尾火虎等），按 称谓='星宿' 命中
+_BONUS_NAMES = ("知了王", "星宿", "远古", "恶作剧大王")   # ★2026-09-06 定案：知了王/远古/恶作剧大王按名称命中；星宿名称多变（尾火虎等），按 称谓='星宿' 命中
 _BONUS_MAX_KILLS = 3                        # 单轮最多顺手打几只（防连环刷体）
 # ★2026-09-06 用户实测标定的"进入战斗"选项矩形（客户区坐标 x0,y0,x1,y1）：
 #   星宿对话（名上带"星宿"称谓）→ (118,308)-(175,318)；知了王对话 → (121,322)-(219,333)。
@@ -1563,6 +1563,9 @@ _BONUS_MAX_KILLS = 3                        # 单轮最多顺手打几只（防�
 _BONUS_CLICK_RECT = {
     "知了王": (121, 322, 219, 333),
     "星宿": (118, 308, 175, 318),
+    # ★2026-09-08 用户标定（恶作剧大王，称谓"小毛头"）：进战斗选项
+    #   (116,307)-(164,318)，宽高(48,11)
+    "恶作剧大王": (116, 307, 164, 318),
 }
 _BONUS_ENABLED = os.environ.get("MHXY_ZG_BONUS", "1") != "0"
 
@@ -1655,6 +1658,7 @@ for _, v in pairs(t) do
     if name:find('知了王') then kind = '知了王'
     elseif title:find('星宿') then kind = '星宿'
     elseif name:find('远古') then kind = '远古'
+    elseif name:find('恶作剧大王') then kind = '恶作剧大王'
     end
     if kind ~= '' and v.标识 then
       __out = name .. '|' .. tostring(v.标识) .. '|' .. kind
@@ -1675,7 +1679,8 @@ __out = ''
         return None
     # 星宿名称多变（尾火虎等），kind 以称谓判定；旧格式无第三段时按名称兜底
     bkind = parts[2] if len(parts) >= 3 else (
-        "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else "远古"))
+        "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else
+        ("恶作剧大王" if "恶作剧大王" in bname else "远古")))
     # 防重复 CALL：复用抓鬼目标的 8s 冷却
     _now = time.time()
     if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
