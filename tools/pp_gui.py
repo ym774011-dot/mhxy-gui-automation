@@ -365,6 +365,11 @@ class PPApp(tk.Tk):
         self._watch_started = False
         self._rejoining = set()           # 正在归队流程的实例 pid（防双驱动）
         self.paused = False               # ★暂停接管：True=自动化全面撒手
+        # ★2026-09-09 tp 健康检查状态：pid -> 连续消失计数（服务器抹 tp 时
+        #   进程活着/标题在线但 Lua 主状态亡，任务脚本会无限空转——用户指令：
+        #   这种情况 GUI 直接杀游戏重启）
+        self._tp_fail = {}
+        self._tp_tick = 0
 
         # ★2026-09-07 可观测性：squad_auto_team 的 _log 原本只 print 到
         #   stdout（GUI 无控制台 → 全程丢失）。组队/走位/建队每一步的内部
@@ -1383,11 +1388,52 @@ class PPApp(tk.Tk):
                             ("退回登录界面" if (w and "([0])" in w[2]) else "窗口/标题异常")
                         self._log("p%d 掉线判定: %s → 重启闭环" % (inst.pid, reason))
                         self._begin_restart(inst)
+                # ★2026-09-09 tp 健康检查（用户指令：tp 被服务器抹掉时 GUI 直接
+                #   杀游戏重启，不再让任务脚本空转）——仅标题仍在线的实例查。
+                #   每 4 轮查一次（监控 2s/轮 → ~8s 一次），连续 3 次明确 nil
+                #   (~24s) 才重启；超时/未知不计数（防游戏忙碌误杀）。
+                if inst.status == S_ONLINE and logged and not self.teamflow_running:
+                    self._tp_tick += 1
+                    if self._tp_tick % 4 == 0:
+                        r = self._tp_alive(inst.pid)
+                        if r is True:
+                            self._tp_fail[inst.pid] = 0
+                        elif r is False:
+                            n = self._tp_fail.get(inst.pid, 0) + 1
+                            self._tp_fail[inst.pid] = n
+                            if n == 1:
+                                self._log("p%d tp 状态消失（第%d次，疑似服务器抹除）"
+                                          % (inst.pid, n))
+                            if n >= 3:
+                                self._log("p%d tp 连续消失 %d 次 → 杀游戏重启闭环"
+                                          % (inst.pid, n))
+                                self._begin_restart(inst)
 
     def _begin_restart(self, inst):
         inst.status = S_RESTART
         inst.note = "掉线重启中"
+        self._tp_fail.pop(inst.pid, None)   # 重启即清 tp 失败计数
         threading.Thread(target=self._restart_flow, args=(inst,), daemon=True).start()
+
+    def _tp_alive(self, pid):
+        """Lua 主状态存活检查（★2026-09-09 掉线闭环新增盲区补测）。
+
+        进程活着、窗口标题仍在线，但 tp 被服务器整点/维护事件抹掉（06:47
+        全队实证）——任务脚本会补旗/回长安无限空转。此检查返回：
+          True  = tp 存活
+          False = Lua 明确回答 tp 为 nil（状态已亡）
+          None  = worker 死/超时/执行失败（未知，不计数，防误杀）
+        """
+        try:
+            w = PzxyWorker(name="p%d" % pid)
+            if not w.is_alive():
+                return None
+            ok, val = w.cmd("__out = tostring(tp ~= nil)", timeout=2.5)
+            if not ok:
+                return None
+            return str(val).strip() == "true"
+        except Exception:
+            return None
 
     def _restart_flow(self, inst):
         """掉线全闭环：杀旧任务 → 强杀卡死旧进程 → 重启游戏 → 补种 → 重放登录 → 拉起任务。"""
