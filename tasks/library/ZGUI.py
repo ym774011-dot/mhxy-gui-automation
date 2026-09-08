@@ -870,14 +870,25 @@ def _zhongkui_dialog_open(gateway, min_close=120, min_take=300):
             R, G, B = px[x, y]
             if R > 110 and (R - G) > 55 and (R - B) > 55:
                 n_close += 1
-    return n_close >= min_close and n_take >= min_take
+    if n_close >= min_close and n_take >= min_take:
+        return True
+    # ★2026-09-08 下移对话框兜底：对话框随任务文本变长整体下移时，固定密度
+    #   带全部扫空（18:09 实测）→ 误判"对话未弹出" → 对已开的对话二次 CALL
+    #   把它点关。扩扫带里红字选项成对（≥2 块）同样视为对话已开。
+    return len(_zhongkui_detect_rows(gateway)) >= 2
 
 
 def _zhongkui_detect_rows(gateway):
-    """红字检测钟馗对话三个选项行的实际像素坐标。
+    """红字检测钟馗对话选项行的实际像素坐标。
 
     返回 [ {x0,x1,y0,y1}, ... ] 自上而下。检测不到（对话未弹出/无红字）返回 []。
     用于诊断与校验；正式点击走固定相对行 _ZHONGKUI_ROWS（对话框位置稳定）。
+
+    ★2026-09-08 二段扩扫：钟馗对话框会随任务文本变长整体下移（18:09 实测
+    选项行漂到 client y≈413-428，固定带 y298-357 完全扫空 → "红字检测无
+    结果" → 接不了任务空转乱晃）。固定带检不出时扩扫 y358-428（避开底部
+    红按钮条 y429+），并要求红字块**成对**（相邻两块间距 ≤8px：选项永远
+    接受+取消成对紧邻；背包红名行间隔 51px 不可能成对——天然防误点背包）。
     """
     if not _HAS_PIL:
         return []
@@ -886,40 +897,54 @@ def _zhongkui_detect_rows(gateway):
         return []
     img, _, _ = grab_client(hwnd)
     px = img.load()
-    counts = {}
-    for y in range(298, 357):
-        c = 0
-        for x in range(30, 210):
-            R, G, B = px[x, y]
-            if R > 110 and (R - G) > 55 and (R - B) > 55:
-                c += 1
-        if c >= 10:
-            counts[y] = c
-    blks = []
-    cur = None
-    for y in sorted(counts):
-        if cur and (y - cur["y1"]) <= 2:
-            cur["y1"] = y
-            cur["c"] += counts[y]
-        else:
-            if cur:
-                blks.append(cur)
-            cur = {"y0": y, "y1": y, "c": counts[y]}
-    if cur:
-        blks.append(cur)
-    res = []
-    for b in blks:
-        x0, x1, n = 999, -1, 0
-        for y in range(b["y0"], b["y1"] + 1):
+
+    def _scan(y_lo, y_hi):
+        counts = {}
+        for y in range(y_lo, y_hi):
+            c = 0
             for x in range(30, 210):
                 R, G, B = px[x, y]
                 if R > 110 and (R - G) > 55 and (R - B) > 55:
-                    x0 = min(x0, x)
-                    x1 = max(x1, x)
-                    n += 1
-        if n >= 30:
-            res.append({"x0": x0, "x1": x1, "y0": b["y0"], "y1": b["y1"]})
-    return res
+                    c += 1
+            if c >= 10:
+                counts[y] = c
+        blks = []
+        cur = None
+        for y in sorted(counts):
+            if cur and (y - cur["y1"]) <= 2:
+                cur["y1"] = y
+                cur["c"] += counts[y]
+            else:
+                if cur:
+                    blks.append(cur)
+                cur = {"y0": y, "y1": y, "c": counts[y]}
+        if cur:
+            blks.append(cur)
+        res = []
+        for b in blks:
+            x0, x1, n = 999, -1, 0
+            for y in range(b["y0"], b["y1"] + 1):
+                for x in range(30, 210):
+                    R, G, B = px[x, y]
+                    if R > 110 and (R - G) > 55 and (R - B) > 55:
+                        x0 = min(x0, x)
+                        x1 = max(x1, x)
+                        n += 1
+            if n >= 30:
+                res.append({"x0": x0, "x1": x1, "y0": b["y0"], "y1": b["y1"]})
+        return res
+
+    res = _scan(298, 357)
+    if res:
+        return res
+    # 二段：扩带 + 成对判定
+    wide = _scan(358, 428)
+    if len(wide) < 2:
+        return []
+    for a, b in zip(wide, wide[1:]):
+        if 0 <= (b["y0"] - a["y1"]) <= 8:
+            return wide
+    return []
 
 
 def _zhongkui_click_row(gateway, row_key, hwnd=None):
