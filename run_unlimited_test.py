@@ -546,6 +546,8 @@ def build_parser():
     p.add_argument("--out", default=None, help="输出 jsonl 路径（缺省自动生成）")
     p.add_argument("--verbose", action="store_true", help="实时回显 ZGUI 过程日志")
     p.add_argument("--quiet", action="store_true", help="只输出每轮一行摘要")
+    p.add_argument("--no-chuangguan", action="store_true",
+                   help="关闭门派闯关随机插入（默认开启：每随机 ok 抓鬼 10~30 次触发一次）")
     p.add_argument("--rebind", action="store_true",
                    help="跑批前用 ensure_gateway 重新绑定网关（默认不开，避免干扰已运行的 GUI）")
     p.add_argument("--list-roles", action="store_true", help="列出已开游戏窗口与角色后退出")
@@ -667,6 +669,12 @@ def main(argv=None):
     counts = {"ok": 0, "inbattle": 0, "other": 0, "error": 0}
     index = 0
     exit_code = 0
+    # ★2026-09-08 门派闯关随机插入调度：每随机 ok 抓鬼 10~30 次触发一次，
+    #   闯关完成返回抓鬼流程；两任务共用队长串行执行，天然互不冲突。
+    cg_enabled = not args.no_chuangguan
+    zg_ok_count = 0
+    cg_next = random.randint(10, 30)
+    print("[闯关调度] 已启用：下次触发于 ok 抓鬼 %d 次后" % cg_next)
     try:
         while True:
             index += 1
@@ -679,6 +687,32 @@ def main(argv=None):
             rec = run_one_round(zgui, args, gateway, index)
             writer.write(rec)
             counts[rec["result"]] = counts.get(rec["result"], 0) + 1
+
+            # ★门派闯关随机插入（ok 抓鬼计数达到随机阈值即触发一次）
+            if cg_enabled and rec["result"] == "ok" and not _STOP.is_set():
+                zg_ok_count += 1
+                if zg_ok_count >= cg_next:
+                    print("[闯关调度] ok 抓鬼 %d 次达成（阈值 %d）→ 触发门派闯关"
+                          % (zg_ok_count, cg_next))
+                    sys.stdout.flush()
+                    cg_ok = False
+                    try:
+                        from tasks.library import CHUANGGUAN
+                        pw = zgui._find_role_window(args.role)
+                        if pw:
+                            zgui.set_target_hwnd(pw[1])
+                        cg_ok = CHUANGGUAN.run(gateway=gateway,
+                                               hwnd=pw[1] if pw else None,
+                                               verbose=True)
+                    except Exception:
+                        traceback.print_exc()
+                    print("[闯关调度] 门派闯关%s，返回抓鬼流程继续"
+                          % ("完成 ✓" if cg_ok else "失败/中止"))
+                    sys.stdout.flush()
+                    zg_ok_count = 0
+                    cg_next = random.randint(10, 30)
+                    print("[闯关调度] 下次触发于 ok 抓鬼 %d 次后" % cg_next)
+
             done = sum(counts.values())
             rate = (counts["ok"] / done * 100.0) if done else 0.0
 
