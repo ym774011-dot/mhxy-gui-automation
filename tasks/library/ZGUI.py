@@ -3609,7 +3609,7 @@ def _battle_auto_kick(hwnd, gateway, delay=5.0, tries=6, gap=3.0):
     """进战 delay 秒后确保自动战斗已开启。
 
     ★2026-09-08 深夜用户定案（大幅简化）：「自动」开启一次后跨战斗常开，
-    全进程只在第一次进战斗时点一次（重启脚本=重新获得一次点击机会），
+    登录游戏后/重启游戏后的第一次进战斗点一次（会话闸见 _AUTO_ONCE），
     其余时间一律不点——不再做状态判定/盲点防抖那一套。
     """
     try:
@@ -3659,29 +3659,42 @@ def zhuagui_auto_battle_state(gateway=DEFAULT_GATEWAY, **kw):
     return f == "1", (s if s != "-" else None)
 
 
-# ★2026-09-08 深夜用户定案：「自动」开启一次后跨战斗常开。全进程只在
-# 第一次进战斗时点一次（重启脚本=重新获得一次点击机会），其余一律不点。
-_AUTO_ONCE = {"done": False}
+# ★2026-09-08 深夜用户定案：「自动」开启一次后跨战斗常开，且常开态跟着
+# **游戏登录会话**走——登录游戏后与重启游戏后各点一次（=每次进入游戏的
+# 第一次进战斗），其余一律不点。闸 key = 游戏 PID + 窗口标题（标题尾部含
+# 登录时间戳，如 "- 2026年08月25日 22:14:42"，重登/重启即刷新）。
+# 脚本重启不清零（同会话 key 不变）。
+_AUTO_ONCE = {"key": None, "done": False}
 
 
 def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **kw):
-    """★首次进战斗固定点一次「自动」（返回 'clicked'/'auto_on'/'idle'）。
+    """★本次游戏登录会话首次进战斗固定点一次「自动」（'clicked'/'auto_on'/'idle'）。
 
     ★2026-09-08 深夜用户定案（取代此前全部状态判定/盲点防抖复杂逻辑）：
-      - 本进程从未点过：第一次拿到战斗证据（in_battle 三信号 OR「自动」
-        按钮模板命中）→ 点一次标定矩形 (677,328)-(739,358)，此后永不点击；
+      - 本次登录游戏（含重启游戏）后从未点过：第一次拿到战斗证据
+        （in_battle 三信号 OR「自动」按钮模板命中）→ 点一次标定矩形
+        (677,328)-(739,358)，此后本会话永不点击；
       - 状态已是'取消'（已开启）→ 直接标记完成，不点；
       - 无战斗证据 → idle（等看护线程下一次轮询）。
-    重启脚本 = _AUTO_ONCE 归零 = 重新获得首次点击，与用户要求一致。
+    ★会话判定：key = 游戏 PID + 窗口标题（标题尾嵌登录时间戳，重登/重启
+      即变 → 自动重新获得首次点击）；脚本重启不清零（用户 23:25 指正：
+      归属是游戏会话不是脚本进程）。
     队员看护线程（member_sell_loop 每 5s 轮询）与本函数同走此闸。
-    ★代价（用户已知悉）：中途自动被意外点关时不会再补救，需重启脚本。
+    ★代价（用户已知悉）：本会话中自动被意外点关不会再补救。
     """
     if hwnd is None:
         hwnd = get_hwnd()
     if not hwnd:
         return "idle"
-    if _AUTO_ONCE["done"]:
-        return "auto_on"
+    import re as _re
+    m = _re.search(r"pzxy_p(\d+)", str(gateway or ""))
+    pid = int(m.group(1)) if m else 0
+    _buf = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(hwnd, _buf, 256)
+    key = "%s|%s" % (pid, _buf.value)
+    if _AUTO_ONCE["key"] != key:
+        _AUTO_ONCE["key"] = key
+        _AUTO_ONCE["done"] = False
     inb, st = zhuagui_auto_battle_state(gateway)
     if not (inb or _auto_button_visible(hwnd)):
         return "idle"   # 无战斗证据，不点
