@@ -1500,6 +1500,24 @@ __out = table.concat(parts, ' ;; ')
     # ★2026-09-07 列出本图传送圈目标，失败时可对账（是否有去目标图的门）
     logger.info("传送圈走回(%s)：本图传送圈目标=[%s]"
                 % (target_map, ";".join(s.split("|")[0] for s in segs[3:])))
+    # ★2026-09-08 实锤（队长 18:56 点传送门点到"传送"按钮）：天眼使用后
+    #   背包保持打开（2853 行设计），传送圈投影点可能落在背包面板内——
+    #   本次 (283,444) 正压背包底栏"传送"按钮 (258,436)-(287,447) →
+    #   误开梦幻高速列车对话框，流程等跨图 25s 落空且对话框残留挡点击。
+    #   点门前：①先关背包；②若列车对话框已误开（界面数据[8].可视）先点右上 X。
+    if not _bag_ensure_close(gateway, hwnd):
+        logger.info("传送圈走回(%s)：背包关不掉，放弃本轮（防点击落进面板）" % target_map)
+        return False
+    _tv = _lua_call(gateway, r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local d = j and j[8]
+__out = (type(d) == 'table' and d.可视 == true) and '1' or '0'
+""")
+    if _tv == "1":
+        logger.info("传送圈走回(%s)：列车对话框残留 → 先点右上 X 关闭" % target_map)
+        _cx, _cy = _TP_DIALOG_CLOSE_POS
+        post_click(hwnd, _cx, _cy, gateway=gateway)
+        _sleep(random.uniform(0.6, 0.9))
     off = _lua_call(gateway,
                     r'''local o=tp.屏幕.xy __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)''') or "0,0"
     try:
@@ -1514,6 +1532,9 @@ __out = table.concat(parts, ' ;; ')
             ax, ay = [int(float(v)) for v in p[1].split(",")]
         except Exception:
             continue
+        logger.info("传送圈走回(%s)：点门 所在(%d,%d)+off(%d,%d)→屏(%d,%d)"
+                    % (target_map, ax, ay, ox, oy,
+                       ax + ox, ay + oy))
         post_click(hwnd, ax + ox + random.randint(-3, 3),
                    ay + oy + random.randint(-3, 3), gateway=gateway)
         _sleep(random.uniform(0.8, 1.2))
