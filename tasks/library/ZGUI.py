@@ -1234,47 +1234,94 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
     """
     if not hwnd or not target_map:
         return False
+    # ★2026-09-08 加固：红字行检测器内部用全局 get_hwnd()——传入 hwnd 与全局
+    #   目标不一致时会截错窗口（实测：对话明明开着，检测返回空）。任务脚本
+    #   每轮会钉窗口，但独立调用/测试进程不钉就会踩坑，这里强制对齐。
+    set_target_hwnd(hwnd)
     for _ in range(max(1, tries)):
+        # ★2026-09-08 重写选优：旧逻辑取"第一条命名的候选"——驿站老板（名字含
+        #   "驿站"，27 格外投影必出窗）排在普陀山接引人前面，先命中先输出，
+        #   投影越界后整条通道被误杀 → 白烧天眼（13:27~13:31 实锤）。
+        #   新评分：强匹配(名称前缀/称谓含目标图) > 通用候选(守卫/驿站/接引人)；
+        #   同级内 视野内优先 > 离主角近优先。输出唯一最优候选。
         code = (
             "local t = tp.地图.npc\n"
             "if type(t) ~= 'table' then __out = '' return end\n"
             "local off = tp.屏幕.xy\n"
             "local ox = off and off.x or 0\n"
             "local oy = off and off.y or 0\n"
+            "local me = tp.屏幕.主角 and tp.屏幕.主角.xy\n"
+            "local mx = me and me.x or 0\n"
+            "local my = me and me.y or 0\n"
+            "local bs, bsd = nil, nil\n"
+            "local bg, bgd = nil, nil\n"
             "for i = 1, #t do\n"
             "  local v = t[i] or {}\n"
             "  local nm = tostring(v.名称 or '')\n"
             "  local cz = tostring(v.称谓 or '')\n"
-            "  -- 前缀锚定名称（普陀山接引人）或称谓含目标图名（土地公公|凌波城传送）\n"
-            "  -- ★2026-09-07 追加：守卫/驿站类传送NPC也作候选（实测建邺城守卫\n"
-            "  --   在 tp.地图.npc 里称谓=空，两条旧规则都匹配不上 → 在建邺城\n"
-            "  --   去江南野外永远烧天眼）。守卫候选由对话选项文本含目标图名\n"
-            "  --   二次确认（见 _dialog_option_rect），防误点无关守卫。\n"
-            "  if nm:find('" + target_map + "', 1, true) == 1 or cz:find('" + target_map + "', 1, true)\n"
-            "     or nm:find('守卫', 1, true) or nm:find('驿站', 1, true) then\n"
-            "    local wx = tonumber(tostring(v.x or '')) or 0\n"
-            "    local wy = tonumber(tostring(v.y or '')) or 0\n"
-            "    __out = nm .. '|' .. (wx + ox) .. ',' .. (wy + oy)\n"
-            "    return\n"
+            "  local strong = (nm:find('" + target_map + "', 1, true) == 1)"
+            " or (cz:find('" + target_map + "', 1, true) ~= nil)\n"
+            "  local generic = (nm:find('守卫', 1, true) ~= nil)"
+            " or (nm:find('驿站', 1, true) ~= nil)"
+            " or (nm:find('接引人', 1, true) ~= nil)\n"
+            "  if strong or generic then\n"
+            "    local sx = (tonumber(tostring(v.x or '')) or 0) + ox\n"
+            "    local sy = (tonumber(tostring(v.y or '')) or 0) + oy\n"
+            "    local inwin = sx >= 0 and sx < 800 and sy >= 0 and sy < 600\n"
+            "    local d = (sx - mx) * (sx - mx) + (sy - my) * (sy - my)\n"
+            "    if inwin then d = d - 1e12 end\n"
+            "    if strong then\n"
+            "      if bsd == nil or d < bsd then"
+            " bs = nm .. '|' .. sx .. ',' .. sy; bsd = d end\n"
+            "    elseif bgd == nil or d < bgd then"
+            " bg = nm .. '|' .. sx .. ',' .. sy; bgd = d end\n"
             "  end\n"
             "end\n"
-            "__out = ''\n"
+            "__out = bs or bg or ''\n"
         )
         r = _lua_call(gateway, code) or ""
         if "|" not in r:
             return False  # 本图没有去目标图的接引人
         nx, nxy = r.split("|", 1)
         sx, sy = nxy.split(",")
-        px, py = _coord_int(sx), _coord_int(sy)
-        wr = ctypes.wintypes.RECT()
-        user32.GetClientRect(hwnd, ctypes.byref(wr))
-        if px is None or py is None or not (0 <= px < wr.right and 0 <= py < wr.bottom):
-            # 投影越界/非法 = 人不在该守卫身边（或坐标垃圾），点了也是点到窗外
-            logger.warning("守卫/接引人屏幕坐标非法 (%s,%s) 客户区 %dx%d，跳过点击"
-                           % (sx, sy, wr.right, wr.bottom))
-            return False
-        post_click(hwnd, px + random.randint(-3, 3),
-                   py + random.randint(-3, 3), gateway=gateway)
+        # ★2026-09-08 实测修复：tp.屏幕.xy（相机偏移）在图切换/传送后存在
+        #   瞬态脏值窗口（13:39 实测脏 off=(-6679,-9019)，数秒后自愈为
+        #   (-4040,-5180)）——旧代码单次投影越界直接放弃 = 接引人通道被误杀
+        #   → 白烧天眼（13:27~13:31 大唐国境→普陀山 连续限流实锤）。
+        #   新策略：①偏移脏（主角自身投影也出窗）→ 等相机刷新重扫；
+        #   ②NPC 真在视野外 → 朝其方向点视野边缘走近，走近后相机跟上自然入视野。
+        clicked_npc = False
+        for _app in range(6):
+            r2 = _lua_call(gateway, code) or ""
+            if "|" not in r2:
+                return False  # 重扫后本图没有去目标图的接引人
+            nx2, nxy2 = r2.split("|", 1)
+            sx2, sy2 = nxy2.split(",")
+            px, py = _coord_int(sx2), _coord_int(sy2)
+            if px is None or py is None:
+                break
+            wr = ctypes.wintypes.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(wr))
+            if 0 <= px < wr.right and 0 <= py < wr.bottom:
+                post_click(hwnd, px + random.randint(-3, 3),
+                           py + random.randint(-3, 3), gateway=gateway)
+                clicked_npc = True
+                break
+            sp = self_screen_xy(gateway)
+            if sp is None or not (0 <= sp[0] < wr.right and 0 <= sp[1] < wr.bottom):
+                # 主角自己都投影出窗 = 相机偏移脏值 → 等刷新再重扫
+                _sleep(random.uniform(0.8, 1.2))
+                continue
+            cx = max(30, min(770, px))
+            cy = max(30, min(570, py))
+            logger.info("跨图：%s 投影越界(%d,%d)，朝其方向点(%d,%d)走近"
+                        % (nx2, px, py, cx, cy))
+            post_click(hwnd, cx, cy, gateway=gateway)
+            _sleep(random.uniform(2.2, 3.0))
+        if not clicked_npc:
+            logger.warning("跨图：接引人 %s 六次逼近未果（相机/走位异常），换下一轮"
+                           % nx)
+            continue  # 对话没机会点 → 重新扫描
         _sleep(random.uniform(0.8, 1.2))
         # ★2026-09-07 守卫/驿站类对话：选项进 tp.窗口.对话栏.选项（接引人/钟馗
         #   类为空）。有选项时按文本点含目标图名的选项矩形（如建邺城守卫
