@@ -1737,7 +1737,11 @@ _LAST_ROUND_STAGES = {}  # ★2026-09-05 提速观测：最近一轮的分段耗
 #   命中稀有名单（知了王/星宿/远古系）就 CALL 开打，打完继续原流程。
 #   只管本图、不跨图、不追公告；MHXY_ZG_BONUS=0 可整体关闭。
 # ============================================================
-_BONUS_NAMES = ("知了王", "星宿", "远古", "恶作剧大王", "地煞星")   # ★2026-09-06 定案：知了王/远古按名称命中；星宿与恶作剧大王名称多变（尾火虎/小毛头等），按 称谓 命中；★2026-09-08 加地煞星（称谓="N级地煞星"，N=70~140 不限）
+# ★2026-09-09 天罡星加入顺手打（用户定案）：与地煞星同族共用同一份数据——
+#   称谓匹配、难度门槛、标定矩形全引用 _DIZHA_KINDS/_DIZHA_RECT；kind 分开只为日志可辨。
+_DIZHA_KINDS = ("地煞星", "天罡星")
+_DIZHA_RECT = (123, 307, 176, 317)   # 罡煞进战斗选项（用户 2026-09-08 深夜标定，宽高 53,10）
+_BONUS_NAMES = ("知了王", "星宿", "远古", "恶作剧大王") + _DIZHA_KINDS   # ★2026-09-06 定案：知了王/远古按名称命中；星宿与恶作剧大王名称多变（尾火虎/小毛头等），按 称谓 命中；★2026-09-08 加地煞星、★2026-09-09 加天罡星（称谓="N级地煞星/天罡星"，N=70~140 不限）
 _BONUS_MAX_KILLS = 5                        # 单轮最多顺手打几只（防连环刷体）★2026-09-08 用户要求 3→5
 # ★2026-09-08 地煞星难度门槛（用户定案：只打 ≤2星，等级不限）。
 #   识别链路：CALL 弹对话 → tp.主界面.界面数据[8].超级文本.已加文本
@@ -1754,13 +1758,11 @@ _BONUS_CLICK_RECT = {
     # ★2026-09-08 用户标定（恶作剧大王，称谓"小毛头"）：进战斗选项
     #   (116,307)-(164,318)，宽高(48,11)
     "恶作剧大王": (116, 307, 164, 318),
-    # ★2026-09-08 深夜用户标定（地煞星）：进战斗选项 (123,307)-(176,317)，
-    #   宽高(53,10)。地煞星红字行同样会合并，行检测顶条带实测点偏
-    #   （23:30:47 小有所成地会星已点选项仍未进战）→ 直点标定矩形。
-    "地煞星": (123, 307, 176, 317),
+    # ★罡煞共用同一份标定（用户 2026-09-09：它们该共用数据）
+    **{k: _DIZHA_RECT for k in _DIZHA_KINDS},
 }
 # ★这些类型按标定矩形直点（红字行检测对它们实测不可靠）；其余仍行检测优先
-_BONUS_RECT_FIRST = {"地煞星"}
+_BONUS_RECT_FIRST = set(_DIZHA_KINDS)
 _BONUS_ENABLED = os.environ.get("MHXY_ZG_BONUS", "1") != "0"
 
 
@@ -1854,6 +1856,7 @@ for _, v in pairs(t) do
     elseif title:find('星宿') then kind = '星宿'
     elseif name:find('远古') then kind = '远古'
     elseif title:find('恶作剧大王') then kind = '恶作剧大王'
+    elseif title:find('天罡星') then kind = '天罡星'
     elseif title:find('地煞星') then kind = '地煞星'
     end
     if kind ~= '' and v.标识 then
@@ -1879,7 +1882,8 @@ __out = table.concat(out, ' ;; ')
         bkind = parts[2] if len(parts) >= 3 else (
             "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else
             ("恶作剧大王" if "恶作剧大王" in bname else
-            ("地煞星" if "地煞星" in bname else "远古"))))
+            ("天罡星" if "天罡星" in bname else
+            ("地煞星" if "地煞星" in bname else "远古")))))
         cands.append((bname, gid, bkind))
     if not cands:
         return None
@@ -1959,21 +1963,21 @@ __out = tostring(n or '-')
         # ★2026-09-07 用户要求：CALL 后至少 0.5s 再点击（对话框渲染有延迟，
         #   点太快=点在场景上 → "稀有怪已点进战斗选项仍未进战"的帮凶之一）
         _sleep(random.uniform(0.5, 0.9))
-        # ★2026-09-08 地煞星难度分级：读「难度：X星」，>2星（或读不到）一律
-        #   取消不打并进 skip 名单；≤2星才走进战点击。
-        if bkind == "地煞星":
+        # ★2026-09-08 罡煞同族难度分级（共用逻辑）：读「难度：X星」，>2星
+        #   （或读不到）一律取消不打并进 skip 名单；≤2星才走进战点击。
+        if bkind in _DIZHA_KINDS:
             star = _read_dialog_star()
             if star is None or star > _DIZHA_MAX_STAR:
-                logger.info("地煞星 %s 难度=%s（上限%d星）→ 取消不打，本轮跳过该怪"
-                            % (bname, star if star is not None else "读不到",
+                logger.info("%s %s 难度=%s（上限%d星）→ 取消不打，本轮跳过该怪"
+                            % (bkind, bname, star if star is not None else "读不到",
                                _DIZHA_MAX_STAR))
                 gone = _dismiss_bonus_dialog()
                 if not gone:
-                    logger.warning("地煞星对话未收掉（右键+ESC 均无效），截图留证")
+                    logger.warning("%s对话未收掉（右键+ESC 均无效），截图留证" % bkind)
                     _bonus_shot("dizha_dismiss_fail")
                 _BONUS_SKIP_GID[gid] = time.time()
                 continue
-            logger.info("地煞星 %s 难度%d星≤%d → 开打" % (bname, star, _DIZHA_MAX_STAR))
+            logger.info("%s %s 难度%d星≤%d → 开打" % (bkind, bname, star, _DIZHA_MAX_STAR))
         # ★CALL 后等对话弹出 → 点"进入战斗"选项 → 等进战
         # ★2026-09-06 用户实测标定：星宿/知了王的进战斗选项位置固定，直接按
         #   _BONUS_CLICK_RECT 矩形随机取点直点（红字首行检测对这些对话会点偏，
