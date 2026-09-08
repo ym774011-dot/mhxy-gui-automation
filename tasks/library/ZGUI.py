@@ -1737,8 +1737,13 @@ _LAST_ROUND_STAGES = {}  # ★2026-09-05 提速观测：最近一轮的分段耗
 #   命中稀有名单（知了王/星宿/远古系）就 CALL 开打，打完继续原流程。
 #   只管本图、不跨图、不追公告；MHXY_ZG_BONUS=0 可整体关闭。
 # ============================================================
-_BONUS_NAMES = ("知了王", "星宿", "远古", "恶作剧大王")   # ★2026-09-06 定案：知了王/远古按名称命中；星宿与恶作剧大王名称多变（尾火虎/小毛头等），按 称谓 命中
+_BONUS_NAMES = ("知了王", "星宿", "远古", "恶作剧大王", "地煞星")   # ★2026-09-06 定案：知了王/远古按名称命中；星宿与恶作剧大王名称多变（尾火虎/小毛头等），按 称谓 命中；★2026-09-08 加地煞星（称谓="N级地煞星"，N=70~140 不限）
 _BONUS_MAX_KILLS = 5                        # 单轮最多顺手打几只（防连环刷体）★2026-09-08 用户要求 3→5
+# ★2026-09-08 地煞星难度门槛（用户定案：只打 ≤2星，等级不限）。
+#   识别链路：CALL 弹对话 → tp.主界面.界面数据[8].超级文本.已加文本
+#   → match '难度：(%d+)星'（2026-09-08 实测地猛星返回 5）。
+_DIZHA_MAX_STAR = 2
+_BONUS_SKIP_GID = {}                        # 标识 -> ts：超星/读不到难度被取消的怪，300s 内不再 CALL
 # ★2026-09-06 用户实测标定的"进入战斗"选项矩形（客户区坐标 x0,y0,x1,y1）：
 #   星宿对话（名上带"星宿"称谓）→ (118,308)-(175,318)；知了王对话 → (121,322)-(219,333)。
 #   远古无标定范围，退回红字首行检测。CALL 出对话后按矩形随机取点直点，
@@ -1833,6 +1838,7 @@ def zhuagui_bonus_battle(gateway=DEFAULT_GATEWAY, verbose=False,
     code = r"""
 local t = tp.地图.地图单位
 if type(t) ~= 'table' then __out = '' return end
+local out = {}
 for _, v in pairs(t) do
   if type(v) == 'table' then
     local name = tostring(v.名称 or '')
@@ -1842,52 +1848,44 @@ for _, v in pairs(t) do
     elseif title:find('星宿') then kind = '星宿'
     elseif name:find('远古') then kind = '远古'
     elseif title:find('恶作剧大王') then kind = '恶作剧大王'
+    elseif title:find('地煞星') then kind = '地煞星'
     end
     if kind ~= '' and v.标识 then
-      __out = name .. '|' .. tostring(v.标识) .. '|' .. kind
-      return
+      out[#out+1] = name .. '|' .. tostring(v.标识) .. '|' .. kind
     end
   end
 end
-__out = ''
+__out = table.concat(out, ' ;; ')
 """
     r = _lua_call(gateway, code) or ""
-    if "|" not in r:
+    # ★2026-09-08 改多候选输出：超星被取消后可顺延试下一只（旧版单候选，
+    #   第一只超星就浪费整轮顺手打机会）
+    cands = []
+    for seg in r.split(" ;; "):
+        seg = seg.strip()
+        if "|" not in seg:
+            continue
+        parts = seg.split("|")
+        if len(parts) < 2 or not parts[1].strip().isdigit():
+            continue
+        bname, gid = parts[0], parts[1].strip()
+        # 星宿/恶作剧大王/地煞星按称谓判定；旧格式无第三段按名称兜底
+        bkind = parts[2] if len(parts) >= 3 else (
+            "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else
+            ("恶作剧大王" if "恶作剧大王" in bname else
+            ("地煞星" if "地煞星" in bname else "远古"))))
+        cands.append((bname, gid, bkind))
+    if not cands:
         return None
-    parts = r.split("|")
-    if len(parts) < 2:
-        return None
-    bname, gid = parts[0], parts[1]
-    if not gid.isdigit():
-        return None
-    # 星宿/恶作剧大王名称多变（尾火虎/小毛头等），kind 以称谓判定；
-    # 旧格式无第三段时按名称兜底（恶作剧大王按名称匹配不到，仅作保险）
-    bkind = parts[2] if len(parts) >= 3 else (
-        "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else
-        ("恶作剧大王" if "恶作剧大王" in bname else "远古")))
-    # 防重复 CALL：复用抓鬼目标的 8s 冷却
     _now = time.time()
-    if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
-        return None
+    # skip 名单过期清理（300s：够一轮刷新/换图）
+    for g in [g for g, ts in _BONUS_SKIP_GID.items() if _now - ts > 300.0]:
+        _BONUS_SKIP_GID.pop(g, None)
     # ★2026-09-07 进战闩锁：战斗中/战斗刚结束的滞后窗口内，绝不再发 CALL
     #   （含稀有怪——打鬼战斗期间顺手 CALL 稀有怪=同款"战斗中弹框"）
     if _now - _BATTLE_LATCH["ts"] < _BATTLE_LATCH_S:
         return None
-    if verbose:
-        logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
-    _sleep(random.uniform(0.15, 0.4))
-    _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
-    _call_guard["gid"] = gid
-    _call_guard["ts"] = _now
-    # ★2026-09-07 用户要求：CALL 后至少 0.5s 再点击（对话框渲染有延迟，
-    #   点太快=点在场景上 → "稀有怪已点进战斗选项仍未进战"的帮凶之一）
-    _sleep(random.uniform(0.5, 0.9))
-    # ★CALL 后等对话弹出 → 点"进入战斗"选项 → 等进战
-    # ★2026-09-06 用户实测标定：星宿/知了王的进战斗选项位置固定，直接按
-    #   _BONUS_CLICK_RECT 矩形随机取点直点（红字首行检测对这些对话会点偏，
-    #   是此前"CALL 出对话却没进战被跳过"的根因之一）。远古无标定范围，
-    #   退回红字首行检测。另有一种"我正在战斗中，请勿扰。"对话（怪被别的
-    #   队伍占用，无可点选项）——点矩形无效果，等进战超时跳过即可。
+
     def _bonus_shot(tag):
         try:
             _img, _, _ = grab_client(hwnd)
@@ -1901,80 +1899,152 @@ __out = ''
         except Exception:
             return ""
 
-    rect = _BONUS_CLICK_RECT.get(bkind)
-    clicked = False
-    t_dlg = time.time()
-    while time.time() - t_dlg < 5.0:
-        if zhuagui_in_battle(gateway):
-            break
-        if rect:
-            # 有标定矩形：等对话渲染一小会再点，截图留证
-            if time.time() - t_dlg < random.uniform(0.7, 1.0):
-                _sleep(0.2)
+    def _read_dialog_star(timeout=4.0):
+        """CALL 后轮询读对话框「难度：X星」→ int；读不到返回 None。"""
+        _t0 = time.time()
+        while time.time() - _t0 < timeout:
+            _r = _lua_call(gateway, r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local d = j and j[8]
+local s = d and d.超级文本 and d.超级文本.已加文本
+if type(s) ~= 'string' or s == '' then __out = '-' return end
+local n = s:match('难度：(%d+)星') or s:match('难度:(%d+)星')
+__out = tostring(n or '-')
+""") or "-"
+            if _r.strip().isdigit():
+                return int(_r.strip())
+            _sleep(random.uniform(0.4, 0.6))
+        return None
+
+    def _dismiss_bonus_dialog():
+        """收掉 CALL 弹出的对话：右键场景空白（本代码库标准做法）→
+        红字对话块仍在则补发 ESC → 再验。返回 True=对话已消失。"""
+        post_right_click(hwnd, random.randint(300, 420),
+                         random.randint(430, 470), gateway=gateway)
+        _sleep(random.uniform(0.8, 1.0))
+        if not _zhongkui_detect_rows(gateway):
+            return True
+        user32.PostMessageW(hwnd, 0x0100, 0x1B, 0)      # WM_KEYDOWN ESC
+        user32.PostMessageW(hwnd, 0x0101, 0x1B, 0xC0000000)  # WM_KEYUP
+        _sleep(random.uniform(0.8, 1.0))
+        return not _zhongkui_detect_rows(gateway)
+
+    for bname, gid, bkind in cands:
+        if gid in _BONUS_SKIP_GID:
+            continue
+        # 防重复 CALL：复用抓鬼目标的 8s 冷却
+        if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
+            continue
+        if verbose:
+            logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
+        _sleep(random.uniform(0.15, 0.4))
+        _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
+        _call_guard["gid"] = gid
+        _call_guard["ts"] = _now
+        # ★2026-09-07 用户要求：CALL 后至少 0.5s 再点击（对话框渲染有延迟，
+        #   点太快=点在场景上 → "稀有怪已点进战斗选项仍未进战"的帮凶之一）
+        _sleep(random.uniform(0.5, 0.9))
+        # ★2026-09-08 地煞星难度分级：读「难度：X星」，>2星（或读不到）一律
+        #   取消不打并进 skip 名单；≤2星才走进战点击。
+        if bkind == "地煞星":
+            star = _read_dialog_star()
+            if star is None or star > _DIZHA_MAX_STAR:
+                logger.info("地煞星 %s 难度=%s（上限%d星）→ 取消不打，本轮跳过该怪"
+                            % (bname, star if star is not None else "读不到",
+                               _DIZHA_MAX_STAR))
+                gone = _dismiss_bonus_dialog()
+                if not gone:
+                    logger.warning("地煞星对话未收掉（右键+ESC 均无效），截图留证")
+                    _bonus_shot("dizha_dismiss_fail")
+                _BONUS_SKIP_GID[gid] = time.time()
                 continue
-            _shot = _bonus_shot("dialog")
-            if _shot:
-                logger.info("稀有怪对话截图：%s" % _shot)
-            x0, y0, x1, y1 = rect
-            # ★2026-09-07 用户实测：知了王固定矩形点到了下面的"取消"行——
-            #   对话框随文本长度上下漂移（真实截图标定：进战斗行 y302-317、
-            #   取消行 y320-335，标定矩形中心 y=327 恰压在取消行上）。
-            #   改为红字行检测取【最顶行】=进入战斗（取消永远在下面）；
-            #   检测不到（黑屏/无对话）才退回标定矩形原逻辑。
-            rows = _bonus_dialog_rows(hwnd)
+            logger.info("地煞星 %s 难度%d星≤%d → 开打" % (bname, star, _DIZHA_MAX_STAR))
+        # ★CALL 后等对话弹出 → 点"进入战斗"选项 → 等进战
+        # ★2026-09-06 用户实测标定：星宿/知了王的进战斗选项位置固定，直接按
+        #   _BONUS_CLICK_RECT 矩形随机取点直点（红字首行检测对这些对话会点偏，
+        #   是此前"CALL 出对话却没进战被跳过"的根因之一）。远古/地煞星无标定
+        #   范围，退回红字首行检测。另有一种"我正在战斗中，请勿扰。"对话（怪被
+        #   别的队伍占用，无可点选项）——点矩形无效果，等进战超时跳过即可。
+        rect = _BONUS_CLICK_RECT.get(bkind)
+        clicked = False
+        t_dlg = time.time()
+        while time.time() - t_dlg < 5.0:
+            if zhuagui_in_battle(gateway):
+                break
+            if rect:
+                # 有标定矩形：等对话渲染一小会再点，截图留证
+                if time.time() - t_dlg < random.uniform(0.7, 1.0):
+                    _sleep(0.2)
+                    continue
+                _shot = _bonus_shot("dialog")
+                if _shot:
+                    logger.info("稀有怪对话截图：%s" % _shot)
+                x0, y0, x1, y1 = rect
+                # ★2026-09-07 用户实测：知了王固定矩形点到了下面的"取消"行——
+                #   对话框随文本长度上下漂移（真实截图标定：进战斗行 y302-317、
+                #   取消行 y320-335，标定矩形中心 y=327 恰压在取消行上）。
+                #   改为红字行检测取【最顶行】=进入战斗（取消永远在下面）；
+                #   检测不到（黑屏/无对话）才退回标定矩形原逻辑。
+                rows = _bonus_dialog_rows(hwnd)
+                if rows:
+                    b = rows[0]
+                    post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                               random.randint(b["y0"], b["y1"]), gateway=gateway)
+                    clicked = True
+                    logger.info("已点稀有怪对话最顶红字行（进入战斗）(x%d-%d,y%d-%d)，共%d行"
+                                % (b["x0"], b["x1"], b["y0"], b["y1"], len(rows)))
+                else:
+                    post_click(hwnd, random.randint(x0, x1), random.randint(y0, y1),
+                               gateway=gateway)
+                    clicked = True
+                    logger.info("红字行未检出，退回标定矩形 (x%d-%d,y%d-%d)"
+                                % (x0, x1, y0, y1))
+                break
+            rows = _zhongkui_detect_rows(gateway) if hwnd else []
             if rows:
+                _shot = _bonus_shot("dialog")
+                if _shot:
+                    logger.info("稀有怪对话截图：%s" % _shot)
                 b = rows[0]
+                # ★2026-09-08 惨痛教训（地猛星实测：两行红字被并成一个块
+                #   (114-209,305-333)，块内随机 y 点中「挑战」而非取消）——
+                #   进战点击取块【顶部条带 y0+2~y0+7】：红字文本顶对齐，
+                #   顶条带必落在第一行（进入战斗）内，绝不误触下面的取消行。
                 post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
-                           random.randint(b["y0"], b["y1"]), gateway=gateway)
-                clicked = True
-                logger.info("已点稀有怪对话最顶红字行（进入战斗）(x%d-%d,y%d-%d)，共%d行"
-                            % (b["x0"], b["x1"], b["y0"], b["y1"], len(rows)))
-            else:
-                post_click(hwnd, random.randint(x0, x1), random.randint(y0, y1),
+                           random.randint(b["y0"] + 2, min(b["y0"] + 7, b["y1"])),
                            gateway=gateway)
                 clicked = True
-                logger.info("红字行未检出，退回标定矩形 (x%d-%d,y%d-%d)"
-                            % (x0, x1, y0, y1))
-            break
-        rows = _zhongkui_detect_rows(gateway) if hwnd else []
-        if rows:
-            _shot = _bonus_shot("dialog")
-            if _shot:
-                logger.info("稀有怪对话截图：%s" % _shot)
-            b = rows[0]
-            post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
-                       random.randint(b["y0"], b["y1"]), gateway=gateway)
-            clicked = True
-            if verbose:
-                logger.info("已点稀有怪对话首行 (x%d-%d,y%d-%d)"
-                            % (b["x0"], b["x1"], b["y0"], b["y1"]))
-            break
-        _sleep(random.uniform(0.4, 0.6))
-    # 等进战（点了对话给足进战加载时间；没对话则维持原 8s 放弃逻辑）
-    t0 = time.time()
-    battle_wait = 12.0 if clicked else 8.0
-    while time.time() - t0 < battle_wait:
-        if zhuagui_in_battle(gateway):
-            break
-        _sleep(random.uniform(0.5, 0.8))
-    if not zhuagui_in_battle(gateway):
-        if clicked:
-            logger.info("稀有怪 %s 已点进战斗选项仍未进战（选项可能点错/距离远/被占用），跳过" % bname)
-        else:
-            _shot = _bonus_shot("skip")
-            logger.info("稀有怪 %s 无可点选项（大概率正被其他队伍占用'请勿扰'），跳过%s"
-                        % (bname, ("，截图:%s" % _shot) if _shot else ""))
-        return None
-    # 战斗挂机等结束（★进战即后台触发「自动」按钮判定，5s 后点击开启）
-    _threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
-                      daemon=True).start()
-    t1 = time.time()
-    while zhuagui_in_battle(gateway) and time.time() - t1 < float(max_battle_wait):
-        _sleep(random.uniform(1.2, 1.8))
-    ok_end = not zhuagui_in_battle(gateway)
-    logger.info("稀有怪 %s 战斗%s（耗时%.0fs）"
-                % (bname, "结束" if ok_end else "超时", time.time() - t1))
-    return bname if ok_end else None
+                if verbose:
+                    logger.info("已点稀有怪对话首行顶部条带 (x%d-%d,y%d-%d)"
+                                % (b["x0"], b["x1"], b["y0"], b["y1"]))
+                break
+            _sleep(random.uniform(0.4, 0.6))
+        # 等进战（点了对话给足进战加载时间；没对话则维持原 8s 放弃逻辑）
+        t0 = time.time()
+        battle_wait = 12.0 if clicked else 8.0
+        while time.time() - t0 < battle_wait:
+            if zhuagui_in_battle(gateway):
+                break
+            _sleep(random.uniform(0.5, 0.8))
+        if not zhuagui_in_battle(gateway):
+            if clicked:
+                logger.info("稀有怪 %s 已点进战斗选项仍未进战（选项可能点错/距离远/被占用），跳过" % bname)
+            else:
+                _shot = _bonus_shot("skip")
+                logger.info("稀有怪 %s 无可点选项（大概率正被其他队伍占用'请勿扰'），跳过%s"
+                            % (bname, ("，截图:%s" % _shot) if _shot else ""))
+            return None
+        # 战斗挂机等结束（★进战即后台触发「自动」按钮判定，5s 后点击开启）
+        _threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
+                          daemon=True).start()
+        t1 = time.time()
+        while zhuagui_in_battle(gateway) and time.time() - t1 < float(max_battle_wait):
+            _sleep(random.uniform(1.2, 1.8))
+        ok_end = not zhuagui_in_battle(gateway)
+        logger.info("稀有怪 %s 战斗%s（耗时%.0fs）"
+                    % (bname, "结束" if ok_end else "超时", time.time() - t1))
+        return bname if ok_end else None
+    return None
 
 
 # ============================================================
