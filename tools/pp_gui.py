@@ -1051,6 +1051,7 @@ class PPApp(tk.Tk):
         self._log("[看门狗] 启动（目标 %d 人，每 15s 判定）" % expect_members)
         stale_scan_n = 0
         hb_n = 0
+        bskip_n = 0
         self._kill_stale_tasks()   # 启动先清一遍历史僵尸
         while not self._team_watch_stop.wait(15):
             try:
@@ -1077,6 +1078,20 @@ class PPApp(tk.Tk):
                     leader_pid = leader.pid
                 if leader is None or leader.status != S_ONLINE:
                     continue   # 队长不在（掉线重登中），等归队流程
+                # ★2026-09-08 深夜用户定案：战斗中不要检查队伍数据——
+                #   23:41:50 实证战斗中顶栏连续 16 轮读不到刷"检查通道/面板"
+                #   误报，且战斗中也不可能补组。战斗证据为真即跳过本轮判定，
+                #   脱战后自动恢复；连续跳过 40 轮（~10 分钟）兜底恢复判定，
+                #   防战斗信号残留导致看门狗永久失明。
+                try:
+                    if ZGUI.zhuagui_in_battle("file://pzxy_p%d" % leader_pid):
+                        bskip_n += 1
+                        if bskip_n <= 40:
+                            continue
+                    else:
+                        bskip_n = 0
+                except Exception:
+                    bskip_n = 0
                 # ★2026-09-07：顶栏读数零点击，战斗中也可判缺员
                 st = self._watch_team_stats(leader_pid)
                 mem = st[0] if st else -1
