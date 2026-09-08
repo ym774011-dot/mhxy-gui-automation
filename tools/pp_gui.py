@@ -1319,6 +1319,16 @@ class PPApp(tk.Tk):
             insts = list(self.instances)
         wins = {pid: (pid, hwnd, title) for pid, hwnd, title in enum_game_windows()}
         for inst in insts:
+            # ★2026-09-08 全状态进程死活巡检（仅 S_RESTART 例外，其自管新进程生死）：
+            #   异步流程（组队/播种/启动等待）遇客户端死亡会永久卡在原状态——
+            #   18:32 实锤：帅哥客户端死于组队阶段，状态停在"组队中"，监控因
+            #   下方状态白名单无条件跳过 → 表里 5 个实例只剩 4 个窗口，队伍
+            #   看门狗 4/5 永远补不齐（死锁）。进程死了无论什么状态都走重启闭环。
+            if inst.status != S_RESTART and not proc_alive(inst.pid):
+                self._log("p%d 进程已死（状态=%s）→ 重启闭环"
+                          % (inst.pid, inst.status))
+                self._begin_restart(inst)
+                continue
             if inst.status in (S_LAUNCH, S_PLANT, S_RESTART, S_TEAM):
                 continue  # 由各自的异步流程负责
             w = wins.get(inst.pid)
