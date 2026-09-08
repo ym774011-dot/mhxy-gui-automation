@@ -1754,7 +1754,13 @@ _BONUS_CLICK_RECT = {
     # ★2026-09-08 用户标定（恶作剧大王，称谓"小毛头"）：进战斗选项
     #   (116,307)-(164,318)，宽高(48,11)
     "恶作剧大王": (116, 307, 164, 318),
+    # ★2026-09-08 深夜用户标定（地煞星）：进战斗选项 (123,307)-(176,317)，
+    #   宽高(53,10)。地煞星红字行同样会合并，行检测顶条带实测点偏
+    #   （23:30:47 小有所成地会星已点选项仍未进战）→ 直点标定矩形。
+    "地煞星": (123, 307, 176, 317),
 }
+# ★这些类型按标定矩形直点（红字行检测对它们实测不可靠）；其余仍行检测优先
+_BONUS_RECT_FIRST = {"地煞星"}
 _BONUS_ENABLED = os.environ.get("MHXY_ZG_BONUS", "1") != "0"
 
 
@@ -1989,6 +1995,15 @@ __out = tostring(n or '-')
                 if _shot:
                     logger.info("稀有怪对话截图：%s" % _shot)
                 x0, y0, x1, y1 = rect
+                # ★2026-09-08 深夜：地煞星行检测顶条带实测点偏（红字行合并），
+                #   改标定矩形直点；其余类型保持行检测优先（知了王漂移教训）。
+                if bkind in _BONUS_RECT_FIRST:
+                    post_click(hwnd, random.randint(x0 + 2, x1 - 2),
+                               random.randint(y0 + 2, y1 - 2), gateway=gateway)
+                    clicked = True
+                    logger.info("已点稀有怪标定矩形 (x%d-%d,y%d-%d)（%s 行检测不可靠直点）"
+                                % (x0, x1, y0, y1, bkind))
+                    break
                 # ★2026-09-07 用户实测：知了王固定矩形点到了下面的"取消"行——
                 #   对话框随文本长度上下漂移（真实截图标定：进战斗行 y302-317、
                 #   取消行 y320-335，标定矩形中心 y=327 恰压在取消行上）。
@@ -2031,9 +2046,21 @@ __out = tostring(n or '-')
         # 等进战（点了对话给足进战加载时间；没对话则维持原 8s 放弃逻辑）
         t0 = time.time()
         battle_wait = 12.0 if clicked else 8.0
+        _rect_retried = False
         while time.time() - t0 < battle_wait:
             if zhuagui_in_battle(gateway):
                 break
+            # ★2026-09-08 深夜：标定矩形点击未吃进去时，用红字最顶行补一枪
+            #   （两种策略互补，防单一点法落空整只怪白跳过）
+            if clicked and not _rect_retried and time.time() - t0 > 5.0 and hwnd:
+                _rows2 = _bonus_dialog_rows(hwnd)
+                if _rows2:
+                    b = _rows2[0]
+                    post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                               random.randint(b["y0"], b["y1"]), gateway=gateway)
+                    _rect_retried = True
+                    logger.info("标定矩形点击未进战，补点红字最顶行 (x%d-%d,y%d-%d)"
+                                % (b["x0"], b["x1"], b["y0"], b["y1"]))
             _sleep(random.uniform(0.5, 0.8))
         if not zhuagui_in_battle(gateway):
             if clicked:
