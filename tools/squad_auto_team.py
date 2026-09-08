@@ -126,6 +126,15 @@ def prep_leader(leader_pid):
     _log("队长准备: 传送 %s + 走位 [139,80]" % TP_DEST)
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
+    # ★2026-09-08 冗余消除：人已在锚点附近（±3 格）就不传送，直接就位。
+    #   旧代码无条件传送：GUI 阶段1 已传过一次，这里又传 = 队长连传两次
+    #   （12:55 实锤）；补组重试轮人本来就在锚点也会白传一次。
+    pos0 = read_pos_closed(lhwnd, lw)
+    if (pos0 is not None
+            and abs(CAP_TARGET[0] - pos0[0]) <= 60
+            and abs(CAP_TARGET[1] - pos0[1]) <= 60):
+        _log("队长已在锚点附近 %s，跳过传送直接就位" % (pos0,))
+        return pos0
     pos = None
     for attempt in (1, 2):
         _teleport(leader_pid)

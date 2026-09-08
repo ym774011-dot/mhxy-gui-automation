@@ -773,9 +773,13 @@ class PPApp(tk.Tk):
                 self._log("[autoTeam] Lua 队伍读数 %d/%d 未满员 → 走组队流程"
                           % (mem, len(insts)))
 
-            # ---- 阶段1：全员并行传送 ----
-            self._log("[autoTeam] 阶段1: %d 人并行传送 %s"
-                      % (len(insts), sat.TP_DEST))
+            # ---- 阶段1：队员并行传送（队长不传） ----
+            # ★2026-09-08 冗余消除：阶段2 prep_leader 第一步就是队长传送+走位，
+            #   这里再传队长 = 队长连传两次（12:55 实锤：阶段1 传送完成 1s 后
+            #   prep_leader 又传一次）。队长由阶段2 统一负责。
+            movers = [i for i in insts if i.role != "leader"]
+            self._log("[autoTeam] 阶段1: %d 名队员并行传送 %s（队长由阶段2 负责）"
+                      % (len(movers), sat.TP_DEST))
             tp_ok = {}
 
             def _tp_one(inst):
@@ -789,7 +793,7 @@ class PPApp(tk.Tk):
                     self._log("p%d 传送异常: %s" % (inst.pid, e))
 
             ts = [threading.Thread(target=_tp_one, args=(i,), daemon=True)
-                  for i in insts]
+                  for i in movers]
             for t in ts:
                 t.start()
             for t in ts:
