@@ -702,6 +702,13 @@ def main(argv=None):
                         print("[闯关调度] 续跑门派闯关%s，返回抓鬼流程"
                               % ("完成 ✓" if _cg_ok else "失败/中止"))
                         sys.stdout.flush()
+                        # ★游戏规则（2026-09-08 用户定案）：闯关没做完不能抓鬼。
+                        #   本轮失败的直接 continue 下轮再闯关，绝不落进抓鬼轮。
+                        if _CG.read_tracker_sect(gateway):
+                            print("[闯关调度] 闯关仍在进行（未完成）→ 本轮跳过抓鬼，下轮继续闯关")
+                            sys.stdout.flush()
+                            time.sleep(random.uniform(8.0, 15.0))
+                            continue
                 except Exception:
                     traceback.print_exc()
 

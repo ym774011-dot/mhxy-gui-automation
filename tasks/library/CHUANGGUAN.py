@@ -276,32 +276,57 @@ def _click_dialog_first_row(gateway, hwnd, tries=5, tag=""):
 
 
 def _dismiss_dialog(gateway, hwnd):
-    """右键弹窗上关闭（用户确认：右键必须在弹窗上；落点=红字行右侧面板空白）。"""
+    """右键弹窗上关闭（用户确认：右键必须在弹窗上）。
+
+    ★2026-09-08 收紧：检测不到红字行时什么都不做（不盲右键）——
+      实况事故：CALL 弹出的对话被本函数盲右键误关（用户目击）。
+    """
     rows = _zhongkui_detect_rows(gateway)
-    if rows:
-        b = rows[0]
-        dx = min(max(b["x1"] + 40, 300), 560)
-        dy = (b["y0"] + b["y1"]) // 2
-    else:
-        dx, dy = 370, 330
+    if not rows:
+        return False
+    b = rows[0]
+    dx = min(max(b["x1"] + 40, 300), 560)
+    dy = (b["y0"] + b["y1"]) // 2
     post_right_click(hwnd, dx, dy, gateway=gateway)
     _sleep(random.uniform(0.8, 1.0))
+    return True
+
+
+def _wait_move_stop(gateway, max_wait=8.0):
+    """等角色停止移动（连续两读位移<6px 判停）。用户规则：移动中画面在动，
+    兜底点击必偏——必须停稳后才允许点护法身体。返回是否停稳。"""
+    t0 = time.time()
+    lx = ly = None
+    stable = 0
+    while time.time() - t0 < max_wait:
+        pos = self_world_xy(gateway)
+        if pos:
+            if lx is not None:
+                mv = abs(pos[0] - lx) + abs(pos[1] - ly)
+                stable = stable + 1 if mv < 6 else 0
+                if stable >= 2:
+                    return True
+            lx, ly = pos[0], pos[1]
+        _sleep(random.uniform(0.4, 0.6))
+    return False
 
 
 def _call_guard_npc(gateway, hwnd, sect, guard_grid, verbose=False):
     """CALL 门派护法：优先地图单位按门派名/护法称谓找标识发 CALL 包；
     找不到（标识读不到）退回投影点击护法身体（点 NPC=同款对话请求）。
 
-    ★2026-09-08 实况修复（女儿村第12考验 日志 21:44:04"护法无标识"）：
-      护法在地图单位表确实带标识（实测 [2]女儿村护法/★门派护法★/标识=2），
-      但角色刚到位时活动护法条目尚未刷进单位表（服务器延迟）→ 单次读取
-      为空就误退点击兜底。改为轮询读标识最多 ~4s，读到了照旧发 CALL 包。
+    ★2026-09-08 两连修：
+      1) KEYPAT 裸词语法错误（local key = 女儿村 → Lua 报错 → 永远读空
+         → 永远走点击兜底）。实机对比：裸词=None，加引号='2|女儿村护法'。
+      2) 用户规则：兜底点击必须等角色停稳（移动中画面在动点击必偏）；
+         且距护法 >200px 时不点（太远点不中，宁可下轮重来）。
     """
+    _wait_move_stop(gateway, max_wait=8.0)
     _sleep(random.uniform(0.15, 0.4))   # ★柔和化，与抓鬼 CALL 同款
     code = r"""
 local t = tp.地图.地图单位
 if type(t) ~= 'table' then __out = '' return end
-local key = KEYPAT
+local key = 'KEYPAT'
 for _, v in pairs(t) do
   if type(v) == 'table' then
     local nm = tostring(v.名称 or '')
@@ -327,8 +352,14 @@ __out = ''
             _lua_call(gateway, "客户端:发送数据(0,3,6," + gid.strip() + ",1)")
             logger.info("闯关：已 CALL 护法 %s（标识%s）" % (nm, gid.strip()))
             return True
-    # 兜底：投影点击护法身体（游戏坐标×20 → 世界像素 → 屏幕）
+    # 兜底：停稳 + 距离检查后才投影点击护法身体（★用户规则：移动中不点）
+    pos = self_world_xy(gateway)
     wx, wy = guard_grid[0] * 20, guard_grid[1] * 20
+    if pos:
+        dist = ((pos[0] - wx) ** 2 + (pos[1] - wy) ** 2) ** 0.5
+        if dist > 200:
+            logger.warning("闯关：距护法 %.0fpx 太远且 CALL 未中，兜底点击放弃（下轮重走）" % dist)
+            return False
     r = _lua_call(gateway, r"""local o=tp.屏幕.xy
 __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
     try:
