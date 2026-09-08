@@ -1036,13 +1036,17 @@ class PPApp(tk.Tk):
         role_name = rm.group(1).strip() if rm else ("p%d" % inst.pid)
         try:
             CREATE_NO_WINDOW = 0x08000000
-            if inst.role == "leader":
-                cmd = [PYEXE, RUN_UNLIMITED, "--gateway", gw, "--role", role_name,
-                       "--timeout", "20", "--wait-dialog", "1.2"]
-            else:
-                cmd = [PYEXE, MEMBER_LOOP, "--pid", str(inst.pid), "--gateway", gw]
+            # ★2026-09-09 尸检通道：此前 stderr=DEVNULL，任务脚本崩溃 traceback
+            #   直接丢弃（07:28 leader 闯关完成后静默死亡、昨夜 04:38 同款，
+            #   死因永远查不到）。stdout/stderr 全落 logs/task_p<pid>_run.log。
+            try:
+                _runlog = open(os.path.join(ROOT, "logs",
+                                "task_p%d_run.log" % inst.pid), "ab")
+            except Exception:
+                _runlog = None
             subprocess.Popen(cmd, cwd=ROOT, creationflags=CREATE_NO_WINDOW,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                             stdout=_runlog or subprocess.DEVNULL,
+                             stderr=_runlog or subprocess.DEVNULL)
             self._log("p%d 已拉起任务脚本（%s·%s gw=%s）"
                       % (inst.pid, inst.role_cn, role_name, gw))
         except Exception as e:
@@ -1066,6 +1070,23 @@ class PPApp(tk.Tk):
                 hb_n += 1
                 if stale_scan_n % 4 == 0:   # ~每分钟清一次残留任务脚本
                     self._kill_stale_tasks()
+                # ★2026-09-09 任务脚本死亡自动补拉：07:28 实证 leader 脚本闯关
+                #   完成后静默死亡（stderr 被 DEVNULL 吞掉），全队发呆无人管——
+                #   掉线闭环只管游戏进程，没人管任务脚本进程。每 ~1min 巡检
+                #   在线实例，任务脚本不在了就补拉（_spawn_task 自带防双跑）。
+                if stale_scan_n % 4 == 2 and not self.teamflow_running:
+                    with self.lock:
+                        _online = [i for i in self.instances
+                                   if i.status == S_ONLINE]
+                    for it in _online:
+                        try:
+                            _ok, _cls = running_squad_cmdlines_ex()
+                            if _ok and not process_alive_for(
+                                    _cls, it.pid, it.role == "leader"):
+                                self._log("p%d 任务脚本已死 → 自动补拉" % it.pid)
+                                self._spawn_task(it)
+                        except Exception as e:
+                            self._log("p%d 任务脚本巡检异常: %s" % (it.pid, e))
                 if not self.scripts_started or self.teamflow_running:
                     continue
                 # ★2026-09-07：队长重登后 PID 会变（02:21 实证 p9472→24712）。
