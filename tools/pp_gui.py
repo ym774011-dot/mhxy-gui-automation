@@ -597,15 +597,47 @@ class PPApp(tk.Tk):
     def _do_plant(self, inst, hwnd):
         inst.status, inst.note = S_PLANT, ""
         self._log("p%d 检测到登录界面，开始播种…" % inst.pid)
-        ok, why = self._plant_try(inst)
-        retried = False
-        if not ok:
-            # ★2026-09-07 失败原因落日志（此前只打控制台，pythonw 下丢失）
-            self._log("p%d 播种失败：%s（3s 后重试）" % (inst.pid, why))
-            inst.status, inst.note = S_PLANT, "播种失败，重试中"
-            time.sleep(3)
-            retried = True
+        attempt, ok, why, retried = 0, False, "", False
+        while True:
+            attempt += 1
             ok, why = self._plant_try(inst)
+            retried = attempt > 1
+            if ok:
+                break
+            # ★2026-09-07 失败原因落日志（此前只打控制台，pythonw 下丢失）
+            if attempt == 1:
+                self._log("p%d 播种失败：%s（3s 后重试）" % (inst.pid, why))
+                inst.status, inst.note = S_PLANT, "播种失败，重试中"
+                time.sleep(3)
+                continue
+            # ★2026-09-08 修复：播种失败后实例曾永久卡在 S_PLANT——
+            #   _monitor_once 对该状态无条件跳过，无人再管（10:09 p11728
+            #   四连败后停在登录界面、队伍 4/5 空转实锤）。改为低频重试环：
+            #   每 60s 再播种一次（最多 10 次）；期间进程消失/已登录/窗口
+            #   不在登录界面 → 退出交回监控，绝不悬死。
+            self._log("p%d 播种失败(第%d次)：%s（60s 后再试，窗口登录/消失则停）"
+                      % (inst.pid, attempt, why))
+            inst.status, inst.note = S_PLANT, "播种失败，低频重试中"
+            if attempt > 11:
+                self._log("p%d 播种连续 11 次失败，放弃（保持登录界面，等掉线闭环重启）"
+                          % inst.pid)
+                break
+            rearm = time.time() + 60
+            while time.time() < rearm:
+                time.sleep(2)
+                if not proc_alive(inst.pid):
+                    return
+                w = next((t for p, _h, t in enum_game_windows() if p == inst.pid), None)
+                if w and LOGGED_IN_RE.search(w):
+                    inst.status, inst.note = S_WAIT, "手动登录，免播种"
+                    self._log("p%d 等待期间检测到已登录 → 交回监控" % inst.pid)
+                    return
+                if w and "([0])" not in w:
+                    return   # 窗口状态变了，交回监控判定
+            hwnd = next((h for p, h, t in enum_game_windows()
+                         if p == inst.pid and "([0])" in t), None)
+            if hwnd is None:
+                return
         if ok:
             inst.status, inst.note = S_WAIT, "播种成功" + ("(重试)" if retried else "")
             self._log("p%d %s ✓" % (inst.pid, inst.note))
@@ -618,10 +650,6 @@ class PPApp(tk.Tk):
             else:
                 self._log("p%d 等待手动登录（%s 无登录录制：选中该实例点【录制登录点击】"
                           "后手动登录一次即可）" % (inst.pid, inst.slot))
-        else:
-            inst.status, inst.note = S_PLANT, "播种失败"
-            self._log("p%d 播种失败 ✗：%s（窗口将保持登录界面，可手动处理）"
-                      % (inst.pid, why))
 
     def _plant_try(self, inst):
         """单次播种尝试；每次换一个端口（首试失败可能是端口/网关残留竞争）。"""
