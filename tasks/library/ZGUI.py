@@ -133,6 +133,8 @@ user32 = ctypes.windll.user32
 user32.PostMessageW.argtypes = [ctypes.wintypes.HWND, ctypes.wintypes.UINT,
                                 ctypes.wintypes.WPARAM, ctypes.wintypes.LPARAM]
 user32.PostMessageW.restype = ctypes.wintypes.BOOL
+gdi32 = ctypes.windll.gdi32
+_SRCCOPY = 0x00CC0020
 
 WM_MOUSEMOVE = 0x0200
 WM_LBUTTONDOWN = 0x0201
@@ -420,8 +422,83 @@ def post_right_click(hwnd, x, y, gateway=None):
     _last_mouse_ts[0] = time.time()
 
 
+class _BMIHEADER(ctypes.Structure):
+    _fields_ = [
+        ("biSize", ctypes.wintypes.DWORD), ("biWidth", ctypes.wintypes.LONG),
+        ("biHeight", ctypes.wintypes.LONG), ("biPlanes", ctypes.wintypes.WORD),
+        ("biBitCount", ctypes.wintypes.WORD), ("biCompression", ctypes.wintypes.DWORD),
+        ("biSizeImage", ctypes.wintypes.DWORD), ("biXPelsPerMeter", ctypes.wintypes.LONG),
+        ("biYPelsPerMeter", ctypes.wintypes.LONG), ("biClrUsed", ctypes.wintypes.DWORD),
+        ("biClrImportant", ctypes.wintypes.DWORD),
+    ]
+
+
+class _BMI(ctypes.Structure):
+    _fields_ = [("bmiHeader", _BMIHEADER), ("bmiColors", ctypes.wintypes.DWORD * 3)]
+
+
+def _grab_client_bitblt(hwnd, cw, ch):
+    """BitBlt 直接从窗口 DC 拷贝客户区（2026-09-08 新增）。
+
+    ★根因：ImageGrab.grab 抓的是桌面合成画面，游戏窗口被其他窗口遮挡时
+      截到的是遮挡者的像素 → 所有红字截图检测（钟馗对话/送你回地府/恶作剧
+      大王红字行）恒失败 → 2026-09-08 09:11~09:54 实测 54 轮空转"钟馗对话
+      未弹出"。BitBlt 走窗口自身 DC，被遮挡/黑屏盖屏时照样拿到真实画面
+      （本机多开器窗口架构下实测可用，PrintWindow 才是不行的那个）。
+
+    Returns:
+        PIL.Image (RGB) 或 None（BitBlt 失败）。
+    """
+    hdc_win = user32.GetDC(hwnd)
+    if not hdc_win:
+        return None
+    hdc_mem = gdi32.CreateCompatibleDC(hdc_win)
+    hbmp = gdi32.CreateCompatibleBitmap(hdc_win, cw, ch)
+    old = gdi32.SelectObject(hdc_mem, hbmp)
+    try:
+        if not gdi32.BitBlt(hdc_mem, 0, 0, cw, ch, hdc_win, 0, 0, _SRCCOPY):
+            return None
+        bmi = _BMI()
+        bmi.bmiHeader.biSize = ctypes.sizeof(_BMIHEADER)
+        bmi.bmiHeader.biWidth = cw
+        bmi.bmiHeader.biHeight = -ch   # 负数 = 自顶向下，省去翻转
+        bmi.bmiHeader.biPlanes = 1
+        bmi.bmiHeader.biBitCount = 32
+        bmi.bmiHeader.biCompression = 0  # BI_RGB
+        buf = ctypes.create_string_buffer(cw * ch * 4)
+        if gdi32.GetDIBits(hdc_mem, hbmp, 0, ch, buf, ctypes.byref(bmi), 0) != ch:
+            return None
+        img = Image.frombuffer("RGBA", (cw, ch), buf.raw, "raw", "BGRA", 0, 1)
+        return img.convert("RGB")
+    except Exception:
+        return None
+    finally:
+        gdi32.SelectObject(hdc_mem, old)
+        gdi32.DeleteObject(hbmp)
+        gdi32.DeleteDC(hdc_mem)
+        user32.ReleaseDC(hwnd, hdc_win)
+
+
+def _coord_int(v):
+    """Lua 输出的坐标常是浮点字符串（如 '-2605.662170428'），int() 直接崩。
+
+    ★2026-09-08 实锤：_npc_hop_map 里 int(sx) 对 Lua 拼接的 (wx+ox) 浮点串
+      抛 ValueError，第 59 轮整轮 error。统一走本函数取整。
+    Returns:
+        int 或 None（非法值）。
+    """
+    try:
+        return int(round(float(str(v).strip())))
+    except (TypeError, ValueError):
+        return None
+
+
 def grab_client(hwnd):
-    """截取客户区图像（含屏幕原点偏移修正），返回 (img, 原点, 尺寸)。"""
+    """截取客户区图像（含屏幕原点偏移修正），返回 (img, 原点, 尺寸)。
+
+    ★2026-09-08 改为 BitBlt 优先：窗口被遮挡/黑屏盖屏时仍能截到真实画面；
+      BitBlt 失败或得到全黑（个别 DX 场景）时回退原屏幕抓取（行为同旧版）。
+    """
     r = ctypes.wintypes.RECT()
     user32.GetClientRect(hwnd, ctypes.byref(r))
     pt = ctypes.wintypes.POINT(0, 0)
@@ -431,6 +508,11 @@ def grab_client(hwnd):
         w = ctypes.wintypes.RECT()
         user32.GetWindowRect(hwnd, ctypes.byref(w))
         return ImageGrab.grab(bbox=(w.left, w.top, w.right, w.bottom)).convert("RGB"), (w.left, w.top), (w.right - w.left, w.bottom - w.top)
+    bb = _grab_client_bitblt(hwnd, cw, ch)
+    if bb is not None:
+        hi = bb.convert("L").getextrema()[1]
+        if hi > 8:   # 全黑视为拷贝失败，回退屏幕抓取
+            return bb, (pt.x, pt.y), (cw, ch)
     img = ImageGrab.grab(bbox=(pt.x, pt.y, pt.x + cw, pt.y + ch)).convert("RGB")
     return img, (pt.x, pt.y), (cw, ch)
 
@@ -1183,8 +1265,16 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
             return False  # 本图没有去目标图的接引人
         nx, nxy = r.split("|", 1)
         sx, sy = nxy.split(",")
-        post_click(hwnd, int(sx) + random.randint(-3, 3),
-                   int(sy) + random.randint(-3, 3), gateway=gateway)
+        px, py = _coord_int(sx), _coord_int(sy)
+        wr = ctypes.wintypes.RECT()
+        user32.GetClientRect(hwnd, ctypes.byref(wr))
+        if px is None or py is None or not (0 <= px < wr.right and 0 <= py < wr.bottom):
+            # 投影越界/非法 = 人不在该守卫身边（或坐标垃圾），点了也是点到窗外
+            logger.warning("守卫/接引人屏幕坐标非法 (%s,%s) 客户区 %dx%d，跳过点击"
+                           % (sx, sy, wr.right, wr.bottom))
+            return False
+        post_click(hwnd, px + random.randint(-3, 3),
+                   py + random.randint(-3, 3), gateway=gateway)
         _sleep(random.uniform(0.8, 1.2))
         # ★2026-09-07 守卫/驿站类对话：选项进 tp.窗口.对话栏.选项（接引人/钟馗
         #   类为空）。有选项时按文本点含目标图名的选项矩形（如建邺城守卫
@@ -2865,7 +2955,10 @@ def zhuagui_find_ghost(gateway=DEFAULT_GATEWAY, **kw):
         return None
     n, xy = r.split("|")
     sx, sy = xy.split(",")
-    return n, int(sx), int(sy)
+    px, py = _coord_int(sx), _coord_int(sy)
+    if px is None or py is None:
+        return None
+    return n, px, py
 
 
 def zhuagui_click_ghost(gateway=DEFAULT_GATEWAY, **kw):
