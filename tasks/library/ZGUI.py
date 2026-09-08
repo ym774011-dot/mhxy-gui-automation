@@ -3594,9 +3594,18 @@ _AUTO_BTN_THRESH = 0.72   # TM_CCOEFF_NORMED 命中阈值（模板与素材同�
 def _client_shot(hwnd, x0, y0, x1, y1):
     """截 hwnd 客户区 (x0,y0)-(x1,y1) → BGR 数组；失败返回 None。
 
-    注意：mss 走屏幕像素，目标窗口需前台可见（队长窗口用户全程盯着，
-    满足；后台最小化窗口截到的是遮挡内容，命中失败=不点击，安全降级）。
+    ★2026-09-09 黑屏加固：mss 走屏幕像素，被黑屏盖屏（全黑置顶窗口）/
+    遮挡时截到全黑 → 「自动」按钮模板恒不命中。改 BitBlt 窗口 DC 优先
+    （同 grab_client 通道，被遮挡照样拿到真实画面），失败再退 mss 屏幕抓取。
     """
+    try:
+        import cv2
+        import numpy as np
+        full = grab_client(hwnd)
+        if full is not None:
+            return cv2.cvtColor(np.asarray(full), cv2.COLOR_RGB2BGR)[y0:y1, x0:x1]
+    except Exception:
+        pass
     try:
         import cv2
         import mss
