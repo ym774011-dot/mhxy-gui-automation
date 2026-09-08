@@ -72,7 +72,8 @@ SECT_CALIB = {
 _ACT_LIST_GAME = (231, 104)
 _ACT_ENVOY_TITLE = "门派闯关活动使者"
 
-_MAX_TRIALS = 6          # 单次报名内考验数上限（防任务追踪卡住死循环）
+_MAX_TRIALS = 16         # ★游戏规则：一次报名=15 次考验，全部完成前不能抓鬼
+                         # （用户 2026-09-08 定案；16=15+1 防边界）
 _ARRIVE_TOL_GAME = 16.0  # 到位判定：距护法 <16 游戏单位即 CALL（用户：略偏无妨）
 _STALL_GAP_S = 5.0       # 走路停滞判定：位置变化 <5px 视为停滞
 
@@ -266,7 +267,12 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
 
 
 def run(gateway=ZGUI.DEFAULT_GATEWAY, hwnd=None, verbose=True, **kw):
-    """门派闯关主流程（Leader 侧）。返回 True=至少完成一场考验战斗。"""
+    """门派闯关主流程（Leader 侧）。返回 True=至少完成一场考验战斗。
+
+    ★游戏规则（用户 2026-09-08 定案）：接了门派闯关就不能抓鬼，15 次考验
+    全部完成后才恢复。故入口先查任务追踪：已有进行中的闯关任务 → 跳过
+    报名段（旗子/使者/参加活动）直接续跑考验；没有才走完整报名流程。
+    """
     if hwnd is None:
         hwnd = get_hwnd()
     if not hwnd:
@@ -274,16 +280,21 @@ def run(gateway=ZGUI.DEFAULT_GATEWAY, hwnd=None, verbose=True, **kw):
         return False
     won = 0
     try:
-        # ---- 1) 旗子飞长安（沿用抓鬼通道）----
-        if not zhuagui_go_back_changan(gateway=gateway):
-            logger.warning("闯关：旗子回长安失败，中止")
-            return False
-        # ---- 2) 走到活动集合点 → 点使者 → 参加活动 ----
-        gx, gy = _ACT_LIST_GAME
-        if not _walk_world(gateway, hwnd, gx * 20, gy * 20, tol_game=20.0,
-                           timeout=45.0, verbose=verbose):
-            logger.info("闯关：未精确到集合点（坐标略偏无妨），继续点使者")
-        code = r"""
+        # ---- 0) 已有进行中的闯关任务 → 直接续跑（跳过报名段）----
+        existing = read_tracker_sect(gateway)
+        if existing:
+            logger.info("闯关：检测到进行中的门派闯关（当前目标 %s）→ 续跑考验" % existing)
+        else:
+            # ---- 1) 旗子飞长安（沿用抓鬼通道）----
+            if not zhuagui_go_back_changan(gateway=gateway):
+                logger.warning("闯关：旗子回长安失败，中止")
+                return False
+        # ---- 2) 走到活动集合点 → 点使者 → 参加活动（仅新报名时）----
+            gx, gy = _ACT_LIST_GAME
+            if not _walk_world(gateway, hwnd, gx * 20, gy * 20, tol_game=20.0,
+                               timeout=45.0, verbose=verbose):
+                logger.info("闯关：未精确到集合点（坐标略偏无妨），继续点使者")
+            code = r"""
 local nl = tp.地图 and tp.地图.npc
 if type(nl) ~= 'table' then __out = '' return end
 for _, v in pairs(nl) do
@@ -294,27 +305,27 @@ for _, v in pairs(nl) do
 end
 __out = ''
 """.replace("TITLE", _ACT_ENVOY_TITLE)
-        r = _lua_call(gateway, code) or ""
-        if "," not in r:
-            logger.warning("闯关：长安城找不到门派闯关活动使者，中止")
-            return False
-        ex, ey = [int(float(v)) for v in r.split(",")]
-        r = _lua_call(gateway, r"""local o=tp.屏幕.xy
+            r = _lua_call(gateway, code) or ""
+            if "," not in r:
+                logger.warning("闯关：长安城找不到门派闯关活动使者，中止")
+                return False
+            ex, ey = [int(float(v)) for v in r.split(",")]
+            r = _lua_call(gateway, r"""local o=tp.屏幕.xy
 __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
-        ox, oy = [int(float(v)) for v in r.split(",")]
-        px, py = ex + ox, ey + oy
-        wr = wt.RECT()
-        user32.GetClientRect(hwnd, ctypes.byref(wr))
-        if not (0 <= px < wr.right and 0 <= py < wr.bottom):
-            logger.warning("闯关：使者不在视野(%d,%d)，中止" % (px, py))
-            return False
-        post_click(hwnd, px + random.randint(-3, 3), py + random.randint(-6, 0),
-                   gateway=gateway)
-        _sleep(random.uniform(1.2, 1.6))
-        if not _click_dialog_first_row(gateway, hwnd, tag="参加活动"):
-            logger.warning("闯关：使者对话未弹出（红字行无结果），中止")
-            return False
-        _mouse_clear(hwnd, gateway)
+            ox, oy = [int(float(v)) for v in r.split(",")]
+            px, py = ex + ox, ey + oy
+            wr = wt.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(wr))
+            if not (0 <= px < wr.right and 0 <= py < wr.bottom):
+                logger.warning("闯关：使者不在视野(%d,%d)，中止" % (px, py))
+                return False
+            post_click(hwnd, px + random.randint(-3, 3), py + random.randint(-6, 0),
+                       gateway=gateway)
+            _sleep(random.uniform(1.2, 1.6))
+            if not _click_dialog_first_row(gateway, hwnd, tag="参加活动"):
+                logger.warning("闯关：使者对话未弹出（红字行无结果），中止")
+                return False
+            _mouse_clear(hwnd, gateway)
         # ---- 3) 考验循环（以任务追踪为准，上限 _MAX_TRIALS）----
         for trial in range(1, _MAX_TRIALS + 1):
             # 等任务追踪刷新（参加活动/上一场战斗结算有延迟）

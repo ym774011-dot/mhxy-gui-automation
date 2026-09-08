@@ -684,6 +684,27 @@ def main(argv=None):
             if args.rounds and index > args.rounds:
                 break
 
+            # ★游戏规则（2026-09-08 用户定案）：接了门派闯关就不能抓鬼，
+            #   15 次考验全部完成后才恢复——每轮开跑前先查任务追踪，
+            #   有闯关任务先做完再抓鬼（同时覆盖重启/中止后的续跑）。
+            if cg_enabled and not _STOP.is_set():
+                try:
+                    from tasks.library import CHUANGGUAN as _CG
+                    if _CG.read_tracker_sect(gateway):
+                        print("[闯关调度] 检测到进行中的门派闯关任务 → 先完成再抓鬼")
+                        sys.stdout.flush()
+                        pw0 = zgui._find_role_window(args.role)
+                        if pw0:
+                            zgui.set_target_hwnd(pw0[1])
+                        _cg_ok = _CG.run(gateway=gateway,
+                                         hwnd=pw0[1] if pw0 else None,
+                                         verbose=True)
+                        print("[闯关调度] 续跑门派闯关%s，返回抓鬼流程"
+                              % ("完成 ✓" if _cg_ok else "失败/中止"))
+                        sys.stdout.flush()
+                except Exception:
+                    traceback.print_exc()
+
             rec = run_one_round(zgui, args, gateway, index)
             writer.write(rec)
             counts[rec["result"]] = counts.get(rec["result"], 0) + 1
