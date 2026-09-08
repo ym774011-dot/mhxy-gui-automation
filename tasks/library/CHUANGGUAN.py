@@ -38,7 +38,7 @@ from tasks.library.ZGUI import (
     _lua_call, _sleep, _coord_int, logger, post_click, post_right_click,
     zhuagui_go_back_changan, zhuagui_teleport, zhuagui_in_battle,
     self_world_xy, get_hwnd, _zhongkui_detect_rows, _battle_auto_kick,
-    _mouse_clear, user32,
+    _mouse_clear, user32, _bag_ensure_open, _bag_cell_click_pos,
 )
 import ctypes
 import ctypes.wintypes as wt
@@ -76,6 +76,92 @@ _MAX_TRIALS = 16         # ★游戏规则：一次报名=15 次考验，全部�
                          # （用户 2026-09-08 定案；16=15+1 防边界）
 _ARRIVE_TOL_GAME = 16.0  # 到位判定：距护法 <16 游戏单位即 CALL（用户：略偏无妨）
 _STALL_GAP_S = 5.0       # 走路停滞判定：位置变化 <5px 视为停滞
+
+# ★2026-09-08 摄妖香（每次接闯关后买一次并用一次，防跨图走路遇敌）。
+#   三件套坐标全部用户实测标定：商店按钮 → 商店内摄妖香 → 购买按钮。
+_SHOP_BTN_RECT = (751, 463, 776, 487)    # 商店按钮
+_SXY_ITEM_RECT = (398, 225, 430, 251)    # 商店内 摄妖香
+_SXY_BUY_RECT = (506, 458, 525, 470)     # 商店 购买按钮
+
+
+def _click_rect(hwnd, gateway, rect):
+    x0, y0, x1, y1 = rect
+    post_click(hwnd, random.randint(x0, x1), random.randint(y0, y1),
+               gateway=gateway)
+
+
+def _sheaoxiang_pos(gateway):
+    """背包中摄妖香的物品坐标 (x,y)；无/包未开返回 (0,0)。同天眼读小动画。"""
+    code = r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local pd = type(j) == 'table' and type(j[3]) == 'table' and j[3].物品数据
+if type(pd) ~= 'table' then __out = '0,0' return end
+for i = 1, 40 do
+  local it = pd[i]
+  if type(it) == 'table' and tostring(it.名称 or ''):find('摄妖香') then
+    local sa = it.小动画
+    if type(sa) == 'table' then
+      local x = tonumber(sa.x)
+      local y = tonumber(sa.y)
+      if x and y and x > 0 and y > 0 then
+        __out = string.format('%d,%d', x, y)
+        return
+      end
+    end
+  end
+end
+__out = '0,0'
+"""
+    r = _lua_call(gateway, code) or "0,0"
+    if "," not in r:
+        return (0, 0)
+    try:
+        x, y = [int(round(float(v))) for v in r.split(",")]
+        return (x, y)
+    except Exception:
+        return (0, 0)
+
+
+def _buy_and_use_sheaoxiang(gateway, hwnd, verbose=True):
+    """买并使用摄妖香：商店按钮 → 点摄妖香 → 购买 → 右键关商店（须落在
+    弹窗上，点标题区避开物品/按钮行）→ 开包找摄妖香右键使用（同天眼通道）。
+    任何一步失败只告警不阻断（香是防遇敌辅助，不影响闯关主链路）。"""
+    try:
+        logger.info("闯关：购买摄妖香...")
+        _click_rect(hwnd, gateway, _SHOP_BTN_RECT)
+        _sleep(random.uniform(1.0, 1.4))
+        _click_rect(hwnd, gateway, _SXY_ITEM_RECT)
+        _sleep(random.uniform(0.5, 0.8))
+        _click_rect(hwnd, gateway, _SXY_BUY_RECT)
+        _sleep(random.uniform(0.8, 1.2))
+        # 关商店：右键点商店窗口标题区（y~205，避开摄妖香行/购买按钮）
+        post_right_click(hwnd, random.randint(430, 470),
+                         random.randint(198, 212), gateway=gateway)
+        _sleep(random.uniform(0.8, 1.0))
+        _key_press(hwnd, 0x1B)   # ESC 兜底
+        _sleep(random.uniform(0.5, 0.8))
+        # 开包找摄妖香并使用（右键，同天眼符通道）
+        if not _bag_ensure_open(gateway, hwnd):
+            logger.warning("闯关：背包打不开，摄妖香使用跳过")
+            return False
+        x, y = 0, 0
+        for _ in range(6):
+            x, y = _sheaoxiang_pos(gateway)
+            if x > 0 and y > 0:
+                break
+            _sleep(random.uniform(0.5, 0.8))
+        if x <= 0 or y <= 0:
+            logger.warning("闯关：背包里没找到摄妖香（购买可能未生效），跳过使用")
+            return False
+        cx, cy = _bag_cell_click_pos(x, y)
+        post_right_click(hwnd, cx, cy, gateway=gateway)
+        _sleep(random.uniform(0.6, 1.0))
+        _mouse_clear(hwnd, gateway)
+        logger.info("闯关：摄妖香已使用（背包 %d,%d）" % (cx, cy))
+        return True
+    except Exception as e:
+        logger.warning("闯关：摄妖香流程异常（不阻断）: %s" % e)
+        return False
 
 
 def _key_press(hwnd, vk=0x09):
@@ -326,6 +412,8 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 logger.warning("闯关：使者对话未弹出（红字行无结果），中止")
                 return False
             _mouse_clear(hwnd, gateway)
+            # ---- 2.5) 买并使用摄妖香（每次接闯关后一次，防跨图遇敌）----
+            _buy_and_use_sheaoxiang(gateway, hwnd, verbose=verbose)
         # ---- 3) 考验循环（以任务追踪为准，上限 _MAX_TRIALS）----
         for trial in range(1, _MAX_TRIALS + 1):
             # 等任务追踪刷新（参加活动/上一场战斗结算有延迟）
