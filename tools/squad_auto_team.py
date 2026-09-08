@@ -111,53 +111,81 @@ def _teleport(pid, dest=TP_DEST):
 def prep_leader(leader_pid):
     """队长上线第一步：传送大唐官府 → 走位 [139,80]。
 
-    返回队长世界坐标；失败返回 None。结束时队伍面板为关闭状态。
+    ★2026-09-08 用户规则定案（时序铁律）：队长必须真正到达 [139,80]
+      （±3 格），队员才能开始组队操作——队长没到时队员朝锚点/旧坐标
+      投影点身体 = 点空地，反而打乱双方坐标（12:41 实锤：队长卡在传送
+      落点 (2640,1660) 三连点纹丝不动，队员按旧锚点坐标点击全部落空）。
+
+    走位每次点击后读真实位置（tp.屏幕.主角.xy 零点击），从真实位置继续
+    导航（旧代码盲估计中点，走没走全然不知）；连续 2 次点击位置无变化
+    → 重传送重置再走；整轮最多 2 次传送。
+
+    返回：到达后的队长世界坐标（实测确认）；未到达返回 None——调用方
+    必须跳过队员归队操作（等下一轮看门狗），绝不让队员朝错误位置点击。
     """
     _log("队长准备: 传送 %s + 走位 [139,80]" % TP_DEST)
-    _teleport(leader_pid)
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
-    pos = read_pos_closed(lhwnd, lw)
-    _log("队长当前位置: %s" % (pos,))
-    if pos is None:
-        # 传送落点是统一的 [132,83]（2026-09-06 五开实测），读不到面板时兜底假设
-        _log("面板读不到，按传送统一落点 [132,83] 兜底走位")
-        pos = ARRIVE_WORLD
-    for i in range(4):
-        dx, dy = CAP_TARGET[0] - pos[0], CAP_TARGET[1] - pos[1]
-        if abs(dx) <= 20 and abs(dy) <= 20:
-            break
-        off = ZGUI._screen_offset_xy(lw)
-        if off is None:
-            _log("[fail] tp 不可用")
-            return None
-        sx, sy = int(CAP_TARGET[0] + off[0]), int(CAP_TARGET[1] + off[1])
-        if not (0 <= sx <= 800 and 0 <= sy <= 600):
-            _log("[fail] 目标不在队长视野 (%d,%d)，中止" % (sx, sy))
-            return None
-        _log("走位点击 (%d,%d)（偏差 %.0f,%.0f）——途中不点组队图标" % (sx, sy, dx, dy))
-        ZGUI.post_click(lhwnd, sx, sy, gateway=lw)
-        time.sleep(4.0)
-        pos = (pos[0] + (CAP_TARGET[0] - pos[0]) * 0.5,
-               pos[1] + (CAP_TARGET[1] - pos[1]) * 0.5)  # 盲估计，走完再验证
-    est = pos
-    # ★2026-09-07 到达判定放宽（用户要求：不必精确踩 [139,80]，走离人群即可）：
-    #   1) 容差 40 → 60（±3 格），[138,80] 这类差一格不再判失败；
-    #   2) 面板读数失败重读 3 次（每次隔 2s），仍读不到按走位盲估计放行——
-    #      此前读不到直接 [fail]，人已到位却整场组队卡死。
-    for _ in range(3):
+    pos = None
+    for attempt in (1, 2):
+        _teleport(leader_pid)
+        time.sleep(1.0)
         pos = read_pos_closed(lhwnd, lw)
-        if pos is not None:
-            break
-        time.sleep(2.0)
-    if pos is None:
-        pos = est
-        _log("[warn] 到达后面板仍读不到，按走位盲估计放行: %s" % (pos,))
-    _log("到达验证: %s（目标 %s，±3 格容差）" % (pos, CAP_TARGET))
-    if pos is None or abs(CAP_TARGET[0] - pos[0]) > 60 or abs(CAP_TARGET[1] - pos[1]) > 60:
-        _log("[fail] 队长未到达 [139,80] 附近（±3 格）")
-        return None
-    return pos
+        _log("队长当前位置: %s（第%d次传送后）" % (pos, attempt))
+        if pos is None:
+            # 传送落点是统一的 [132,83]（2026-09-06 五开实测），读不到面板时兜底假设
+            _log("面板读不到，按传送统一落点 [132,83] 兜底走位")
+            pos = ARRIVE_WORLD
+        stuck = 0
+        for i in range(4):
+            dx, dy = CAP_TARGET[0] - pos[0], CAP_TARGET[1] - pos[1]
+            if abs(dx) <= 20 and abs(dy) <= 20:
+                break
+            off = ZGUI._screen_offset_xy(lw)
+            if off is None:
+                _log("[fail] tp 不可用")
+                pos = None
+                break
+            sx, sy = int(CAP_TARGET[0] + off[0]), int(CAP_TARGET[1] + off[1])
+            if not (0 <= sx <= 800 and 0 <= sy <= 600):
+                # 目标不在视野：改点视野边缘同方向逼近（走两步相机跟过来目标
+                # 自然入视野）。旧代码直接中止 → 队员永远等不到队长就位。
+                sx = max(30, min(770, sx))
+                sy = max(30, min(570, sy))
+                _log("[warn] 目标不在视野，改点视野边缘 (%d,%d) 逼近" % (sx, sy))
+            _log("走位点击 (%d,%d)（偏差 %.0f,%.0f）——途中不点组队图标" % (sx, sy, dx, dy))
+            ZGUI.post_click(lhwnd, sx, sy, gateway=lw)
+            time.sleep(4.0)
+            # ★每次点击后读真实位置（不再盲估计中点）
+            real = None
+            for _ in range(3):
+                real = read_pos_closed(lhwnd, lw)
+                if real is not None:
+                    break
+                time.sleep(2.0)
+            if real is None:
+                pos = (pos[0] + (CAP_TARGET[0] - pos[0]) * 0.5,
+                       pos[1] + (CAP_TARGET[1] - pos[1]) * 0.5)  # 读不到退盲估计
+                continue
+            moved = abs(real[0] - pos[0]) + abs(real[1] - pos[1])
+            pos = real
+            if moved < 10:
+                stuck += 1
+                _log("[warn] 第%d次点击后位置未变 (%.0f,%.0f)"
+                     % (i + 1, real[0], real[1]))
+                if stuck >= 2:
+                    _log("[warn] 连续 2 次点击无移动 → 重传送重置走位")
+                    break
+            else:
+                stuck = 0
+        if (pos is not None
+                and abs(CAP_TARGET[0] - pos[0]) <= 60
+                and abs(CAP_TARGET[1] - pos[1]) <= 60):
+            _log("队长已就位: %s（目标 %s，±3 格容差）" % (pos, CAP_TARGET))
+            return pos
+        _log("[warn] 第%d轮走位未到锚点（pos=%s）→ 重传送再来" % (attempt, pos))
+    _log("[fail] 队长两轮走位均未到达 [139,80]——本轮禁止队员归队（防打乱坐标）")
+    return None
 
 
 def _team_panel_ensure(lhwnd, lw, want_open, settle=0.9):

@@ -1196,14 +1196,19 @@ class PPApp(tk.Tk):
                 self._log("[看门狗] 暂停生效，跳过本轮补组")
                 return
             lw = "file://pzxy_p%d" % leader_pid
-            # 队长回等待点（在队中传送可能无效，走位仍有效；失败沿用旧坐标）
+            # ★2026-09-08 时序铁律（用户定案）：队长必须真正到达 [139,80]
+            #   （±3 格，实测确认），队员才能开始组队操作。队长没到就让队员
+            #   点击 = 朝锚点/旧坐标投影点空地，既无效又打乱双方坐标
+            #   （12:41 实锤：队长卡传送落点，成员按旧锚点坐标点击全落空）。
+            #   未就位 → 本轮直接放弃，等下一轮看门狗重来；中途队员掉线也
+            #   一样：掉线队员由下一轮（队长重新就位后）再归队。
             cap = sat.prep_leader(leader_pid)
-            if cap is not None:
-                self.cap_world = cap
-            cap = self.cap_world
             if cap is None:
-                self._log("[看门狗] 补组失败：无队长坐标")
+                self._log("[看门狗] 队长未就位 [139,80] → 本轮跳过队员归队"
+                          "（等下一轮，防打乱坐标）")
                 return
+            self.cap_world = cap
+            cap = self.cap_world
             # ★散队判定必须读顶栏：p7 面板数据是懒加载快照，队员掉线后
             #   会残留旧的满员数据 → 判定为"队伍还在"而永不重建（02:14 实证）
             st = ZGUI.team_stats_topbar(lw)
