@@ -2989,6 +2989,10 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
     # 已在长安城直接成功（★force=True 跳过：用户规则允许重飞）
     if not force and _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
         return True
+    # ★2026-09-08 用户规则（所有任务通用）：用旗前确保背包有红色合成旗，
+    #   没有就商城自动购买（用完下一轮此处自动再补）。失败只告警，
+    #   后续仍会尝试读旗（万一有其他颜色合成旗可飞）+接引人/传送圈兜底。
+    zhuagui_ensure_red_flag(gateway=gateway, hwnd=hwnd)
     # ★2026-09-05 修复（用户实拍）：背包关闭时 `界面数据[3].物品数据` 有残留，
     # _zhuagui_find_flag_pos 照样返回旧坐标 → 右键点在关着的背包上 → 大地图打不开
     # → "回长安失败"死循环。根治：读坐标前无条件确保背包打开（幂等，已开零开销）。
@@ -3079,6 +3083,220 @@ __out = '0,0'
         return int(round(float(x))), int(round(float(y)))
     except Exception:
         return 0, 0
+
+
+# ★2026-09-08 商城 Lua 直读定案（PID 22616 实测）：
+#   活商店 = tp.主界面.界面数据[45]（本类开关=true 判开着；tp.窗口.商城 是
+#   旧快照，商品恒空，勿用）。商品条目带 名称/编号/小动画.x/y（点击坐标），
+#   购买按钮由数量输入框(srk._包围盒)右推。用户标定对照：
+#   商店按钮(751,463)-(776,487)、购买(506,458)-(525,470)≈srk(363-463,453-467)右推。
+_MALL_BTN_RECT = (751, 463, 776, 487)     # 主界面商店按钮（固定 UI，用户标定）
+_MALL_BUY_FALLBACK = (506, 458, 525, 470)  # 购买按钮兜底（用户标定）
+
+
+def _mall_state(gateway):
+    """商城窗口状态 → (开着, 窗口x, 窗口y)。"""
+    r = _lua_call(gateway, r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+if type(v) ~= 'table' then __out = '0,0,0' return end
+__out = tostring(v.本类开关 == true and 1 or 0) .. ','
+        .. tostring(v.x or 0) .. ',' .. tostring(v.y or 0)
+""") or "0,0,0"
+    try:
+        p = [s.strip() for s in r.split(",")]
+        return (p[0] == "1", int(float(p[1])), int(float(p[2])))
+    except Exception:
+        return (False, 0, 0)
+
+
+def _mall_find_item(gateway, name):
+    """商城商品表按名找条目 → (编号, 图标中心x, 中心y)；无返回 (0,0,0)。"""
+    code = r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+local s = v and v.商品
+if type(s) ~= 'table' then __out = '0,0,0' return end
+for _, it in pairs(s) do
+  if type(it) == 'table' and tostring(it.名称 or ''):find('NAME', 1, true) then
+    local sa = it.小动画
+    if type(sa) == 'table' then
+      local x = tonumber(sa.x) or 0
+      local y = tonumber(sa.y) or 0
+      local w = tonumber(sa.宽度) or 32
+      local h = tonumber(sa.高度) or 26
+      __out = tostring(it.编号 or 0) .. ','
+              .. math.floor(x + w / 2) .. ',' .. math.floor(y + h / 2)
+      return
+    end
+  end
+end
+__out = '0,0,0'
+""".replace("NAME", name)
+    r = _lua_call(gateway, code) or "0,0,0"
+    try:
+        gid, x, y = [int(round(float(v))) for v in r.split(",")]
+        return (gid, x, y)
+    except Exception:
+        return (0, 0, 0)
+
+
+def _mall_buy_rect(gateway):
+    """由数量输入框(srk._包围盒)右推购买按钮矩形（同排右邻，随窗口实时）。"""
+    r = _lua_call(gateway, r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+local s = v and v.srk
+local b = s and s._包围盒
+if type(b) ~= 'table' then __out = '0,0,0' return end
+__out = tostring(b.x2 or 0) .. ',' .. tostring(b.y or 0) .. ',' .. tostring(b.y2 or 0)
+""") or "0,0,0"
+    try:
+        x2, y, y2 = [int(round(float(v))) for v in r.split(",")]
+    except Exception:
+        return None
+    if x2 <= 0:
+        return None
+    return (x2 + 40, y + 3, x2 + 65, y2)
+
+
+def _mall_close(gateway, hwnd, wx=0, wy=0):
+    """关商城：右键窗口标题区（随窗口实时坐标，必须落在弹窗上才关得掉）+ESC 兜底。"""
+    if wx <= 0 or wy <= 0:
+        on, wx, wy = _mall_state(gateway)
+    if wx > 0 and wy > 0:
+        post_right_click(hwnd, wx + random.randint(260, 340),
+                         wy + random.randint(8, 20), gateway=gateway)
+    else:
+        post_right_click(hwnd, random.randint(360, 440),
+                         random.randint(88, 100), gateway=gateway)
+    _sleep(random.uniform(0.7, 1.0))
+    user32.PostMessageW(hwnd, 0x0100, 0x1B, 0)      # WM_KEYDOWN ESC 兜底
+    time.sleep(0.05)
+    user32.PostMessageW(hwnd, 0x0101, 0x1B, 0xC0000000)
+    _sleep(random.uniform(0.4, 0.7))
+
+
+def _mall_buy_item(gateway, hwnd, name, bag_verify=None):
+    """商城按名购买一个物品（全 Lua 定位 + 闭环验证，2026-09-08 定案）。
+
+    流程：确保商店开（没开才点商店按钮，防点关）→ 商品表找名点图标中心
+    → 验 选择==编号 且 单价>0 → srk 右推购买按钮点击 → 关店。
+    bag_verify 给出时：关店后开包按名复核已入手（以背包为准返回）。
+    Returns: bool。任何一步失败只告警返回 False（由调用方决定是否阻断）。
+    """
+    on, wx, wy = _mall_state(gateway)
+    if not on:
+        logger.info("商城：打开商店（买 %s）..." % name)
+        post_click(hwnd, random.randint(_MALL_BTN_RECT[0], _MALL_BTN_RECT[2]),
+                   random.randint(_MALL_BTN_RECT[1], _MALL_BTN_RECT[3]),
+                   gateway=gateway)
+        ok = False
+        for _ in range(6):
+            _sleep(random.uniform(0.5, 0.7))
+            on, wx, wy = _mall_state(gateway)
+            if on:
+                ok = True
+                break
+        if not ok:
+            logger.warning("商城：商店未打开（买 %s）" % name)
+            return False
+    gid, ix, iy = 0, 0, 0
+    for _ in range(3):
+        gid, ix, iy = _mall_find_item(gateway, name)
+        if gid > 0 and ix > 0:
+            break
+        _sleep(random.uniform(0.5, 0.8))
+    if gid <= 0 or ix <= 0:
+        logger.warning("商城：商品表找不到 %s" % name)
+        _mall_close(gateway, hwnd, wx, wy)
+        return False
+    post_click(hwnd, ix + random.randint(-4, 4), iy + random.randint(-3, 3),
+               gateway=gateway)
+    _sleep(random.uniform(0.6, 0.9))
+    r = _lua_call(gateway, r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+__out = tostring(v and v.选择 or 0) .. ',' .. tostring(v and v.单价 or 0)
+""") or "0,0"
+    sel_ok = False
+    try:
+        sel, price = [int(float(v)) for v in r.split(",")]
+        sel_ok = (sel == gid and price > 0)
+    except Exception:
+        pass
+    if not sel_ok:
+        logger.warning("商城：%s 选中未确认(选择/单价=%s)，仍尝试购买" % (name, r))
+    rect = _mall_buy_rect(gateway) or _MALL_BUY_FALLBACK
+    post_click(hwnd, random.randint(rect[0], rect[2]),
+               random.randint(rect[1], rect[3]), gateway=gateway)
+    _sleep(random.uniform(0.8, 1.2))
+    _mall_close(gateway, hwnd, wx, wy)
+    if bag_verify:
+        if not _bag_ensure_open(gateway, hwnd):
+            logger.warning("商城：背包打不开，无法复核 %s" % name)
+            return False
+        for _ in range(6):
+            bx, by = _bag_find_item_pos(gateway, bag_verify)
+            if bx > 0:
+                return True
+            _sleep(random.uniform(0.5, 0.8))
+        logger.warning("商城：购买 %s 后背包复核未找到" % name)
+        return False
+    return True
+
+
+def _bag_find_item_pos(gateway, name):
+    """背包中按名找物品图标坐标 (x,y)；无/包未开返回 (0,0)。精确子串匹配。"""
+    code = r"""
+local j = tp.主界面 and tp.主界面.界面数据
+if type(j) ~= 'table' then __out = '0,0' return end
+local pd = j[3] and j[3].物品数据
+if type(pd) ~= 'table' then __out = '0,0' return end
+for i = 1, 100 do
+  local it = pd[i]
+  if type(it) == 'table' and tostring(it.名称 or ''):find('NAME', 1, true) then
+    local sa = it.小动画
+    if type(sa) == 'table' then
+      local x = tonumber(sa.x); local y = tonumber(sa.y)
+      if x and y and x > 0 and y > 0 then
+        __out = string.format('%d,%d', x, y)
+        return
+      end
+    end
+  end
+end
+__out = '0,0'
+""".replace("NAME", name)
+    r = _lua_call(gateway, code) or "0,0"
+    if "," not in r:
+        return 0, 0
+    try:
+        x, y = r.split(",")
+        return int(round(float(x))), int(round(float(y)))
+    except Exception:
+        return 0, 0
+
+
+def zhuagui_ensure_red_flag(gateway=DEFAULT_GATEWAY, hwnd=None, **kw):
+    """确保背包有红色合成旗（用户规则 2026-09-08：所有任务用完自动补）。
+
+    背包有 → True；没有 → 商城自动购买一个（_mall_buy_item 全 Lua 定位，
+    购后开包复核）。失败只告警返回 False，由调用方决定降级路径。
+    """
+    if hwnd is None:
+        hwnd = get_hwnd()
+    if not hwnd:
+        return False
+    if not _bag_ensure_open(gateway, hwnd):
+        logger.warning("补旗：背包无法打开")
+        return False
+    for _ in range(3):
+        fx, fy = _bag_find_item_pos(gateway, "红色合成旗")
+        if fx > 0:
+            return True
+        _sleep(random.uniform(0.5, 0.8))
+    logger.info("补旗：背包无红色合成旗 → 商城自动购买")
+    ok = _mall_buy_item(gateway, hwnd, "红色合成旗", bag_verify="红色合成旗")
+    if ok:
+        logger.info("补旗：红色合成旗已购入")
+    return ok
 
 
 def zhuagui_find_ghost(gateway=DEFAULT_GATEWAY, **kw):
