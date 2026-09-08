@@ -260,7 +260,12 @@ def _guard_map_pixel(sect):
 
 def _click_dialog_first_row(gateway, hwnd, tries=5, tag=""):
     """点对话红字第一行顶部条带（第一行=参加活动/放马过来，顶部条带绝不
-    误触下面取消行）。返回是否点击成功。"""
+    误触下面取消行）。返回是否点击成功。
+
+    ★2026-09-08 用户规则：移动中不点击——先等角色停稳再点（移动中画面
+    在动，识别框与实际弹窗错位，鼠标滑过去也点不中）。
+    """
+    _wait_move_stop(gateway, max_wait=6.0)
     for _ in range(max(1, tries)):
         rows = _zhongkui_detect_rows(gateway)
         if rows:
@@ -459,6 +464,9 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 break
             guard_grid, cpx, cgrid, scale = calib
             logger.info("闯关：第%d次考验 → 目标 %s" % (trial, sect))
+            # 3a 前置：清残留对话（上一场"未进战中止"可能留下放马过来弹窗，
+            #     弹窗开着会挡背包传送——22:07:36 传送失败实证）
+            _dismiss_dialog(gateway, hwnd)
             # 3a) 背包传送按钮直传该门派
             if not zhuagui_teleport(gateway=gateway, hwnd=hwnd, dest=sect, verbose=verbose):
                 logger.warning("闯关：传送 %s 失败，中止" % sect)
@@ -485,11 +493,26 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 _dismiss_dialog(gateway, hwnd)
                 break
             _mouse_clear(hwnd, gateway)
-            # 3d) 等进战 + 自动战斗 + 等结束
-            t0 = time.time()
-            while time.time() - t0 < 15.0 and not zhuagui_in_battle(gateway):
-                _sleep(random.uniform(0.8, 1.2))
-            if not zhuagui_in_battle(gateway):
+            # 3d) 等进战（★点击未吃则对准弹窗重点，最多3次——22:07 实况：
+            #     鼠标滑到"放马过来"但点击没吃进去）
+            entered = False
+            for attempt in range(3):
+                t0 = time.time()
+                while time.time() - t0 < 15.0 and not zhuagui_in_battle(gateway):
+                    _sleep(random.uniform(0.8, 1.2))
+                if zhuagui_in_battle(gateway):
+                    entered = True
+                    break
+                rows = _zhongkui_detect_rows(gateway)
+                if not rows:
+                    break   # 对话没了也没进战：无从再点
+                logger.info("闯关：放马过来第%d次点击未生效，对准重点" % (attempt + 1))
+                b = rows[0]
+                post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                           random.randint(b["y0"] + 2, min(b["y0"] + 7, b["y1"])),
+                           gateway=gateway)
+                _sleep(random.uniform(1.0, 1.5))
+            if not entered:
                 logger.warning("闯关：点放马过来后未进战（%s），中止" % sect)
                 break
             threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
