@@ -190,47 +190,30 @@ __out = table.concat(out, '#')
 
 def _walk_world(gateway, hwnd, wx, wy, tol_game=_ARRIVE_TOL_GAME,
                 timeout=60.0, verbose=False):
-    """走到世界像素 (wx,wy)：视野内直点，视野外朝目标点视野边缘渐进。
-
-    ★到位判定靠实时读 主角.xy（不傻等）；停滞（连续两窗位移<5px）提前
-    放弃返回 False（用户：坐标略偏无妨，能 CALL 到就行）。
+    """走到世界像素 (wx,wy)：★2026-09-08 晚用户定案——移动指令（大地图
+    点击）发出后只等不点，等 CALL 界面出来即可。移动中反复点击会误触
+    界面按钮（乱点事故根因，越界夹逼点更会压到按钮）。
+    到位判定靠实时读 主角.xy；仅当确认角色已停滞（停稳 5s 未到位）才
+    补点，最多 2 次（停稳状态点击符合"移动中不点"铁律）。
     """
     t0 = time.time()
     last_x = last_y = None
     last_move_ts = time.time()
-    stall = False
-    while time.time() - t0 < timeout:
-        pos = self_world_xy(gateway)
-        if pos:
-            dx, dy = pos[0] - wx, pos[1] - wy
-            dist = (dx * dx + dy * dy) ** 0.5
-            if dist < tol_game * 20:
-                if verbose:
-                    logger.info("闯关走路：到位 (%d,%d) 距目标 %.0fpx" % (pos[0], pos[1], dist))
-                return True
-            # 停滞检测
-            if last_x is not None:
-                mv = abs(pos[0] - last_x) + abs(pos[1] - last_y)
-                if mv >= 5:
-                    last_move_ts = time.time()
-                    stall = False
-                elif time.time() - last_move_ts > _STALL_GAP_S:
-                    stall = True
-            last_x, last_y = pos[0], pos[1]
-        # 投影目标点
+    fix_clicks = 0
+    wr = wt.RECT()
+    user32.GetClientRect(hwnd, ctypes.byref(wr))
+
+    def _project_click():
         r = _lua_call(gateway, r"""local o=tp.屏幕.xy
 __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
         try:
             ox, oy = _coord_int(r.split(",")[0]), _coord_int(r.split(",")[1])
         except Exception:
-            ox = oy = 0
+            return False
         px = _coord_int(str(wx + ox))
         py = _coord_int(str(wy + oy))
         if px is None or py is None:
-            _sleep(random.uniform(0.8, 1.2))
-            continue
-        wr = wt.RECT()
-        user32.GetClientRect(hwnd, ctypes.byref(wr))
+            return False
         if 0 <= px < wr.right and 0 <= py < wr.bottom:
             post_click(hwnd, px + random.randint(-3, 3),
                        py + random.randint(-3, 3), gateway=gateway)
@@ -240,9 +223,36 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
             if verbose:
                 logger.info("闯关走路：目标越界(%d,%d) 朝其点视野(%d,%d)" % (px, py, cx, cy))
             post_click(hwnd, cx, cy, gateway=gateway)
-        _sleep(random.uniform(2.0, 2.8))
-        if stall:
-            break
+        return True
+
+    while time.time() - t0 < timeout:
+        pos = self_world_xy(gateway)
+        if pos:
+            dx, dy = pos[0] - wx, pos[1] - wy
+            dist = (dx * dx + dy * dy) ** 0.5
+            if dist < tol_game * 20:
+                if verbose:
+                    logger.info("闯关走路：到位 (%d,%d) 距目标 %.0fpx" % (pos[0], pos[1], dist))
+                return True
+            if last_x is not None:
+                mv = abs(pos[0] - last_x) + abs(pos[1] - last_y)
+                if mv >= 5:
+                    last_move_ts = time.time()
+            last_x, last_y = pos[0], pos[1]
+        # ★纯等待：移动中绝不补点；仅停滞（停稳 5s 未到位）才补，最多 2 次
+        if time.time() - last_move_ts > _STALL_GAP_S:
+            if fix_clicks >= 2:
+                if verbose:
+                    logger.info("闯关走路：停滞且补点用尽，放弃（坐标略偏无妨）")
+                break
+            if _project_click():
+                fix_clicks += 1
+                if verbose:
+                    logger.info("闯关走路：角色停滞，补点第%d次" % fix_clicks)
+            last_move_ts = time.time()
+            _sleep(random.uniform(2.0, 2.8))
+            continue
+        _sleep(random.uniform(0.8, 1.2))
     if verbose:
         logger.info("闯关走路：超时/停滞退出（坐标略偏无妨）")
     return False
@@ -277,9 +287,9 @@ def _click_dialog_first_row(gateway, hwnd, tries=5, tag=""):
             logger.info("闯关%s：已点对话首行顶部条带 (x%d-%d,y%d-%d)"
                         % (tag, b["x0"], b["x1"], b["y0"], b["y1"]))
             # ★2026-09-08 用户实况定位：点击后鼠标不能马上移走——引擎下一帧
-            # 才处理点击，光标已被 _mouse_clear 移走=命中落空（第一次无效根因）。
-            # 原地停留等引擎吃掉点击。
-            _sleep(random.uniform(0.5, 0.8))
+            # 才处理点击，光标被 _mouse_clear 移走=命中落空（第一次无效根因）。
+            # 0.5-0.8s 仍不够（22:53 用户复现第一次又没生效），加到 1.2-1.5s。
+            _sleep(random.uniform(1.2, 1.5))
             return True
         _sleep(random.uniform(0.4, 0.6))
     return False
@@ -501,9 +511,11 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 break
             _sleep(random.uniform(1.0, 1.5))
             if not _click_dialog_first_row(gateway, hwnd, tag="放马过来"):
-                logger.warning("闯关：护法对话未弹出（%s），中止" % sect)
-                _dismiss_dialog(gateway, hwnd)
-                break
+                # ★2026-09-08 晚改：对话没弹出也不中止——同"未进战"，转下轮
+                # 以任务追踪裁决（追踪=唯一真相，自愈重走）
+                logger.warning("闯关：护法对话未弹出（%s），转下轮以任务追踪裁决" % sect)
+                _sleep(random.uniform(1.5, 2.5))
+                continue
             _mouse_clear(hwnd, gateway)
             # 3d) 等进战（★点击未吃则对准弹窗重点，最多3次——22:07 实况：
             #     鼠标滑到"放马过来"但点击没吃进去）
@@ -525,8 +537,14 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                            gateway=gateway)
                 _sleep(random.uniform(1.0, 1.5))
             if not entered:
-                logger.warning("闯关：点放马过来后未进战（%s），中止" % sect)
-                break
+                # ★2026-09-08 晚改：不中止，转下轮以任务追踪裁决（实况：天宫
+                # 放马过来实际已进战并打完，in_battle 三信号全程漏检误判未进战
+                # →旧逻辑直接 break，卡死在原地不去下个门派）。追踪为唯一真相：
+                #   打成了 → 追踪刷新为下个门派，下轮继续；
+                #   没打成 → 追踪仍是本门派，下轮重新传送+CALL（自愈）。
+                logger.warning("闯关：点放马过来后未进战（%s），转下轮以任务追踪裁决" % sect)
+                _sleep(random.uniform(1.5, 2.5))
+                continue
             threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
                              daemon=True).start()
             t1 = time.time()
