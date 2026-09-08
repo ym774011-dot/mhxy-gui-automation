@@ -3694,14 +3694,11 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
         return "idle"
     if st == "取消":
         return "auto_on"
-    # ★2026-09-08 二次确认（用户实况：退出战斗后鼠标多点一下）——
-    # 判定与点击落地之间有 ~1s 窗口（Lua读状态+鼠标轨迹），战斗恰在窗口内
-    # 结束时，点击会落在已消失的自动按钮位置=点到场景里。点击前重读状态。
-    inb2, st2 = zhuagui_auto_battle_state(gateway)
-    if not inb2:
+    if st != "自动":
+        # ★2026-09-08 实况修复（22:38-22:43 一场战斗自动栏全程不可视，旧逻辑
+        # 把"读不到状态"当"自动没开"，每5s盲点(677,328)长达5分钟）：栏都看不见
+        # 时点击纯属赌博，绝不盲点。需要点的唯一场景=栏可见且状态='自动'。
         return "idle"
-    if st2 == "取消":
-        return "auto_on"
     x0, y0, x1, y1 = _AUTO_BTN_RECT
     post_click(hwnd, random.randint(x0 + 8, x1 - 8),
                random.randint(y0 + 6, y1 - 6), gateway=gateway)
