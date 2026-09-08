@@ -3629,6 +3629,9 @@ def _battle_auto_kick(hwnd, gateway, delay=5.0, tries=6, gap=3.0):
                             % (i + 1))
             elif r == "idle" and _auto_button_visible(hwnd):
                 # Lua 读不到自动栏（战斗 UI 数据缺失）→ 截图模板兜底
+                # ★同款二次确认：战斗恰在此刻结束则放弃（防点到场景）
+                if not zhuagui_in_battle(gateway):
+                    return
                 x0, y0, x1, y1 = _AUTO_BTN_RECT
                 post_click(hwnd, random.randint(x0 + 8, x1 - 8),
                            random.randint(y0 + 6, y1 - 6), gateway=gateway)
@@ -3687,6 +3690,14 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
     if not inb:
         return "idle"
     if st == "取消":
+        return "auto_on"
+    # ★2026-09-08 二次确认（用户实况：退出战斗后鼠标多点一下）——
+    # 判定与点击落地之间有 ~1s 窗口（Lua读状态+鼠标轨迹），战斗恰在窗口内
+    # 结束时，点击会落在已消失的自动按钮位置=点到场景里。点击前重读状态。
+    inb2, st2 = zhuagui_auto_battle_state(gateway)
+    if not inb2:
+        return "idle"
+    if st2 == "取消":
         return "auto_on"
     x0, y0, x1, y1 = _AUTO_BTN_RECT
     post_click(hwnd, random.randint(x0 + 8, x1 - 8),
