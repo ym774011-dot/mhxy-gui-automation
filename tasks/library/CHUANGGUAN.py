@@ -275,6 +275,10 @@ def _click_dialog_first_row(gateway, hwnd, tries=5, tag=""):
                        gateway=gateway)
             logger.info("闯关%s：已点对话首行顶部条带 (x%d-%d,y%d-%d)"
                         % (tag, b["x0"], b["x1"], b["y0"], b["y1"]))
+            # ★2026-09-08 用户实况定位：点击后鼠标不能马上移走——引擎下一帧
+            # 才处理点击，光标已被 _mouse_clear 移走=命中落空（第一次无效根因）。
+            # 原地停留等引擎吃掉点击。
+            _sleep(random.uniform(0.5, 0.8))
             return True
         _sleep(random.uniform(0.4, 0.6))
     return False
