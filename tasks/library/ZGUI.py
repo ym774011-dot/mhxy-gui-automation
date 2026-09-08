@@ -1917,10 +1917,19 @@ __out = tostring(n or '-')
         return None
 
     def _dismiss_bonus_dialog():
-        """收掉 CALL 弹出的对话：右键场景空白（本代码库标准做法）→
-        红字对话块仍在则补发 ESC → 再验。返回 True=对话已消失。"""
-        post_right_click(hwnd, random.randint(300, 420),
-                         random.randint(430, 470), gateway=gateway)
+        """收掉 CALL 弹出的对话。★用户确认（2026-09-08）：右键必须落在
+        弹窗上才能关闭，弹窗外的右键无效——落点取红字选项行右侧的弹窗
+        空白区（选项文字实测最宽到 x~210，弹窗面板宽至 x~640，同一高度
+        的右侧是面板空白，右键不会触发左键选项）；检不到行退回弹窗中心。
+        关不掉再补 ESC。返回 True=对话已消失。"""
+        rows = _zhongkui_detect_rows(gateway)
+        if rows:
+            b = rows[0]
+            dx = min(max(b["x1"] + 40, 300), 560)
+            dy = (b["y0"] + b["y1"]) // 2
+        else:
+            dx, dy = 370, 330
+        post_right_click(hwnd, dx, dy, gateway=gateway)
         _sleep(random.uniform(0.8, 1.0))
         if not _zhongkui_detect_rows(gateway):
             return True
