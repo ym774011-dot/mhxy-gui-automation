@@ -78,16 +78,83 @@ _ARRIVE_TOL_GAME = 16.0  # 到位判定：距护法 <16 游戏单位即 CALL（�
 _STALL_GAP_S = 5.0       # 走路停滞判定：位置变化 <5px 视为停滞
 
 # ★2026-09-08 摄妖香（每次接闯关后买一次并用一次，防跨图走路遇敌）。
-#   三件套坐标全部用户实测标定：商店按钮 → 商店内摄妖香 → 购买按钮。
-_SHOP_BTN_RECT = (751, 463, 776, 487)    # 商店按钮
-_SXY_ITEM_RECT = (398, 225, 430, 251)    # 商店内 摄妖香
-_SXY_BUY_RECT = (506, 458, 525, 470)     # 商店 购买按钮
+#   2026-09-08 晚升级：商店窗口全 Lua 直读（PID 22616 实测定案）——
+#   活商店 = tp.主界面.界面数据[45]（本类开关=true 判开着；tp.窗口.商城 是
+#   旧快照，商品恒空，勿用）。商品条目带 小动画.x/y（点击坐标），
+#   购买按钮由数量输入框(srk._包围盒)右推，不再依赖写死坐标。
+_SHOP_BTN_RECT = (751, 463, 776, 487)    # 主界面商店按钮（固定 UI，用户标定）
+_SHOP_IDX = 45                            # 界面数据中商店窗口下标
+_SXY_BUY_FALLBACK = (506, 458, 525, 470)  # 购买按钮兜底（用户标定）
 
 
 def _click_rect(hwnd, gateway, rect):
     x0, y0, x1, y1 = rect
     post_click(hwnd, random.randint(x0, x1), random.randint(y0, y1),
                gateway=gateway)
+
+
+def _shop_state(gateway):
+    """商店窗口状态 → (开着, 窗口x, 窗口y)。"""
+    r = _lua_call(gateway, r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+if type(v) ~= 'table' then __out = '0,0,0' return end
+__out = tostring(v.本类开关 == true and 1 or 0) .. ','
+        .. tostring(v.x or 0) .. ',' .. tostring(v.y or 0)
+""") or "0,0,0"
+    try:
+        p = [s.strip() for s in r.split(",")]
+        return (p[0] == "1", int(float(p[1])), int(float(p[2])))
+    except Exception:
+        return (False, 0, 0)
+
+
+def _shop_find_item(gateway, name):
+    """商店商品表按名找条目 → (编号, 图标中心x, 中心y)；无返回 (0,0,0)。"""
+    code = r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+local s = v and v.商品
+if type(s) ~= 'table' then __out = '0,0,0' return end
+for _, it in pairs(s) do
+  if type(it) == 'table' and tostring(it.名称 or ''):find('NAME', 1, true) then
+    local sa = it.小动画
+    if type(sa) == 'table' then
+      local x = tonumber(sa.x) or 0
+      local y = tonumber(sa.y) or 0
+      local w = tonumber(sa.宽度) or 32
+      local h = tonumber(sa.高度) or 26
+      __out = tostring(it.编号 or 0) .. ','
+              .. math.floor(x + w / 2) .. ',' .. math.floor(y + h / 2)
+      return
+    end
+  end
+end
+__out = '0,0,0'
+""".replace("NAME", name)
+    r = _lua_call(gateway, code) or "0,0,0"
+    try:
+        gid, x, y = [int(round(float(v))) for v in r.split(",")]
+        return (gid, x, y)
+    except Exception:
+        return (0, 0, 0)
+
+
+def _shop_buy_rect(gateway):
+    """由数量输入框(srk._包围盒)右推购买按钮矩形（同排右邻，随窗口实时）。"""
+    r = _lua_call(gateway, r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+local s = v and v.srk
+local b = s and s._包围盒
+if type(b) ~= 'table' then __out = '0,0,0' return end
+__out = tostring(b.x2 or 0) .. ',' .. tostring(b.y or 0) .. ',' .. tostring(b.y2 or 0)
+""") or "0,0,0"
+    try:
+        x2, y, y2 = [int(round(float(v))) for v in r.split(",")]
+    except Exception:
+        return None
+    if x2 <= 0:
+        return None
+    # 用户标定购买(506,458)-(525,470) 与 srk 包围盒(363-463,453-467) 同构：右移40~65、同排
+    return (x2 + 40, y + 3, x2 + 65, y2)
 
 
 def _sheaoxiang_pos(gateway):
@@ -123,23 +190,67 @@ __out = '0,0'
 
 
 def _buy_and_use_sheaoxiang(gateway, hwnd, verbose=True):
-    """买并使用摄妖香：商店按钮 → 点摄妖香 → 购买 → 右键关商店（须落在
-    弹窗上，点标题区避开物品/按钮行）→ 开包找摄妖香右键使用（同天眼通道）。
-    任何一步失败只告警不阻断（香是防遇敌辅助，不影响闯关主链路）。"""
+    """买并使用摄妖香（全 Lua 定位 + 闭环验证）：
+    1) 商店没开才点主界面商店按钮（已开不点，防点关）；2) Lua 读商品表找
+    摄妖香小动画中心点击；3) 验 选择==编号 且 单价>0；4) srk 右推购买按钮
+    点击；5) 右键窗口标题区关店（随窗口实时坐标，必须落在弹窗上）+ESC 兜底；
+    6) 开包找摄妖香右键使用（找不到=购买未生效）。任何一步失败只告警不阻断
+    （香是防遇敌辅助，不影响闯关主链路）。"""
     try:
-        logger.info("闯关：购买摄妖香...")
-        _click_rect(hwnd, gateway, _SHOP_BTN_RECT)
-        _sleep(random.uniform(1.0, 1.4))
-        _click_rect(hwnd, gateway, _SXY_ITEM_RECT)
-        _sleep(random.uniform(0.5, 0.8))
-        _click_rect(hwnd, gateway, _SXY_BUY_RECT)
+        on, wx, wy = _shop_state(gateway)
+        if not on:
+            logger.info("闯关：打开商店...")
+            _click_rect(hwnd, gateway, _SHOP_BTN_RECT)
+            ok = False
+            for _ in range(6):
+                _sleep(random.uniform(0.5, 0.7))
+                on, wx, wy = _shop_state(gateway)
+                if on:
+                    ok = True
+                    break
+            if not ok:
+                logger.warning("闯关：商店未打开，摄妖香跳过")
+                return False
+        # 选商品（Lua 动态坐标）
+        gid, ix, iy = 0, 0, 0
+        for _ in range(3):
+            gid, ix, iy = _shop_find_item(gateway, "摄妖香")
+            if gid > 0 and ix > 0:
+                break
+            _sleep(random.uniform(0.5, 0.8))
+        if gid <= 0 or ix <= 0:
+            logger.warning("闯关：商店商品表读不到摄妖香，跳过")
+            return False
+        post_click(hwnd, ix + random.randint(-4, 4), iy + random.randint(-3, 3),
+                   gateway=gateway)
+        _sleep(random.uniform(0.6, 0.9))
+        # 验选中：选择==编号 且 单价>0
+        r = _lua_call(gateway, r"""
+local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
+__out = tostring(v and v.选择 or 0) .. ',' .. tostring(v and v.单价 or 0)
+""") or "0,0"
+        sel_ok = False
+        try:
+            sel, price = [int(float(v)) for v in r.split(",")]
+            sel_ok = (sel == gid and price > 0)
+        except Exception:
+            pass
+        if not sel_ok:
+            logger.warning("闯关：摄妖香选中未确认(选择/单价=%s)，仍尝试购买" % r)
+        # 购买（srk 右推，随窗口实时；读不到用用户标定兜底）
+        rect = _shop_buy_rect(gateway) or _SXY_BUY_FALLBACK
+        _click_rect(hwnd, gateway, rect)
         _sleep(random.uniform(0.8, 1.2))
-        # 关商店：右键点商店窗口标题区（y~205，避开摄妖香行/购买按钮）
-        post_right_click(hwnd, random.randint(430, 470),
-                         random.randint(198, 212), gateway=gateway)
-        _sleep(random.uniform(0.8, 1.0))
+        # 关店：右键窗口标题区（随窗口实时坐标，必须落在弹窗上才关得掉）
+        if wx > 0 and wy > 0:
+            post_right_click(hwnd, wx + random.randint(260, 340),
+                             wy + random.randint(8, 20), gateway=gateway)
+        else:
+            post_right_click(hwnd, random.randint(360, 440),
+                             random.randint(88, 100), gateway=gateway)
+        _sleep(random.uniform(0.7, 1.0))
         _key_press(hwnd, 0x1B)   # ESC 兜底
-        _sleep(random.uniform(0.5, 0.8))
+        _sleep(random.uniform(0.4, 0.7))
         # 开包找摄妖香并使用（右键，同天眼符通道）
         if not _bag_ensure_open(gateway, hwnd):
             logger.warning("闯关：背包打不开，摄妖香使用跳过")
