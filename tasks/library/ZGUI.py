@@ -2053,7 +2053,20 @@ __out = tostring(n or '-')
         _rect_retried = False
         while time.time() - t0 < battle_wait:
             if zhuagui_in_battle(gateway):
-                break
+                # ★2026-09-09 防闪烁误判：进战需连续 2s 确认——单次 true 是
+                #   回合进程残留闪烁（06:47:24 "战斗结束耗时1s" 实证：根本没
+                #   进战斗却被记为打完，顺手打白打还抢跑后续流程）
+                _t2 = time.time()
+                _stable = True
+                while time.time() - _t2 < 2.0:
+                    if not zhuagui_in_battle(gateway):
+                        _stable = False
+                        break
+                    _sleep(0.3)
+                if _stable:
+                    break
+                _sleep(random.uniform(0.5, 0.8))
+                continue
             # ★2026-09-08 深夜：标定矩形点击未吃进去时，用红字最顶行补一枪
             #   （两种策略互补，防单一点法落空整只怪白跳过）
             if clicked and not _rect_retried and time.time() - t0 > 5.0 and hwnd:
