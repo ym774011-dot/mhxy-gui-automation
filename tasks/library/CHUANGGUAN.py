@@ -290,7 +290,13 @@ def _dismiss_dialog(gateway, hwnd):
 
 def _call_guard_npc(gateway, hwnd, sect, guard_grid, verbose=False):
     """CALL 门派护法：优先地图单位按门派名/护法称谓找标识发 CALL 包；
-    找不到（标识读不到）退回投影点击护法身体（点 NPC=同款对话请求）。"""
+    找不到（标识读不到）退回投影点击护法身体（点 NPC=同款对话请求）。
+
+    ★2026-09-08 实况修复（女儿村第12考验 日志 21:44:04"护法无标识"）：
+      护法在地图单位表确实带标识（实测 [2]女儿村护法/★门派护法★/标识=2），
+      但角色刚到位时活动护法条目尚未刷进单位表（服务器延迟）→ 单次读取
+      为空就误退点击兜底。改为轮询读标识最多 ~4s，读到了照旧发 CALL 包。
+    """
     _sleep(random.uniform(0.15, 0.4))   # ★柔和化，与抓鬼 CALL 同款
     code = r"""
 local t = tp.地图.地图单位
@@ -309,7 +315,12 @@ for _, v in pairs(t) do
 end
 __out = ''
 """.replace("KEYPAT", sect)
-    r = _lua_call(gateway, code) or ""
+    r = ""
+    for _ in range(7):                  # ★轮询：单位表刷出有延迟，最多 ~4s
+        r = _lua_call(gateway, code) or ""
+        if "|" in r:
+            break
+        _sleep(random.uniform(0.5, 0.7))
     if "|" in r:
         gid, nm = r.split("|", 1)
         if gid.strip().isdigit():
