@@ -3228,8 +3228,8 @@ def _option_visible(hwnd, opt_x0=116, opt_y0=307, opt_x1=180, opt_y1=320, min_re
 
 # ============================================================
 # ★2026-09-07 战斗自动开关：进战斗 5s 后判定战斗指令菜单的「自动」按钮
-#   是否还在（还在=自动战斗未开启），在则点击开启（用户 2026-09-07 标定：
-#   按钮客户区 (677,328)-(739,358)，模板=战斗_自动按钮.png）。
+#   是否开启，未开启则点击（按钮客户区 (677,328)-(739,358)，模板=战斗_自动按钮.png）。
+#   ★2026-09-08：主判定改 Lua 状态（后台安全，重登后不再失灵），截图模板降为兜底。
 # ============================================================
 _AUTO_BTN_RECT = (677, 328, 739, 358)
 _AUTO_BTN_TMPL = os.path.join(
@@ -3283,20 +3283,41 @@ def _auto_button_visible(hwnd, thresh=_AUTO_BTN_THRESH):
         return False
 
 
-def _battle_auto_kick(hwnd, gateway, delay=5.0):
-    """进战斗 delay 秒后：仍在战斗且「自动」按钮还在 → 点击开启自动战斗。"""
+def _battle_auto_kick(hwnd, gateway, delay=5.0, tries=6, gap=3.0):
+    """进战 delay 秒后确保自动战斗已开启（★2026-09-08 改 Lua 状态判定+重试）。
+
+    旧版只用截屏模板 _auto_button_visible（mss 屏幕像素），窗口被遮挡/后台
+    时截到遮挡者像素 → 模板恒不命中 → 重登后从不点「自动」（与 2026-09-08
+    上午钟馗红字检测失效同族根因：截图通道不后台安全）。
+    改用 zhuagui_ensure_auto_battle 的 Lua 状态通道（tp.战斗类.窗口.自动栏，
+    后台安全，与队员看护线程同路）；带重试：每轮重读状态，已开启('取消')
+    即停，杜绝点两次=关掉自动；Lua 读不到自动栏才退回截图模板（仅前台可靠，
+    后台命中失败=不点，安全降级）。
+    """
     try:
         time.sleep(float(delay))
-        if not zhuagui_in_battle(gateway):
-            return
-        if _auto_button_visible(hwnd):
-            x0, y0, x1, y1 = _AUTO_BTN_RECT
-            post_click(hwnd, random.randint(x0 + 8, x1 - 8),
-                       random.randint(y0 + 6, y1 - 6), gateway=gateway)
-            logger.info("「自动」按钮仍在 → 已点击开启自动战斗 (%d,%d)-(%d,%d)"
-                        % (x0, y0, x1, y1))
-    except Exception as e:
-        logger.info("自动战斗判定异常（忽略）: %s" % e)
+    except Exception:
+        return
+    for i in range(max(1, int(tries))):
+        try:
+            if not zhuagui_in_battle(gateway):
+                return
+            r = zhuagui_ensure_auto_battle(hwnd=hwnd, gateway=gateway)
+            if r == "auto_on":
+                return
+            if r == "clicked":
+                logger.info("「自动」Lua 状态=未开启 → 已点击开启（第 %d 次尝试）"
+                            % (i + 1))
+            elif r == "idle" and _auto_button_visible(hwnd):
+                # Lua 读不到自动栏（战斗 UI 数据缺失）→ 截图模板兜底
+                x0, y0, x1, y1 = _AUTO_BTN_RECT
+                post_click(hwnd, random.randint(x0 + 8, x1 - 8),
+                           random.randint(y0 + 6, y1 - 6), gateway=gateway)
+                logger.info("「自动」按钮截图兜底命中 → 已点击 (%d,%d)-(%d,%d)"
+                            % (x0, y0, x1, y1))
+        except Exception as e:
+            logger.info("自动战斗判定异常（忽略）: %s" % e)
+        time.sleep(float(gap))
 
 
 _AUTO_STATE_LUA = r"""
