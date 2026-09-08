@@ -365,12 +365,17 @@ def approve_open_panel(leader_pid):
 
 
 def approve_round(leader_pid):
-    """单轮批准：请求列表 → 点首卡(162,166) → 允许。需先 approve_open_panel。"""
+    """单轮批准：请求列表 → 点首卡(162,166) → 允许。需先 approve_open_panel。
+
+    ★2026-09-08 提速：段间等待压缩（0.9-1.2→0.6-0.9 / 0.5-0.8→0.4-0.6 /
+    1.5-2.2→1.0-1.5）。允许点击若偶尔抢在列表渲染前落空，下一轮会重新
+    点同一张申请卡，自愈不丢人。
+    """
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
     ZGUI.post_click(lhwnd, random.randint(460, 509),
                     random.randint(140, 152), gateway=lw)
-    time.sleep(random.uniform(0.9, 1.2))
+    time.sleep(random.uniform(0.6, 0.9))
     st = ZGUI.team_stats_topbar(lw)      # ★顶栏实时成员数（面板数据仅作兜底）
     if st is None:
         st = ZGUI._team_stats(_gw(leader_pid))
@@ -378,38 +383,50 @@ def approve_round(leader_pid):
     if mem >= 1:
         ZGUI.post_click(lhwnd, 162 + random.randint(-2, 2),
                         166 + random.randint(-2, 2), gateway=lw)
-        time.sleep(random.uniform(0.5, 0.8))
+        time.sleep(random.uniform(0.4, 0.6))
         ZGUI.post_click(lhwnd, random.randint(514, 541),
                         random.randint(370, 378), gateway=lw)
-        time.sleep(random.uniform(1.5, 2.2))
+        time.sleep(random.uniform(1.0, 1.5))
     return mem
 
 
-def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=6.0):
+def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=2.0):
     """队长循环批准申请直到满员/超时。返回最终成员数。
 
     流程与 22:20 实测一致：点图标开面板一次 → 循环 请求列表→首卡(162,166)→
     允许（允许后申请列表自动关，重开请求列表即可）。面板全程保持打开。
+    ★2026-09-08 提速（用户实测 11s/人太慢）：批准点击后 0.5s 步进盯顶栏
+    成员数，一上涨立刻批下一个（申请排队时背靠背，人均 ~3-4s）；只有
+    成员数没涨（申请队列空）才歇 poll_s 再轮询。poll_s 缺省 6.0→2.0。
     """
     approve_open_panel(leader_pid)
     t0 = time.time()
     last_mem = -1
-    while time.time() - t0 < timeout_s:
+
+    def _topbar_mem():
         st = ZGUI.team_stats_topbar(_gw(leader_pid))
         if st is None:
             st = ZGUI._team_stats(_gw(leader_pid))
-        mem = st[0] if st else -1
+        return st[0] if st else -1
+
+    while time.time() - t0 < timeout_s:
+        mem = _topbar_mem()
         if mem != last_mem:
             _log("当前成员数: %s（目标 %d）" % (mem, expect_members))
             last_mem = mem
         if mem >= expect_members:
             return mem
         approve_round(leader_pid)
-        time.sleep(poll_s)
-    st = ZGUI.team_stats_topbar(_gw(leader_pid))
-    if st is None:
-        st = ZGUI._team_stats(_gw(leader_pid))
-    return st[0] if st else -1
+        rise = False
+        for _ in range(6):          # 最多盯 3s：批准生效通常 1-2s
+            time.sleep(0.5)
+            cur = _topbar_mem()
+            if cur > mem:
+                rise = True
+                break
+        if not rise:
+            time.sleep(poll_s)      # 队列空，正常轮询节奏
+    return _topbar_mem()
 
 
 def do_formation(leader_pid, name="天覆阵"):
