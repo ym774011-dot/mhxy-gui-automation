@@ -39,6 +39,7 @@ from tasks.library.ZGUI import (
     zhuagui_go_back_changan, zhuagui_teleport, zhuagui_in_battle,
     self_world_xy, get_hwnd, _zhongkui_detect_rows, _battle_auto_kick,
     _mouse_clear, user32, _bag_ensure_open, _bag_cell_click_pos,
+    _bag_ensure_close,
 )
 import ctypes
 import ctypes.wintypes as wt
@@ -410,23 +411,19 @@ def run(gateway=ZGUI.DEFAULT_GATEWAY, hwnd=None, verbose=True, **kw):
             if not zhuagui_go_back_changan(gateway=gateway):
                 logger.warning("闯关：旗子回长安失败，中止")
                 return False
-        # ---- 2) 点使者 → 参加活动（仅新报名时）----
-        #   ★2026-09-08 晚用户新标定：旗到长安后使者就在屏幕 (469,66)，
-        #   直接左键点它开对话。旧"走路(231,104)+npc表投影点击"链路不可靠
-        #   （使者是静态功能NPC：npc 表无标识 CALL 不了——20924 实测地图
-        #   单位 n=0，投影点击常落空）。
-            _wait_move_stop(gateway, max_wait=6.0)
+        # ---- 2) 关背包 → 点(469,66)走到使者跟前 → 识别使者并点击接任务
+        #          （仅新报名时）----
+        #   ★2026-09-08 晚用户标定（截图实拍）：旗到长安后左键点 (469,66)
+        #   即走到使者跟前；背包先关（旗子通道用完是开着的，开着会挡点击/
+        #   误触背包按钮——传送门点成传送按钮同族事故）。到位后识别 npc 表
+        #   使者投影点击开对话（使者无标识 CALL 不了，只能点击通道）。
+            _bag_ensure_close(gateway, hwnd)
+            _wait_move_stop(gateway, max_wait=8.0)   # 旗子落地停稳
             post_click(hwnd, 469 + random.randint(-3, 3),
                        66 + random.randint(-3, 3), gateway=gateway)
-            _sleep(random.uniform(0.5, 0.8))
-            if not _click_dialog_first_row(gateway, hwnd, tries=6, tag="参加活动"):
-                # 兜底：老路——走到集合点 + npc 表投影点击使者身体
-                logger.info("闯关：(469,66) 未点开使者对话，回退走路+投影点击")
-                gx, gy = _ACT_LIST_GAME
-                if not _walk_world(gateway, hwnd, gx * 20, gy * 20, tol_game=20.0,
-                                   timeout=45.0, verbose=verbose):
-                    logger.info("闯关：未精确到集合点（坐标略偏无妨），继续点使者")
-                code = r"""
+            _wait_move_stop(gateway, max_wait=20.0)  # 走到使者跟前
+            _sleep(random.uniform(0.5, 0.9))
+            code = r"""
 local nl = tp.地图 and tp.地图.npc
 if type(nl) ~= 'table' then __out = '' return end
 for _, v in pairs(nl) do
@@ -437,26 +434,26 @@ for _, v in pairs(nl) do
 end
 __out = ''
 """.replace("TITLE", _ACT_ENVOY_TITLE)
-                r = _lua_call(gateway, code) or ""
-                if "," not in r:
-                    logger.warning("闯关：长安城找不到门派闯关活动使者，中止")
-                    return False
-                ex, ey = [int(float(v)) for v in r.split(",")]
-                r = _lua_call(gateway, r"""local o=tp.屏幕.xy
+            r = _lua_call(gateway, code) or ""
+            if "," not in r:
+                logger.warning("闯关：长安城找不到门派闯关活动使者，中止")
+                return False
+            ex, ey = [int(float(v)) for v in r.split(",")]
+            r = _lua_call(gateway, r"""local o=tp.屏幕.xy
 __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
-                ox, oy = [int(float(v)) for v in r.split(",")]
-                px, py = ex + ox, ey + oy
-                wr = wt.RECT()
-                user32.GetClientRect(hwnd, ctypes.byref(wr))
-                if not (0 <= px < wr.right and 0 <= py < wr.bottom):
-                    logger.warning("闯关：使者不在视野(%d,%d)，中止" % (px, py))
-                    return False
-                post_click(hwnd, px + random.randint(-3, 3), py + random.randint(-6, 0),
-                           gateway=gateway)
-                _sleep(random.uniform(1.2, 1.6))
-                if not _click_dialog_first_row(gateway, hwnd, tag="参加活动"):
-                    logger.warning("闯关：使者对话未弹出（红字行无结果），中止")
-                    return False
+            ox, oy = [int(float(v)) for v in r.split(",")]
+            px, py = ex + ox, ey + oy
+            wr = wt.RECT()
+            user32.GetClientRect(hwnd, ctypes.byref(wr))
+            if not (0 <= px < wr.right and 0 <= py < wr.bottom):
+                logger.warning("闯关：使者不在视野(%d,%d)，中止" % (px, py))
+                return False
+            post_click(hwnd, px + random.randint(-3, 3), py + random.randint(-6, 0),
+                       gateway=gateway)
+            _sleep(random.uniform(1.2, 1.6))
+            if not _click_dialog_first_row(gateway, hwnd, tag="参加活动"):
+                logger.warning("闯关：使者对话未弹出（红字行无结果），中止")
+                return False
             _mouse_clear(hwnd, gateway)
             # ---- 2.5) 买并使用摄妖香（每次接闯关后一次，防跨图遇敌）----
             _buy_and_use_sheaoxiang(gateway, hwnd, verbose=verbose)
