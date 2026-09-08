@@ -675,6 +675,18 @@ def main(argv=None):
     zg_ok_count = 0
     cg_next = random.randint(10, 30)
     print("[闯关调度] 已启用：下次触发于 ok 抓鬼 %d 次后" % cg_next)
+
+    def _cg_task_present(_CG, tries=3):
+        """★2026-09-08 深夜修：read_tracker_sect 读失败（worker 忙时 IPC
+        超时返回 None）会被误判"没有闯关任务"→ 落进抓鬼轮接抓鬼（用户实况：
+        闯关没完成又跑去接抓鬼）。连读 tries 次，任一次命中即 True。"""
+        for i in range(max(1, tries)):
+            if _CG.read_tracker_sect(gateway):
+                return True
+            if i < tries - 1:
+                time.sleep(random.uniform(1.0, 1.8))
+        return False
+
     try:
         while True:
             index += 1
@@ -690,7 +702,7 @@ def main(argv=None):
             if cg_enabled and not _STOP.is_set():
                 try:
                     from tasks.library import CHUANGGUAN as _CG
-                    if _CG.read_tracker_sect(gateway):
+                    if _cg_task_present(_CG):
                         print("[闯关调度] 检测到进行中的门派闯关任务 → 先完成再抓鬼")
                         sys.stdout.flush()
                         pw0 = zgui._find_role_window(args.role)
@@ -704,7 +716,7 @@ def main(argv=None):
                         sys.stdout.flush()
                         # ★游戏规则（2026-09-08 用户定案）：闯关没做完不能抓鬼。
                         #   本轮失败的直接 continue 下轮再闯关，绝不落进抓鬼轮。
-                        if _CG.read_tracker_sect(gateway):
+                        if _cg_task_present(_CG):
                             print("[闯关调度] 闯关仍在进行（未完成）→ 本轮跳过抓鬼，下轮继续闯关")
                             sys.stdout.flush()
                             time.sleep(random.uniform(8.0, 15.0))

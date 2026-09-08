@@ -3622,7 +3622,10 @@ def _battle_auto_kick(hwnd, gateway, delay=5.0, tries=6, gap=3.0):
         return
     for i in range(max(1, int(tries))):
         try:
-            if not zhuagui_in_battle(gateway):
+            # ★2026-09-08 深夜修：战斗证据二选一——in_battle 三信号漏检
+            # （参战单位懒加载，天宫 22:50 实证整场漏检）会在这里直接 return
+            # 导致整场战斗一个「自动」都不点。模板命中=按钮已渲染=必在战斗。
+            if not zhuagui_in_battle(gateway) and not _auto_button_visible(hwnd):
                 return
             r = zhuagui_ensure_auto_battle(hwnd=hwnd, gateway=gateway)
             if r == "auto_on":
@@ -3695,9 +3698,20 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
     if st == "取消":
         return "auto_on"
     if st != "自动":
-        # ★2026-09-08 实况修复（22:38-22:43 一场战斗自动栏全程不可视，旧逻辑
-        # 把"读不到状态"当"自动没开"，每5s盲点(677,328)长达5分钟）：栏都看不见
-        # 时点击纯属赌博，绝不盲点。需要点的唯一场景=栏可见且状态='自动'。
+        # ★2026-09-08 深夜平衡修：22:38 盲点事故（栏不可视时把"读不到状态"
+        # 当"没开"瞎点5分钟）后收紧成 st=None 一律 idle，结果队员看护线程
+        # （无截图兜底）遇 st=None 全程不点——队员不点自动回归。
+        # 现规则：st 读不到时必须拿到像素证据（「自动」按钮模板命中=按钮
+        # 真渲染在屏上）才点；模板不命中=不在战斗/栏真不可视，绝不盲点。
+        if _auto_button_visible(hwnd):
+            x0, y0, x1, y1 = _AUTO_BTN_RECT
+            post_click(hwnd, random.randint(x0 + 8, x1 - 8),
+                       random.randint(y0 + 6, y1 - 6), gateway=gateway)
+            (log.info if log else logger.info)(
+                "「自动」状态=%s 栏不可读 → 模板兜底命中已点击 (%d,%d)-(%d,%d)"
+                % (st, x0, y0, x1, y1))
+            _BATTLE_LATCH["ts"] = time.time()
+            return "clicked"
         return "idle"
     x0, y0, x1, y1 = _AUTO_BTN_RECT
     post_click(hwnd, random.randint(x0 + 8, x1 - 8),

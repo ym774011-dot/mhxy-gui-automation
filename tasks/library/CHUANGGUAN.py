@@ -39,7 +39,7 @@ from tasks.library.ZGUI import (
     zhuagui_go_back_changan, zhuagui_teleport, zhuagui_in_battle,
     self_world_xy, get_hwnd, _zhongkui_detect_rows, _battle_auto_kick,
     _mouse_clear, user32, _bag_ensure_open, _bag_cell_click_pos,
-    _bag_ensure_close,
+    _bag_ensure_close, _auto_button_visible,
 )
 import ctypes
 import ctypes.wintypes as wt
@@ -72,6 +72,11 @@ SECT_CALIB = {
 # 长安城活动集合点（用户标定 ~231,104）与 使者在 npc 表的称谓
 _ACT_LIST_GAME = (231, 104)
 _ACT_ENVOY_TITLE = "门派闯关活动使者"
+
+# ★放马过来按钮固定矩形（用户 2026-09-08 深夜标定：123,307,160,317）
+#   红字行检测常与上行合并成 x30-168 大行，条带随机点会落在按钮文字外
+#   =点击落空（天宫 4 连点无效根因之一）。识别行 y 与标定相符时优先点此矩形。
+_FANGMA_RECT = (123, 307, 160, 317)
 
 _MAX_TRIALS = 16         # ★游戏规则：一次报名=15 次考验，全部完成前不能抓鬼
                          # （用户 2026-09-08 定案；16=15+1 防边界）
@@ -144,6 +149,49 @@ def _buy_and_use_sheaoxiang(gateway, hwnd, verbose=True):
         _mouse_clear(hwnd, gateway)
         logger.info("闯关：摄妖香已使用（背包 %d,%d）" % (cx, cy))
         return True
+    except Exception as e:
+        logger.warning("闯关：摄妖香流程异常（不阻断）: %s" % e)
+        return False
+
+
+_INCENSE_GUARD_S = 1500  # 摄妖香防重复护栏：25 分钟内已用则跳过（无法读 buff 态，
+                         # 以时间闸代替；反复中止重入 run() 也不会连环消费）
+_INCENSE_TS = 0.0        # 上次成功使用摄妖香的 time.time()
+
+
+def _ensure_sheaoxiang(gateway, hwnd, verbose=True):
+    """确保摄妖香已使用（★2026-09-08 晚改：报名与续跑通用——续跑考验
+    原来完全跳过摄妖香，跨图走路遇敌，用户指正）。
+    包里有 → 直接用；没有 → 商城买一个再用（_buy_and_use_sheaoxiang）。
+    25 分钟内已用过则跳过（防 run() 反复重入连环消费）。"""
+    global _INCENSE_TS
+    if time.time() - _INCENSE_TS < _INCENSE_GUARD_S:
+        logger.info("闯关：摄妖香 %d 分钟内已使用，跳过"
+                    % int((time.time() - _INCENSE_TS) / 60))
+        return True
+    try:
+        # 包里有就直接用（省一笔）
+        if _bag_ensure_open(gateway, hwnd):
+            x, y = 0, 0
+            for _ in range(4):
+                x, y = _sheaoxiang_pos(gateway)
+                if x > 0 and y > 0:
+                    break
+                _sleep(random.uniform(0.5, 0.8))
+            if x > 0 and y > 0:
+                cx, cy = _bag_cell_click_pos(x, y)
+                post_right_click(hwnd, cx, cy, gateway=gateway)
+                _sleep(random.uniform(0.6, 1.0))
+                _mouse_clear(hwnd, gateway)
+                _INCENSE_TS = time.time()
+                logger.info("闯关：摄妖香已使用（背包现有 %d,%d）" % (cx, cy))
+                return True
+        # 没有 → 买一个再用
+        if _buy_and_use_sheaoxiang(gateway, hwnd, verbose=verbose):
+            _INCENSE_TS = time.time()
+            return True
+        logger.warning("闯关：摄妖香未确保成功（不阻断主链路）")
+        return False
     except Exception as e:
         logger.warning("闯关：摄妖香流程异常（不阻断）: %s" % e)
         return False
@@ -269,23 +317,33 @@ def _guard_map_pixel(sect):
     return (int(round(px)), int(round(py)))
 
 
-def _click_dialog_first_row(gateway, hwnd, tries=5, tag=""):
+def _click_dialog_first_row(gateway, hwnd, tries=5, tag="", fixed_rect=None):
     """点对话红字第一行顶部条带（第一行=参加活动/放马过来，顶部条带绝不
     误触下面取消行）。返回是否点击成功。
 
     ★2026-09-08 用户规则：移动中不点击——先等角色停稳再点（移动中画面
     在动，识别框与实际弹窗错位，鼠标滑过去也点不中）。
+    ★2026-09-08 深夜：放马过来实测红字行会与上行合并（识别出 x30-168
+    的大行），条带内随机点常落在按钮文字外=点击落空。用户标定固定矩形
+    (123,307)-(160,317)——识别行与标定 y 相符时优先点固定矩形。
     """
     _wait_move_stop(gateway, max_wait=6.0)
     for _ in range(max(1, tries)):
         rows = _zhongkui_detect_rows(gateway)
         if rows:
             b = rows[0]
-            post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
-                       random.randint(b["y0"] + 2, min(b["y0"] + 7, b["y1"])),
-                       gateway=gateway)
-            logger.info("闯关%s：已点对话首行顶部条带 (x%d-%d,y%d-%d)"
-                        % (tag, b["x0"], b["x1"], b["y0"], b["y1"]))
+            if fixed_rect and abs(b["y0"] - fixed_rect[1]) < 15:
+                fx0, fy0, fx1, fy1 = fixed_rect
+                post_click(hwnd, random.randint(fx0 + 2, fx1 - 2),
+                           random.randint(fy0 + 2, fy1 - 2), gateway=gateway)
+                logger.info("闯关%s：已点标定矩形 (%d,%d)-(%d,%d)（识别行 y%d-%d 相符）"
+                            % (tag, fx0, fy0, fx1, fy1, b["y0"], b["y1"]))
+            else:
+                post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
+                           random.randint(b["y0"] + 2, min(b["y0"] + 7, b["y1"])),
+                           gateway=gateway)
+                logger.info("闯关%s：已点对话首行顶部条带 (x%d-%d,y%d-%d)"
+                            % (tag, b["x0"], b["x1"], b["y0"], b["y1"]))
             # ★2026-09-08 用户实况定位：点击后鼠标不能马上移走——引擎下一帧
             # 才处理点击，光标被 _mouse_clear 移走=命中落空（第一次无效根因）。
             # 0.5-0.8s 仍不够（22:53 用户复现第一次又没生效），加到 1.2-1.5s。
@@ -465,8 +523,10 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 logger.warning("闯关：使者对话未弹出（红字行无结果），中止")
                 return False
             _mouse_clear(hwnd, gateway)
-            # ---- 2.5) 买并使用摄妖香（每次接闯关后一次，防跨图遇敌）----
-            _buy_and_use_sheaoxiang(gateway, hwnd, verbose=verbose)
+        # ---- 2.5) 摄妖香：报名与续跑通用（★2026-09-08 深夜用户指正：续跑
+        #          原来完全跳过摄妖香，跨图走路遇敌）。包有→直接用；没有→买。
+        #          25 分钟内已用则跳过，防 run() 反复重入连环消费。----
+        _ensure_sheaoxiang(gateway, hwnd, verbose=verbose)
         # ---- 3) 考验循环（以任务追踪为准，上限 _MAX_TRIALS）----
         for trial in range(1, _MAX_TRIALS + 1):
             # 等任务追踪刷新（参加活动/上一场战斗结算有延迟）
@@ -510,32 +570,38 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 logger.warning("闯关：CALL 护法失败（%s），中止" % sect)
                 break
             _sleep(random.uniform(1.0, 1.5))
-            if not _click_dialog_first_row(gateway, hwnd, tag="放马过来"):
+            if not _click_dialog_first_row(gateway, hwnd, tag="放马过来",
+                                           fixed_rect=_FANGMA_RECT):
                 # ★2026-09-08 晚改：对话没弹出也不中止——同"未进战"，转下轮
                 # 以任务追踪裁决（追踪=唯一真相，自愈重走）
                 logger.warning("闯关：护法对话未弹出（%s），转下轮以任务追踪裁决" % sect)
                 _sleep(random.uniform(1.5, 2.5))
                 continue
             _mouse_clear(hwnd, gateway)
-            # 3d) 等进战（★点击未吃则对准弹窗重点，最多3次——22:07 实况：
-            #     鼠标滑到"放马过来"但点击没吃进去）
+            # ★自动战斗看护提前到点击后立即拉起（原先等 entered 才启动，
+            #   in_battle 漏检时整场战斗无人点「自动」——2026-09-08 深夜实况）
+            threading.Thread(target=_battle_auto_kick,
+                             args=(hwnd, gateway, 8.0, 8), daemon=True).start()
+            # 3d) 等进战（★点击未吃则按标定矩形重点，最多3次）。
+            #     ★进战证据二选一：in_battle 三信号（会漏检，天宫实证）
+            #     OR「自动」按钮模板命中（按钮已渲染=必在战斗）。
             entered = False
             for attempt in range(3):
                 t0 = time.time()
-                while time.time() - t0 < 15.0 and not zhuagui_in_battle(gateway):
+                while time.time() - t0 < 15.0 and not (
+                        zhuagui_in_battle(gateway) or _auto_button_visible(hwnd)):
                     _sleep(random.uniform(0.8, 1.2))
-                if zhuagui_in_battle(gateway):
+                if zhuagui_in_battle(gateway) or _auto_button_visible(hwnd):
                     entered = True
                     break
                 rows = _zhongkui_detect_rows(gateway)
                 if not rows:
                     break   # 对话没了也没进战：无从再点
-                logger.info("闯关：放马过来第%d次点击未生效，对准重点" % (attempt + 1))
-                b = rows[0]
-                post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
-                           random.randint(b["y0"] + 2, min(b["y0"] + 7, b["y1"])),
+                logger.info("闯关：放马过来第%d次点击未生效，按标定矩形重点" % (attempt + 1))
+                post_click(hwnd, random.randint(_FANGMA_RECT[0] + 2, _FANGMA_RECT[2] - 2),
+                           random.randint(_FANGMA_RECT[1] + 2, _FANGMA_RECT[3] - 2),
                            gateway=gateway)
-                _sleep(random.uniform(1.0, 1.5))
+                _sleep(random.uniform(1.2, 1.5))
             if not entered:
                 # ★2026-09-08 晚改：不中止，转下轮以任务追踪裁决（实况：天宫
                 # 放马过来实际已进战并打完，in_battle 三信号全程漏检误判未进战
@@ -545,8 +611,6 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 logger.warning("闯关：点放马过来后未进战（%s），转下轮以任务追踪裁决" % sect)
                 _sleep(random.uniform(1.5, 2.5))
                 continue
-            threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
-                             daemon=True).start()
             t1 = time.time()
             while zhuagui_in_battle(gateway) and time.time() - t1 < 300.0:
                 _sleep(random.uniform(1.5, 2.2))
