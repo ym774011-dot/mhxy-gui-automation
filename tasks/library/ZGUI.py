@@ -3606,15 +3606,11 @@ def _auto_button_visible(hwnd, thresh=_AUTO_BTN_THRESH):
 
 
 def _battle_auto_kick(hwnd, gateway, delay=5.0, tries=6, gap=3.0):
-    """进战 delay 秒后确保自动战斗已开启（★2026-09-08 改 Lua 状态判定+重试）。
+    """进战 delay 秒后确保自动战斗已开启。
 
-    旧版只用截屏模板 _auto_button_visible（mss 屏幕像素），窗口被遮挡/后台
-    时截到遮挡者像素 → 模板恒不命中 → 重登后从不点「自动」（与 2026-09-08
-    上午钟馗红字检测失效同族根因：截图通道不后台安全）。
-    改用 zhuagui_ensure_auto_battle 的 Lua 状态通道（tp.战斗类.窗口.自动栏，
-    后台安全，与队员看护线程同路）；带重试：每轮重读状态，已开启('取消')
-    即停，杜绝点两次=关掉自动；Lua 读不到自动栏才退回截图模板（仅前台可靠，
-    后台命中失败=不点，安全降级）。
+    ★2026-09-08 深夜用户定案（大幅简化）：「自动」开启一次后跨战斗常开，
+    全进程只在第一次进战斗时点一次（重启脚本=重新获得一次点击机会），
+    其余时间一律不点——不再做状态判定/盲点防抖那一套。
     """
     try:
         time.sleep(float(delay))
@@ -3622,27 +3618,9 @@ def _battle_auto_kick(hwnd, gateway, delay=5.0, tries=6, gap=3.0):
         return
     for i in range(max(1, int(tries))):
         try:
-            # ★2026-09-08 深夜修：战斗证据二选一——in_battle 三信号漏检
-            # （参战单位懒加载，天宫 22:50 实证整场漏检）会在这里直接 return
-            # 导致整场战斗一个「自动」都不点。模板命中=按钮已渲染=必在战斗。
-            if not zhuagui_in_battle(gateway) and not _auto_button_visible(hwnd):
-                return
             r = zhuagui_ensure_auto_battle(hwnd=hwnd, gateway=gateway)
-            if r == "auto_on":
+            if r in ("clicked", "auto_on"):
                 return
-            if r == "clicked":
-                logger.info("「自动」Lua 状态=未开启 → 已点击开启（第 %d 次尝试）"
-                            % (i + 1))
-            elif r == "idle" and _auto_button_visible(hwnd):
-                # Lua 读不到自动栏（战斗 UI 数据缺失）→ 截图模板兜底
-                # ★同款二次确认：战斗恰在此刻结束则放弃（防点到场景）
-                if not zhuagui_in_battle(gateway):
-                    return
-                x0, y0, x1, y1 = _AUTO_BTN_RECT
-                post_click(hwnd, random.randint(x0 + 8, x1 - 8),
-                           random.randint(y0 + 6, y1 - 6), gateway=gateway)
-                logger.info("「自动」按钮截图兜底命中 → 已点击 (%d,%d)-(%d,%d)"
-                            % (x0, y0, x1, y1))
         except Exception as e:
             logger.info("自动战斗判定异常（忽略）: %s" % e)
         time.sleep(float(gap))
@@ -3681,44 +3659,44 @@ def zhuagui_auto_battle_state(gateway=DEFAULT_GATEWAY, **kw):
     return f == "1", (s if s != "-" else None)
 
 
-def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **kw):
-    """★战斗中确保自动战斗已开启（队员侧看护用；返回 'clicked'/'auto_on'/'idle'）。
+# ★2026-09-08 深夜用户定案：「自动」开启一次后跨战斗常开。全进程只在
+# 第一次进战斗时点一次（重启脚本=重新获得一次点击机会），其余一律不点。
+_AUTO_ONCE = {"done": False}
 
-    判据：战斗中 且 战斗窗口"自动栏".可视 且 状态 ~= '取消'（未开启）
-    → 点击用户标定的「自动」按钮矩形 (677,328)-(739,358)。
-    状态='取消'（已开启）时不点击，防止把自动点关。
+
+def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **kw):
+    """★首次进战斗固定点一次「自动」（返回 'clicked'/'auto_on'/'idle'）。
+
+    ★2026-09-08 深夜用户定案（取代此前全部状态判定/盲点防抖复杂逻辑）：
+      - 本进程从未点过：第一次拿到战斗证据（in_battle 三信号 OR「自动」
+        按钮模板命中）→ 点一次标定矩形 (677,328)-(739,358)，此后永不点击；
+      - 状态已是'取消'（已开启）→ 直接标记完成，不点；
+      - 无战斗证据 → idle（等看护线程下一次轮询）。
+    重启脚本 = _AUTO_ONCE 归零 = 重新获得首次点击，与用户要求一致。
+    队员看护线程（member_sell_loop 每 5s 轮询）与本函数同走此闸。
+    ★代价（用户已知悉）：中途自动被意外点关时不会再补救，需重启脚本。
     """
     if hwnd is None:
         hwnd = get_hwnd()
     if not hwnd:
         return "idle"
-    inb, st = zhuagui_auto_battle_state(gateway)
-    if not inb:
-        return "idle"
-    if st == "取消":
+    if _AUTO_ONCE["done"]:
         return "auto_on"
-    if st != "自动":
-        # ★2026-09-08 深夜平衡修：22:38 盲点事故（栏不可视时把"读不到状态"
-        # 当"没开"瞎点5分钟）后收紧成 st=None 一律 idle，结果队员看护线程
-        # （无截图兜底）遇 st=None 全程不点——队员不点自动回归。
-        # 现规则：st 读不到时必须拿到像素证据（「自动」按钮模板命中=按钮
-        # 真渲染在屏上）才点；模板不命中=不在战斗/栏真不可视，绝不盲点。
-        if _auto_button_visible(hwnd):
-            x0, y0, x1, y1 = _AUTO_BTN_RECT
-            post_click(hwnd, random.randint(x0 + 8, x1 - 8),
-                       random.randint(y0 + 6, y1 - 6), gateway=gateway)
-            (log.info if log else logger.info)(
-                "「自动」状态=%s 栏不可读 → 模板兜底命中已点击 (%d,%d)-(%d,%d)"
-                % (st, x0, y0, x1, y1))
-            _BATTLE_LATCH["ts"] = time.time()
-            return "clicked"
-        return "idle"
+    inb, st = zhuagui_auto_battle_state(gateway)
+    if not (inb or _auto_button_visible(hwnd)):
+        return "idle"   # 无战斗证据，不点
+    if st == "取消":
+        _AUTO_ONCE["done"] = True
+        (log.info if log else logger.info)("「自动」已是开启态（状态=取消），标记完成不再点")
+        return "auto_on"
     x0, y0, x1, y1 = _AUTO_BTN_RECT
     post_click(hwnd, random.randint(x0 + 8, x1 - 8),
                random.randint(y0 + 6, y1 - 6), gateway=gateway)
-    msg = "战斗中「自动」未开启（状态=%s）→ 已点击 (%d,%d)-(%d,%d)" % (st, x0, y0, x1, y1)
-    (log.info if log else logger.info)(msg)
+    _AUTO_ONCE["done"] = True
     _BATTLE_LATCH["ts"] = time.time()
+    (log.info if log else logger.info)(
+        "首次进战斗 → 固定点一次「自动」(%d,%d)-(%d,%d)（此后本进程不再点）"
+        % (x0, y0, x1, y1))
     return "clicked"
 
 
