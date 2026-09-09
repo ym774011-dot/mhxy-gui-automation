@@ -19,6 +19,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -380,12 +381,19 @@ def _hygiene_scan(managed_pids, log=None):
             if os.path.getsize(lp) > limit:
                 os.replace(lp, lp + ".bak")
                 rotated += 1
-        except OSError as e:
-            # ★2026-09-10 QA 实锤：automation.log 被常驻 FileHandler 持有 →
-            #   os.replace 必抛 PermissionError，旧代码 except 静默吞掉，
-            #   导致 72MB 的日志"轮转 0 个"躺了 42 天无人知晓。至少告警。
-            if log:
-                log("[卫生] 日志轮转失败（文件被占用？）: %s → %s" % (lp, e))
+        except OSError:
+            # ★2026-09-10 生产实锤（WinError 32）：automation.log 被常驻
+            #   FileHandler 持有时 rename 必失败。兜底：先复制到 .bak，
+            #   再原地截断——追加模式写者下次写入会定位到新 EOF，不产生空洞；
+            #   极端并发下可能丢最后几行日志，对日志可接受。
+            try:
+                shutil.copyfile(lp, lp + ".bak")
+                with open(lp, "w"):
+                    pass
+                rotated += 1
+            except OSError as e:
+                if log:
+                    log("[卫生] 日志轮转兜底也失败: %s → %s" % (lp, e))
         except Exception as e:
             if log:
                 log("[卫生] 日志轮转异常: %s → %s" % (lp, e))
