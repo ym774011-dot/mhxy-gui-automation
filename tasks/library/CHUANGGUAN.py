@@ -31,6 +31,7 @@
   方寸山(58,132)｜(305,216)↔(111,63)｜(1.676,1.603)
 """
 import random
+import re
 import time
 
 from tasks.library import ZGUI
@@ -45,10 +46,13 @@ import ctypes
 import ctypes.wintypes as wt
 import threading
 
-# 15 门派（任务追踪解析用，顺序无关）
+# 门派（任务追踪解析用，顺序无关）。★2026-09-09 补 天机城/女魃墓：私服实测
+#   天机城闯关——15 表缺新门派 → read_tracker_sect 匹配不到 → 假"无任务"
+#   中止 0 场（10:10 18920 实锤）。仍有漏网由 "立即前往#X#" 段解析兜底，
+#   无校准门派走「不走路直接 CALL」通道（用户定案）。
 SECTS = ("大唐官府", "神木林", "盘丝洞", "天宫", "狮驼岭", "魔王寨", "化生寺",
          "无底洞", "五庄观", "凌波城", "龙宫", "阴曹地府", "普陀山", "女儿村",
-         "方寸山")
+         "方寸山", "天机城", "女魃墓")
 
 # name -> (护法游戏坐标(x,y), 校准像素(x,y), 校准游戏坐标(x,y), 缩放(x,y))；None=落地直接CALL
 SECT_CALIB = {
@@ -233,6 +237,12 @@ __out = table.concat(out, '#')
     for s in SECTS:
         if s in r:
             return s
+    # ★2026-09-09 新门派兜底：目标门派是独立彩色段、紧跟"立即前往"（实机
+    #   dump：R2=[◆|请你们立即前往|天机城|接]）。未登记门派也照返，下游
+    #   run() 对无校准门派走「不走路直接 CALL」通道（用户定案）。
+    m = re.search(r"立即前往#([^#]+)#", r)
+    if m:
+        return m.group(1)
     return None
 
 
@@ -430,7 +440,12 @@ __out = ''
             _lua_call(gateway, "客户端:发送数据(0,3,6," + gid.strip() + ",1)")
             logger.info("闯关：已 CALL 护法 %s（标识%s）" % (nm, gid.strip()))
             return True
-    # 兜底：停稳 + 距离检查后才投影点击护法身体（★用户规则：移动中不点）
+    # 兜底：停稳 + 距离检查后才投影点击护法身体（★用户规则：移动中不点）。
+    # ★2026-09-09 无校准门派（天机城等）guard_grid=None → 只 CALL 不兜底
+    #   点击（用户定案：不走路直接 CALL），失败留给下一轮重试。
+    if guard_grid is None:
+        logger.warning("闯关：%s CALL 未中且无校准坐标，不做兜底点击（下轮重试）" % sect)
+        return False
     pos = self_world_xy(gateway)
     wx, wy = guard_grid[0] * 20, guard_grid[1] * 20
     if pos:
@@ -541,10 +556,14 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 logger.info("闯关：任务追踪已无门派闯关（完成/未接上），共赢 %d 场" % won)
                 break
             calib = SECT_CALIB.get(sect)
-            if calib is None:
-                logger.warning("闯关：未知门派 %s（校准缺失），中止" % sect)
-                break
-            guard_grid, cpx, cgrid, scale = calib
+            if calib is not None:
+                guard_grid, cpx, cgrid, scale = calib
+            else:
+                # ★2026-09-09 用户定案（天机城实锤）：无校准门派不走路——
+                #   落地直接 CALL 护法（CALL 按门派名/护法扫全地图单位，与
+                #   位置无关）；弹窗/放马过来与其他门派同款。
+                guard_grid = cpx = None
+                logger.info("闯关：%s 无校准数据 → 不走路直接 CALL 护法" % sect)
             logger.info("闯关：第%d次考验 → 目标 %s" % (trial, sect))
             # 3a 前置：清残留对话（上一场"未进战中止"可能留下放马过来弹窗，
             #     弹窗开着会挡背包传送——22:07:36 传送失败实证）
@@ -563,8 +582,12 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
                 _sleep(random.uniform(0.8, 1.2))
                 _key_press(hwnd, 0x09)            # Tab 关大地图
                 _sleep(random.uniform(0.8, 1.2))
-            wx, wy = guard_grid[0] * 20, guard_grid[1] * 20
-            _walk_world(gateway, hwnd, wx, wy, timeout=60.0, verbose=verbose)
+            if guard_grid is None:
+                # ★2026-09-09 用户定案：无校准门派跳过走路段，CALL 前只等停稳
+                logger.info("闯关：%s 无校准 → 跳过走路，直接进 CALL" % sect)
+            else:
+                wx, wy = guard_grid[0] * 20, guard_grid[1] * 20
+                _walk_world(gateway, hwnd, wx, wy, timeout=60.0, verbose=verbose)
             # 3c) CALL 护法 → 放马过来
             if not _call_guard_npc(gateway, hwnd, sect, guard_grid, verbose=verbose):
                 logger.warning("闯关：CALL 护法失败（%s），中止" % sect)
