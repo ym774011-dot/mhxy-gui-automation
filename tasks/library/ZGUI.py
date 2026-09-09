@@ -1263,6 +1263,17 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
     #   目标不一致时会截错窗口（实测：对话明明开着，检测返回空）。任务脚本
     #   每轮会钉窗口，但独立调用/测试进程不钉就会踩坑，这里强制对齐。
     set_target_hwnd(hwnd)
+    # ★2026-09-09 用户定案：异图候选（接引人/守卫走近点击 + 对话跨图）只在
+    #   目标地图 ≠ 角色当前地图 时才启用。入口实时读当前图——调用方快照的
+    #   地图数据可能滞后（传送/瞬移后地图名延迟刷新），一旦已经在目标图上，
+    #   绝不再对候选 NPC 做任何点击（08:07 左下角 11 连点同源场景）。
+    #   读图为空（IPC 瞬态）不拦截，保持通道可用。
+    _cur0 = _lua_call(gateway,
+                      r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') or ""
+    if _cur0 and (_cur0 == target_map or target_map in _cur0
+                  or _cur0 in target_map):
+        logger.info("跨图：已在目标图 %s，异图候选不启用（目标≠当前图才启用）" % _cur0)
+        return False
     for _ in range(max(1, tries)):
         # ★2026-09-08 重写选优：旧逻辑取"第一条命名的候选"——驿站老板（名字含
         #   "驿站"，27 格外投影必出窗）排在普陀山接引人前面，先命中先输出，
