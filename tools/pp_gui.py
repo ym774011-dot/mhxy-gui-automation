@@ -711,16 +711,28 @@ class PPApp(tk.Tk):
             if inst.role == "leader":
                 sat.prep_leader(inst.pid)
             else:
-                cap = self.cap_world or self._find_cap_world()
-                if cap:
-                    _lp = next((i.pid for i in self.instances
-                                if i.role == "leader" and i.status == S_ONLINE), None)
-                    sat.member_tp_and_apply(inst.pid, cap, tries=3,
-                                            leader_pid=_lp)
-                else:
-                    ZGUI.zhuagui_teleport("file://pzxy_p%d" % inst.pid,
-                                          hwnd=find_hwnd_by_pid(inst.pid),
-                                          dest="大唐官府", verbose=True)
+                # ★2026-09-09 用户定案（队长先行联动）：队员没有联动信号一律
+                #   不动——等队长到大唐官府[139,80]就位且建队成功后发布的
+                #   信号（_reteam/组队流程发布），收到才去进队伍。队长掉线/
+                #   未就位期间原地干等，绝不自行传送/申请（旧代码 cap 读不到
+                #   还无条件传送队员，已废除）。
+                _lp = next((i.pid for i in self.instances
+                            if i.role == "leader" and i.status == S_ONLINE), None)
+                self._log("p%d 重登待命：等队长联动信号（队长%s未就位/未建队则不动）"
+                          % (inst.pid, ("p%d " % _lp) if _lp else ""))
+                deadline = time.time() + 3600.0
+                link = sat.read_link()
+                while link is None and time.time() < deadline:
+                    time.sleep(20.0)
+                    link = sat.read_link()
+                if link is None:
+                    self._log("p%d 等队长联动超时（1h），放弃本轮归队" % inst.pid)
+                    return
+                self._log("p%d 收到队长联动 → 传送+申请归队" % inst.pid)
+                _lp = next((i.pid for i in self.instances
+                            if i.role == "leader" and i.status == S_ONLINE), None)
+                sat.member_tp_and_apply(inst.pid, link["cap_world"], tries=3,
+                                        tp_first=True, leader_pid=_lp)
         except Exception as e:
             self._log("p%d 归队异常: %s" % (inst.pid, e))
         finally:
@@ -750,11 +762,12 @@ class PPApp(tk.Tk):
     def _teamflow_and_tasks(self, insts):
         """★多线程并行版：阶段内各实例并行，阶段间保持顺序铁律。
 
-        阶段1 全员并行散人传送（先传后组：队伍成员不能传送）
-        阶段2 队长走位[139,80]（走位途中不点组队图标）
-        阶段3 建队
-        阶段4 队员并行申请入队
-        阶段5 队长批准至满员 → 天覆阵
+        ★2026-09-09 队长先行联动（用户定案）：队长到大唐官府[139,80]建队
+        成功后发布联动信号，队员凭信号才行动；没有信号一律原地等。
+        阶段1 队长先行 传送+走位[139,80]（走位途中不点组队图标）
+        阶段2 建队 → 发布联动信号
+        阶段3 队员并行 传送+申请入队（收到联动信号才动）
+        阶段4 队长批准至满员 → 天覆阵
         任一阶段失败的兜底与旧版一致：降级为"只拉任务不组队"。
         """
         try:
@@ -778,40 +791,15 @@ class PPApp(tk.Tk):
                 self._log("[autoTeam] Lua 队伍读数 %d/%d 未满员 → 走组队流程"
                           % (mem, len(insts)))
 
-            # ---- 阶段1：队员并行传送（队长不传） ----
-            # ★2026-09-08 冗余消除：阶段2 prep_leader 第一步就是队长传送+走位，
-            #   这里再传队长 = 队长连传两次（12:55 实锤：阶段1 传送完成 1s 后
-            #   prep_leader 又传一次）。队长由阶段2 统一负责。
-            movers = [i for i in insts if i.role != "leader"]
-            self._log("[autoTeam] 阶段1: %d 名队员并行传送 %s（队长由阶段2 负责）"
-                      % (len(movers), sat.TP_DEST))
-            tp_ok = {}
-
-            def _tp_one(inst):
-                inst.status, inst.note = S_TEAM, "传送%s" % sat.TP_DEST
-                try:
-                    tp_ok[inst.pid] = sat._teleport(inst.pid)
-                    self._log("p%d 传送%s" % (inst.pid,
-                              "完成 ✓" if tp_ok.get(inst.pid) else "失败"))
-                except Exception as e:
-                    tp_ok[inst.pid] = False
-                    self._log("p%d 传送异常: %s" % (inst.pid, e))
-
-            ts = [threading.Thread(target=_tp_one, args=(i,), daemon=True)
-                  for i in movers]
-            for t in ts:
-                t.start()
-            for t in ts:
-                t.join(180)
-
+            # ---- 阶段1：队长先行（★2026-09-09 用户定案：队长没到，队员不动）----
+            #   废除旧"阶段1 全员传送"——队员传送也是"动"，必须等队长就位+
+            #   建队成功的联动信号。队长不在线 = 队员原地待命，只拉任务。
             if leader is None:
-                self._log("[autoTeam] 无队长在线，队员只传送待命")
+                self._log("[autoTeam] 无队长在线，队员原地待命（等队长联动），只拉任务")
                 self._finish_tasks(insts)
                 return
-
-            # ---- 阶段2：队长走位 [139,80] ----
             leader.status, leader.note = S_TEAM, "走位[139,80]"
-            self._log("[autoTeam] 阶段2: 队长走位[139,80]")
+            self._log("[autoTeam] 阶段1: 队长先行 传送+走位[139,80]")
             cap = sat.prep_leader(leader.pid)
             if cap is None:
                 self._log("[autoTeam] 队长准备失败，20s 后重试一次")
@@ -823,24 +811,25 @@ class PPApp(tk.Tk):
                 return
             self.cap_world = cap
 
-            # ---- 阶段3：建队 ----
-            self._log("[autoTeam] 阶段3: 建队")
+            # ---- 阶段2：建队 → 成功即发布联动信号（队员行动依据）----
+            self._log("[autoTeam] 阶段2: 建队")
             if not sat.create_team(leader.pid, cap):
                 self._log("[autoTeam] 建队失败，重试一次")
                 if not sat.create_team(leader.pid, cap):
-                    self._log("[autoTeam] 建队失败，只拉任务不组队")
+                    self._log("[autoTeam] 建队失败，只拉任务不组队（不发布联动信号）")
                     self._finish_tasks(insts)
                     return
+            sat.publish_link(leader.pid, cap)
 
-            # ---- 阶段4：队员并行申请（阶段1 已传送，不再重复传）----
-            self._log("[autoTeam] 阶段4: %d 名队员并行申请入队" % len(members))
+            # ---- 阶段3：队员并行 传送+申请（联动信号已发布，此刻才允许动）----
+            self._log("[autoTeam] 阶段3: %d 名队员并行传送+申请入队" % len(members))
 
             def _apply_one(m):
                 m.status, m.note = S_TEAM, "申请入队"
                 try:
-                    # 阶段1 传送失败的就地补传；传 leader_pid 供地图对账联动
+                    # 队员此刻仍是散人（未入队）可传送；传 leader_pid 供地图对账
                     sat.member_tp_and_apply(m.pid, cap, tries=2,
-                                            tp_first=not tp_ok.get(m.pid),
+                                            tp_first=True,
                                             leader_pid=leader.pid)
                 except Exception as e:
                     self._log("p%d 申请异常: %s" % (m.pid, e))
@@ -852,8 +841,8 @@ class PPApp(tk.Tk):
             for t in ts:
                 t.join(900)
 
-            # ---- 阶段5：批准 + 天覆阵 ----
-            self._log("[autoTeam] 阶段5: 队长批准申请")
+            # ---- 阶段4：批准 + 天覆阵 ----
+            self._log("[autoTeam] 阶段4: 队长批准申请")
             mem = sat.approve_loop(leader.pid, 1 + len(members),
                                    timeout_s=600.0)
             self._log("[autoTeam] 批准结束: 成员=%s/目标=%s"
@@ -1272,6 +1261,9 @@ class PPApp(tk.Tk):
                 if not sat.create_team(leader_pid, cap):
                     self._log("[看门狗] 重新建队失败，下轮再试")
                     return
+            # ★2026-09-09 队长先行联动：就位(+建队成功/队伍仍在)才发布信号，
+            #   队员（含重登待命线程）凭信号才行动；上面任何失败分支不发布。
+            sat.publish_link(leader_pid, cap)
             with self.lock:
                 members = [i for i in self.instances
                            if i.role != "leader" and i.status == S_ONLINE

@@ -15,6 +15,7 @@
                                             异步陆续上线）
 """
 import importlib.util
+import json
 import os
 import random
 import sys
@@ -40,6 +41,54 @@ def _gw(pid):
 
 def _log(msg):
     print("[autoTeam] %s" % msg, flush=True)
+
+
+# ★2026-09-09 队长先行联动（用户定案）：队员行动唯一依据 = 队长到大唐官府
+#   [139,80] 就位且建队成功后发布的联动信号文件。队长没到/建队没成功 →
+#   信号不存在或过期 → 队员一律不动（不传送/不申请），原地等队长。
+#   每次发布都是新 epoch；补组轮按需重发，新信号覆盖旧信号。
+_LINK_PATH = os.path.join(_ROOT, "test_data", "team_link.json")
+_LINK_TTL_S = 1800.0     # 信号有效期 30min
+
+
+def publish_link(leader_pid, cap_world):
+    """队长侧：就位 [139,80] 且建队成功（或队伍仍在）→ 发布联动信号。"""
+    data = {"epoch": time.time(), "leader_pid": int(leader_pid),
+            "cap_world": [float(cap_world[0]), float(cap_world[1])],
+            "ready": True}
+    try:
+        os.makedirs(os.path.dirname(_LINK_PATH), exist_ok=True)
+        tmp = _LINK_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, _LINK_PATH)
+        _log("联动信号已发布: 队长 p%d 就位 %s（队员凭此行动）"
+             % (leader_pid, (round(cap_world[0]), round(cap_world[1]))))
+        return True
+    except Exception as e:
+        _log("[fail] 联动信号写入失败: %s" % e)
+        return False
+
+
+def read_link(max_age_s=_LINK_TTL_S):
+    """队员侧：读队长联动信号；无/过期/未就绪 → None（=等队长，不动）。"""
+    try:
+        with open(_LINK_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return None
+    if not d.get("ready"):
+        return None
+    try:
+        ts = float(d.get("epoch") or 0)
+    except (TypeError, ValueError):
+        return None
+    if ts <= 0 or time.time() - ts > max_age_s:
+        return None
+    cap = d.get("cap_world")
+    if not cap or len(cap) != 2:
+        return None
+    return d
 
 
 def read_pos_closed(hwnd, gw, tries=3):
@@ -457,11 +506,13 @@ def auto_team(leader_pid, member_pids, expect_members=None, dest=TP_DEST):
     if not create_team(leader_pid, cap_world):
         _log("[fail] 建队失败")
         return False
+    publish_link(leader_pid, cap_world)   # ★队长先行联动：建队成功才发信号
     _log("阶段4: 队员申请")
     for pid in member_pids:
         member_tp_and_apply(pid, cap_world, tries=1)
         time.sleep(2.0)
     mem = approve_loop(leader_pid, expect, timeout_s=300.0)
+    _log("approve_loop 成员数: %s" % mem)
     st = ZGUI.team_stats_topbar(_gw(leader_pid))
     if st is None:
         st = ZGUI._team_stats(_gw(leader_pid))
