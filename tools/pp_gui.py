@@ -700,6 +700,29 @@ class PPApp(tk.Tk):
         return sat.read_pos_closed(find_hwnd_by_pid(leaders[0].pid),
                                    "file://pzxy_p%d" % leaders[0].pid)
 
+    def _leader_link_ok(self, cand):
+        """联动信号三重校验（★2026-09-10 用户重申的铁律）：
+
+        ① 当前有在线队长；② 信号由这位队长发布（旧信号/换队长信号拒收）；
+        ③ 这位队长**此刻**就位在大唐官府 [139,80] ±3 格（实时读坐标，
+        不信 30min 内的旧信号——队长掉线/没到锚点时队员绝不传送）。
+        返回 (True, leader_pid) 或 (False, 原因串)。
+        """
+        _lp = next((i.pid for i in self.instances
+                    if i.role == "leader" and i.status == S_ONLINE), None)
+        if _lp is None:
+            return False, "队长掉线/重启中"
+        if int(cand.get("leader_pid", -1)) != _lp:
+            return False, "信号非当前队长 p%d 发布" % _lp
+        lpos = sat.read_pos_closed(find_hwnd_by_pid(_lp),
+                                   "file://pzxy_p%d" % _lp)
+        if lpos is None:
+            return False, "队长坐标读不到"
+        if (abs(sat.CAP_TARGET[0] - lpos[0]) > 60
+                or abs(sat.CAP_TARGET[1] - lpos[1]) > 60):
+            return False, "队长未到 [139,80]（现 %s）" % (lpos,)
+        return True, _lp
+
     def _rejoin_flow(self, inst):
         try:
             if self.paused:
@@ -721,16 +744,25 @@ class PPApp(tk.Tk):
                 self._log("p%d 重登待命：等队长联动信号（队长%s未就位/未建队则不动）"
                           % (inst.pid, ("p%d " % _lp) if _lp else ""))
                 deadline = time.time() + 3600.0
-                link = sat.read_link()
+                link, _lp = None, None
                 while link is None and time.time() < deadline:
+                    cand = sat.read_link()
+                    if cand is not None:
+                        # ★2026-09-10 三重校验：当前在线队长 + 信号确为其发布
+                        #   + 队长此刻就位 [139,80]±3格。任一不过 → 继续等，
+                        #   绝不传送（队长没到队员不动）。
+                        ok, info = self._leader_link_ok(cand)
+                        if ok:
+                            link, _lp = cand, info
+                            break
+                        self._log("p%d 联动校验未过（%s）→ 继续等，不传送"
+                                  % (inst.pid, info))
                     time.sleep(20.0)
-                    link = sat.read_link()
                 if link is None:
                     self._log("p%d 等队长联动超时（1h），放弃本轮归队" % inst.pid)
                     return
-                self._log("p%d 收到队长联动 → 传送+申请归队" % inst.pid)
-                _lp = next((i.pid for i in self.instances
-                            if i.role == "leader" and i.status == S_ONLINE), None)
+                self._log("p%d 队长已就位 [139,80] 且建队成功 → 传送+申请归队"
+                          % inst.pid)
                 sat.member_tp_and_apply(inst.pid, link["cap_world"], tries=3,
                                         tp_first=True, leader_pid=_lp)
         except Exception as e:
@@ -1473,6 +1505,14 @@ class PPApp(tk.Tk):
         inst.status = S_RESTART
         inst.note = "掉线重启中"
         self._tp_fail.pop(inst.pid, None)   # 重启即清 tp 失败计数
+        # ★2026-09-10 联动铁律（用户重申）：队长掉线/重启 → 立即撤销旧信号。
+        #   否则旧 team_link.json 在 30min TTL 内仍有效，队员重登读到就传送，
+        #   而队长根本不在 [139,80]（挂机实测场景）。
+        if inst.role == "leader":
+            try:
+                sat.revoke_link()
+            except Exception as e:
+                self._log("[联动] 撤销信号异常: %s" % e)
         threading.Thread(target=self._restart_flow, args=(inst,), daemon=True).start()
 
     def _tp_alive(self, pid):
