@@ -1327,6 +1327,16 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
                 break
             wr = ctypes.wintypes.RECT()
             user32.GetClientRect(hwnd, ctypes.byref(wr))
+            # ★2026-09-09 用户定案：投影大幅越界（>1500px）＝候选 NPC 根本在
+            #   异图（08:07 实证：长安/长寿场景里冒出"建邺城守卫"，投影
+            #   (-4068,2274)，朝其方向点(30,570)=左下角 11 连点）。异图候选
+            #   走近毫无意义——绝不点击，直接换下一轮。只有小越界（同图
+            #   远处，几百 px 内）才允许视野边缘走近。
+            if (px < -1500 or px > wr.right + 1500
+                    or py < -1500 or py > wr.bottom + 1500):
+                logger.warning("跨图：%s 投影越界过远(%d,%d)＝异图候选，不走近，换下一轮"
+                               % (nx2, px, py))
+                break
             if 0 <= px < wr.right and 0 <= py < wr.bottom:
                 post_click(hwnd, px + random.randint(-3, 3),
                            py + random.randint(-3, 3), gateway=gateway)
