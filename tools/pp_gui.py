@@ -19,7 +19,6 @@ import json
 import os
 import random
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -218,30 +217,25 @@ def human_bytes(n):
     return "%dGB" % n
 
 
-# ---------- 受管游戏弹窗：保守白名单（2026-09-10 方案 A） ----------
-# 仅处理 PPApp 当前 self.instances 所托管的游戏 PID。WerFault 的归属无法在
-# 现有结构中可靠证明，故一律只记录、不自动点击；未知标题/按钮组合也不操作。
-# 注意：这里绝不将“是”或“第一个按钮”作为兜底动作。
-_POPUP_ALLOWLIST = {
-    ("下线通知", frozenset(("确定",))): "确定",
-    ("游戏出错啦!", frozenset(("确定",))): "确定",
-    ("Galaxy2D For Lua", frozenset(("确定",))): "确定",
-}
-_POPUP_VERIFY_WAIT_S = 0.20
+# ---------- 弹窗检测与自动点掉（2026-09-07 用户需求） ----------
+# 场景：崩溃弹窗（应用程序错误/WER 停止工作）不点掉，进程就卡着不退，
+# 掉线闭环没法重新拉起游戏。策略：按进程名找弹窗宿主（游戏本尊 + WerFault），
+# 枚举其 #32770 对话框，优先点「确定/关闭程序」按钮（PostMessage BM_CLICK）。
+_POPUP_IMAGES = {"胖子西游.exe", "werfault.exe"}
+_BTN_PREFER = ("确定", "关闭程序", "关闭", "是", "ok", "close")
 
 
-def _pids_by_image(image_names):
-    """返回指定镜像名的 PID；WerFault 仅供记录，绝不可据此点击。"""
+def _pids_by_image():
+    """按镜像名取弹窗宿主 PID 集合（胖子西游 + WerFault）。"""
     k32 = ctypes.windll.kernel32
     psapi = ctypes.windll.psapi
-    wanted = {name.lower() for name in image_names}
     arr = (wintypes.DWORD * 4096)()
     cb = wintypes.DWORD()
     if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr),
                                ctypes.byref(cb)):
         return set()
-    out = set()
     n = min(4096, cb.value // ctypes.sizeof(wintypes.DWORD))
+    out = set()
     for i in range(n):
         pid = arr[i]
         if not pid:
@@ -252,27 +246,17 @@ def _pids_by_image(image_names):
         try:
             buf = ctypes.create_unicode_buffer(512)
             size = wintypes.DWORD(512)
+            # ★本机 kernel32 无 K32QueryFullProcessImageNameW 导出（实测），
+            #   用无前缀版 QueryFullProcessImageNameW（Vista+ 内核32 自带）
             if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
-                if (buf.value or "").rsplit("\\", 1)[-1].lower() in wanted:
+                img = (buf.value or "").rsplit("\\", 1)[-1].lower()
+                if img in _POPUP_IMAGES:
                     out.add(int(pid))
         except Exception:
             pass
         finally:
             k32.CloseHandle(h)
     return out
-
-
-def _normalise_popup_button(text):
-    """规范化按钮文本，供纯白名单判定使用。"""
-    return (text or "").strip().replace("&", "").lower()
-
-
-def _popup_button_allowed(title, button_texts):
-    """返回获准点击的规范化按钮文本；非精确白名单组合一律返回 None。"""
-    normalised = tuple(_normalise_popup_button(text) for text in button_texts)
-    key = ((title or "").strip(), frozenset(normalised))
-    wanted = _POPUP_ALLOWLIST.get(key)
-    return wanted if wanted in normalised else None
 
 
 def _enum_dialogs_of(pids):
@@ -298,8 +282,8 @@ def _enum_dialogs_of(pids):
     return hits
 
 
-def _dismiss_popup(hwnd, title):
-    """只点击标题+全部按钮精确命中白名单的按钮，并验证窗口已消失。"""
+def _dismiss_popup(hwnd):
+    """点掉对话框：枚举子按钮，优先「确定/关闭程序/关闭」，BM_CLICK。"""
     user32 = ctypes.windll.user32
     buttons = []
     PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
@@ -314,92 +298,19 @@ def _dismiss_popup(hwnd, title):
         return True
 
     user32.EnumChildWindows(hwnd, PROC(cb), 0)
-    allowed = _popup_button_allowed(title, [text for _button, text in buttons])
-    if not allowed:
+    if not buttons:
         return False
-    button = next((button for button, text in buttons
-                   if _normalise_popup_button(text) == allowed), None)
-    if button is None:
-        return False
-    user32.PostMessageW(button, 0x00F5, 0, 0)  # BM_CLICK
-    time.sleep(_POPUP_VERIFY_WAIT_S)
-    return not user32.IsWindow(hwnd)
 
+    def score(t):
+        t = t.strip().lower()
+        for i, p in enumerate(_BTN_PREFER):
+            if p in t:
+                return i
+        return 99
 
-# ---------- 卫生机制（★2026-09-09 方案A：残留自洁） ----------
-_IPC_TMP_DIR = r"E:\DS\tmp"          # pzxy IPC 文件目录（与 pzxy_ipc 默认一致）
-_IPC_STALE_S = 24 * 3600.0           # 死 PID 文件保留期：整组 mtime 超 24h 才删
-_HYGIENE_INTERVAL_S = 24 * 3600.0    # 卫生循环周期
-_LOG_ROTATE_BYTES = 20 * 1024 * 1024  # automation.log 轮转阈值 20MB
-_IPC_PID_RE = re.compile(r"pzxy_p(\d+)_")
-
-
-def _hygiene_scan(managed_pids, log=None):
-    """IPC 死文件清理 + 大日志轮转。返回 (cleaned, rotated)。
-
-    - E:\\DS\\tmp\\pzxy_p<pid>_*：PID 不在托管实例里 且 整组 mtime 超 24h
-      → 整组删除（24h 新鲜度保护非托管但活着的 worker，如独立编排器）；
-      防 Windows PID 复用读到陈旧通道数据（播种侧另有 clean_pid_ipc 双保险）。
-    - logs/automation.log >20MB → 改名 .bak 保留一份；文件被占用（Qt 主 GUI
-      的 logging 句柄）时本轮跳过，下一轮再试。
-    """
-    cleaned = rotated = 0
-    now = time.time()
-    groups = {}
-    try:
-        for f in os.listdir(_IPC_TMP_DIR):
-            m = _IPC_PID_RE.match(f)
-            if not m:
-                continue
-            p = os.path.join(_IPC_TMP_DIR, f)
-            try:
-                mt = os.path.getmtime(p)
-            except OSError:
-                continue
-            groups.setdefault(int(m.group(1)), []).append((p, mt))
-    except OSError:
-        pass
-    for pid, files in groups.items():
-        if pid in managed_pids:
-            continue
-        if any(now - mt < _IPC_STALE_S for _p, mt in files):
-            continue
-        if proc_alive(pid):
-            continue      # ★进程仍活着（如独立编排器的 worker）：绝不删
-        for p, _mt in files:
-            try:
-                os.remove(p)
-                cleaned += 1
-            except OSError:
-                pass
-    # ★2026-09-10 修正：GUI 自身日志是 ROOT/pp_gui.log（原只轮转
-    #   logs/automation.log，而后者未必是 GUI 在写）→ 两个都轮转。
-    for lp, limit in ((os.path.join(ROOT, "pp_gui.log"), _LOG_ROTATE_BYTES),
-                      (os.path.join(ROOT, "logs", "automation.log"),
-                       _LOG_ROTATE_BYTES)):
-        try:
-            if os.path.getsize(lp) > limit:
-                os.replace(lp, lp + ".bak")
-                rotated += 1
-        except OSError:
-            # ★2026-09-10 生产实锤（WinError 32）：automation.log 被常驻
-            #   FileHandler 持有时 rename 必失败。兜底：先复制到 .bak，
-            #   再原地截断——追加模式写者下次写入会定位到新 EOF，不产生空洞；
-            #   极端并发下可能丢最后几行日志，对日志可接受。
-            try:
-                shutil.copyfile(lp, lp + ".bak")
-                with open(lp, "w"):
-                    pass
-                rotated += 1
-            except OSError as e:
-                if log:
-                    log("[卫生] 日志轮转兜底也失败: %s → %s" % (lp, e))
-        except Exception as e:
-            if log:
-                log("[卫生] 日志轮转异常: %s → %s" % (lp, e))
-    if log and (cleaned or rotated):
-        log("[卫生] 清理旧 IPC 文件 %d 个，日志轮转 %d 个" % (cleaned, rotated))
-    return cleaned, rotated
+    buttons.sort(key=lambda b: score(b[1]))
+    user32.PostMessageW(buttons[0][0], 0x00F5, 0, 0)  # BM_CLICK
+    return True
 
 
 class Instance:
@@ -417,14 +328,6 @@ class Instance:
         self.status = status
         self.title = title
         self.note = ""
-        # ★2026-09-10 失败终态记账（方案A 第二批）：此前 S_PLANT/S_LAUNCH/
-        #   S_RESTART 被监控无条件跳过，播种 11 连败/120s 无窗口/路径失效后
-        #   永久悬死。fail_at>0 表示已进失败终态，由监控按退避重走重启闭环。
-        self.fail_at = 0.0
-        self.fail_reason = ""
-        self.retry_count = 0
-        # PID 绑定的异步流程必须携带此代际；收养/重启换绑时使旧流程失效。
-        self.generation = 0
 
     @property
     def role_cn(self):
@@ -460,26 +363,13 @@ class PPApp(tk.Tk):
         self._watch_interrupted = False   # 当前处于"缺员已打断抓鬼"状态
         self._reteam_running = False
         self._watch_started = False
-        self._restarting = set()      # 正在跑 _restart_flow 的 pid（防重复重启）
-        # ★2026-09-09 方案A：残留自洁循环（IPC 死文件 + 大日志轮转）
-        threading.Thread(target=self._hygiene_loop, daemon=True,
-                         name="hygiene").start()
-        self._rejoining = set()           # 正在归队流程的 (pid, generation)（防双驱动）
-        # 覆盖任务扫描→Popen→登记的本地租约，防多个恢复路径双拉同一实例。
-        self._task_leases = set()
-        self._task_lease_lock = threading.Lock()
+        self._rejoining = set()           # 正在归队流程的实例 pid（防双驱动）
         self.paused = False               # ★暂停接管：True=自动化全面撒手
-        # ★2026-09-09 tp 健康检查状态（per-PID 独立 ~8s 抽检）：
-        #   pid -> 连续 tp 消失次数（服务器抹 tp 时进程/标题在线但 Lua 主状态亡，
-        #   任务脚本会无限空转——用户指令：这种情况 GUI 直接杀游戏重启）；
-        #   pid -> 上次抽检时刻（各在线实例独立计时，互不挤占同一全局 tick，
-        #   PID 变更/重启由 _begin_restart 清旧记录）。
+        # ★2026-09-09 tp 健康检查状态：pid -> 连续消失计数（服务器抹 tp 时
+        #   进程活着/标题在线但 Lua 主状态亡，任务脚本会无限空转——用户指令：
+        #   这种情况 GUI 直接杀游戏重启）
         self._tp_fail = {}
-        self._tp_last_check = {}
-        # ★2026-09-09 看门狗战斗保护：队长进入战斗的时刻（None=未战斗）。
-        #   战斗中永不缺员判定/kill_task/_reteam；超 10min 仅 WARN 不干预。
-        self._watch_battle_since = None
-        self._popup_unknown_logged = {}  # (pid, title, buttons) -> last log time
+        self._tp_tick = 0
 
         # ★2026-09-07 可观测性：squad_auto_team 的 _log 原本只 print 到
         #   stdout（GUI 无控制台 → 全程丢失）。组队/走位/建队每一步的内部
@@ -676,9 +566,8 @@ class PPApp(tk.Tk):
             self.instances.append(inst)
         self._log("已启动%s进程 PID=%s，等待登录界面窗口…"
                   % ("队长" if role == "leader" else "队员", popen.pid))
-        threading.Thread(
-            target=self._guarded(self._wait_login_window, inst, "等待登录窗口"),
-            args=(inst,), daemon=True).start()
+        threading.Thread(target=self._wait_login_window,
+                         args=(inst,), daemon=True).start()
 
     def _wait_login_window(self, inst):
         """等游戏窗口出现并播种（播种成功后才标记可用，用户再去登录）。"""
@@ -709,7 +598,6 @@ class PPApp(tk.Tk):
                         self._after_login(inst)
                         return
         inst.status, inst.note = S_LAUNCH, "120s 未见到窗口"
-        self._mark_failed(inst, "120s 未见到窗口")
 
     def _do_plant(self, inst, hwnd):
         inst.status, inst.note = S_PLANT, ""
@@ -738,7 +626,6 @@ class PPApp(tk.Tk):
             if attempt > 11:
                 self._log("p%d 播种连续 11 次失败，放弃（保持登录界面，等掉线闭环重启）"
                           % inst.pid)
-                self._mark_failed(inst, "播种连续 11 次失败")
                 break
             rearm = time.time() + 60
             while time.time() < rearm:
@@ -794,60 +681,7 @@ class PPApp(tk.Tk):
     # ---------- 组队协调 ----------
     # GUI 登录后只做播种+掉线监控；【启动脚本】= 组队→天覆阵→按角色拉任务。
     # 脚本开工后若实例掉线重登，自动归队（传送+申请）并补拉任务。
-    def _is_current_generation(self, inst, pid, generation):
-        """确认异步流程仍绑定同一 PID/代际，避免旧流程回写状态。"""
-        with self.lock:
-            return inst.pid == pid and inst.generation == generation
-
-    def _mark_failed(self, inst, reason):
-        """把实例打进失败终态（播种连败/120s 无窗口/路径失效等死点）。
-
-        此前这些出口只改 status/note 就返回，而监控对 S_PLANT/S_LAUNCH/
-        S_RESTART 无条件 continue → 永久悬死。打标记后由 _retry_failed
-        按指数退避重走重启闭环。
-        """
-        inst.fail_at = time.time()
-        inst.fail_reason = reason
-        inst.note = "%s（等待自动重试）" % reason
-
-    def _retry_failed(self, inst):
-        """失败终态兜底：到点就重走重启闭环，退避 2/4/8/16 分钟（上限 15min）。"""
-        if not getattr(inst, "fail_at", 0.0):
-            return False
-        delay = min(120.0 * (2 ** min(getattr(inst, "retry_count", 0), 3)), 900.0)
-        if time.time() - inst.fail_at < delay:
-            return False
-        inst.retry_count = getattr(inst, "retry_count", 0) + 1
-        reason = inst.fail_reason or inst.note or inst.status
-        self._log("[兜底] p%d 卡在失败态（%s）已 %.0fs → 第%d次重走重启闭环"
-                  % (inst.pid, reason, time.time() - inst.fail_at, inst.retry_count))
-        self._begin_restart(inst)
-        return True
-
-    def _is_rejoining(self, inst):
-        """该实例是否正在归队流程中（按 pid+generation 精确匹配）。
-
-        ★2026-09-09 交叉QA 阻塞项修复：_rejoining 存的是 (pid, generation)
-        元组，此前 _reteam 用裸 pid 比较（int 与 tuple 永不相等）→ 重登归队
-        线程与补组线程会并发驱动同一客户端。统一走本 helper 防再犯。
-        """
-        with self.lock:
-            return (inst.pid, inst.generation) in self._rejoining
-
-    def _guarded(self, fn, inst, what):
-        """异步流程统一异常兜底：线程体抛异常时不打标会永久悬死（QA 缺口4）。"""
-        def _run(*a):
-            try:
-                fn(*a)
-            except Exception as e:
-                self._log("p%d %s异常终止: %s" % (inst.pid, what, e))
-                self._mark_failed(inst, "%s异常" % what)
-        return _run
-
     def _after_login(self, inst):
-        inst.fail_at = 0.0            # ★重登成功即清失败态与退避计数
-        inst.fail_reason = ""
-        inst.retry_count = 0
         if not self.scripts_started:
             inst.note = "已登录，待【启动脚本】"
             return
@@ -856,21 +690,26 @@ class PPApp(tk.Tk):
         threading.Thread(target=self._rejoin_flow,
                          args=(inst,), daemon=True).start()
 
+    def _find_cap_world(self):
+        """从在线队长客户端读队长世界坐标（★read_pos_closed 保证面板关闭）。"""
+        with self.lock:
+            leaders = [i for i in self.instances
+                       if i.role == "leader" and i.status == S_ONLINE]
+        if not leaders:
+            return None
+        return sat.read_pos_closed(find_hwnd_by_pid(leaders[0].pid),
+                                   "file://pzxy_p%d" % leaders[0].pid)
+
     def _rejoin_flow(self, inst):
-        pid, generation = inst.pid, inst.generation
-        key = (pid, generation)
-        success = False
         try:
             if self.paused:
-                self._log("p%d 暂停中，跳过自动归队" % pid)
+                self._log("p%d 暂停中，跳过自动归队" % inst.pid)
                 return
-            if key in self._rejoining:
+            if inst.pid in self._rejoining:
                 return
-            self._rejoining.add(key)
+            self._rejoining.add(inst.pid)
             if inst.role == "leader":
-                if not self._is_current_generation(inst, pid, generation):
-                    return
-                success = sat.prep_leader(pid) is not None
+                sat.prep_leader(inst.pid)
             else:
                 # ★2026-09-09 用户定案（队长先行联动）：队员没有联动信号一律
                 #   不动——等队长到大唐官府[139,80]就位且建队成功后发布的
@@ -882,58 +721,26 @@ class PPApp(tk.Tk):
                 self._log("p%d 重登待命：等队长联动信号（队长%s未就位/未建队则不动）"
                           % (inst.pid, ("p%d " % _lp) if _lp else ""))
                 deadline = time.time() + 3600.0
-                link = None
-                while time.time() < deadline:
-                    cand = sat.read_link()
-                    if cand is not None:
-                        # ★2026-09-09 队长先行联动（Task14）：只接受当前在线队长
-                        #   发布且未过期的 link；link 里的 leader_pid 与当前
-                        #   ONLINE 队长不符（队长掉线/重登换 PID 后旧信号仍
-                        #   在 30min TTL 内）→ 视为无效继续等，绝不凭旧信号乱传送。
-                        _lp_now = next((i.pid for i in self.instances
-                                        if i.role == "leader"
-                                        and i.status == S_ONLINE), None)
-                        if _lp_now is not None and \
-                                int(cand.get("leader_pid", -1)) == _lp_now:
-                            link, _lp = cand, _lp_now
-                            break
-                        self._log("p%d 收到联动信号但非当前在线队长（队长重登中）→ 继续等"
-                                  % pid)
+                link = sat.read_link()
+                while link is None and time.time() < deadline:
                     time.sleep(20.0)
+                    link = sat.read_link()
                 if link is None:
                     self._log("p%d 等队长联动超时（1h），放弃本轮归队" % inst.pid)
                     return
-                if not self._is_current_generation(inst, pid, generation):
-                    return
                 self._log("p%d 收到队长联动 → 传送+申请归队" % inst.pid)
-                # ★2026-09-09 交叉QA 阻塞项修复：以 member_tp_and_apply 真实
-                #   返回（是否真的发出申请）为准，禁止无条件 success=True
-                #   返回（申请已真实发出 + 归队闭环确认）为准；verify_join=True
-                #   走队员自身顶栏确认（服务器是否批准），禁止无条件 success。
-                success = bool(sat.member_tp_and_apply(
-                    pid, link["cap_world"], tries=3,
-                    tp_first=True, leader_pid=_lp, verify_join=True))
+                _lp = next((i.pid for i in self.instances
+                            if i.role == "leader" and i.status == S_ONLINE), None)
+                sat.member_tp_and_apply(inst.pid, link["cap_world"], tries=3,
+                                        tp_first=True, leader_pid=_lp)
         except Exception as e:
-            self._log("p%d 归队异常: %s" % (pid, e))
+            self._log("p%d 归队异常: %s" % (inst.pid, e))
         finally:
-            self._rejoining.discard(key)
-            if not self._is_current_generation(inst, pid, generation):
-                self._log("p%d 归队流程代际已过期，忽略结果" % pid)
-                return
-            if success:
-                inst.status, inst.note = S_ONLINE, "重登完成"
-                if not self.paused:
-                    time.sleep(2.0)
-                    if self._is_current_generation(inst, pid, generation):
-                        self._spawn_task(inst)
-            else:
-                inst.status, inst.note = S_TEAM, "归队未完成，等待重试"
-                # ★2026-09-10 QA 实锤缺陷：S_TEAM 被监控无条件跳过、补组又只挑
-                #   S_ONLINE → 归队未确认的队员会永久悬死（不拉任务/不被重邀/
-                #   进程活着也不走重启闭环）。必须打失败标记交给退避重试兜底。
-                if self._is_current_generation(inst, pid, generation):
-                    self._mark_failed(inst, "归队未完成")
-                self._log("p%d 归队未成功，保留可恢复状态" % pid)
+            self._rejoining.discard(inst.pid)
+            inst.status, inst.note = S_ONLINE, "重登完成"
+            if not self.paused:
+                time.sleep(2.0)
+                self._spawn_task(inst)
 
     def _start_all_tasks(self):
         """【启动脚本】= 组队（传送/走位/申请/批准/天覆阵）→ 按角色拉任务。"""
@@ -972,7 +779,9 @@ class PPApp(tk.Tk):
             #   任务（重复组队会白传送/点面板，还对在队成员传送无效）。
             if leader is not None:
                 lw = "file://pzxy_p%d" % leader.pid
-                st = self._team_stats_any(lw)
+                st = ZGUI.team_stats_topbar(lw)
+                if st is None:
+                    st = ZGUI._team_stats(lw)
                 mem = st[0] if st else -1
                 if mem >= len(insts):
                     self._log("[autoTeam] Lua 队伍读数 %d/%d 已满员 → 跳过组队，直接执行任务"
@@ -1160,49 +969,22 @@ class PPApp(tk.Tk):
                 pass
 
     def _popup_loop(self):
-        """每 5s 仅处理受管游戏 PID 的精确白名单弹窗；WerFault 只记录。"""
+        """每 5s 扫游戏/WerFault 名下的系统弹窗并点掉（用户需求：弹窗不点掉
+        进程卡住不掉 → 掉线闭环拉不起游戏）。暂停接管时不代点（用户在玩）。"""
         while True:
             time.sleep(5)
             try:
                 if self.paused:
                     continue
-                with self.lock:
-                    managed_pids = {i.pid for i in self.instances if i.pid}
-                if managed_pids:
-                    for hwnd, pid, title in _enum_dialogs_of(managed_pids):
-                        if _dismiss_popup(hwnd, title):
-                            self._log("p%d 受管白名单弹窗(%s) 已确认消失"
-                                      % (pid, (title or "")[:30]))
-                        else:
-                            self._log_unknown_popup(pid, hwnd, title)
-                # 当前没有 WerFault 与游戏 PID 的可靠短时归属映射：只记录。
-                for hwnd, pid, title in _enum_dialogs_of(_pids_by_image({"werfault.exe"})):
-                    self._log_unknown_popup(pid, hwnd, "WerFault: " + (title or ""))
+                pids = _pids_by_image()
+                if not pids:
+                    continue
+                for hwnd, pid, title in _enum_dialogs_of(pids):
+                    if _dismiss_popup(hwnd):
+                        self._log("p%d 检测到系统弹窗(%s) → 已点确定/关闭"
+                                  % (pid, (title or "")[:30]))
             except Exception:
                 pass
-
-    def _log_unknown_popup(self, pid, hwnd, title):
-        """未知对话框不操作；相同签名每分钟最多记录一次。"""
-        user32 = ctypes.windll.user32
-        buttons = []
-        PROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
-
-        def cb(h, _lp):
-            cls = ctypes.create_unicode_buffer(64)
-            user32.GetClassNameW(h, cls, 64)
-            if cls.value == "Button" and user32.IsWindowVisible(h):
-                txt = ctypes.create_unicode_buffer(128)
-                user32.GetWindowTextW(h, txt, 128)
-                buttons.append(_normalise_popup_button(txt.value))
-            return True
-
-        user32.EnumChildWindows(hwnd, PROC(cb), 0)
-        signature = (pid, (title or "")[:80], tuple(sorted(buttons)))
-        now = time.time()
-        if now - self._popup_unknown_logged.get(signature, 0.0) >= 60.0:
-            self._popup_unknown_logged[signature] = now
-            self._log("p%d 未知系统弹窗(%s, 按钮=%s)；未操作"
-                      % (pid, signature[1], "/".join(signature[2]) or "无"))
 
     def _finish_tasks(self, insts):
         self.scripts_started = True
@@ -1251,41 +1033,7 @@ class PPApp(tk.Tk):
                     % ("、".join(missing), mem if mem >= 0 else "?", expect))
         return None
 
-    def _team_stats_any(self, lw):
-        """★2026-09-09 去重：队伍统计 顶栏实时优先 → p7 面板快照兜底。"""
-        st = ZGUI.team_stats_topbar(lw)
-        return st if st is not None else ZGUI._team_stats(lw)
-
-    # ---------- 卫生循环（方案A：启动清一遍，之后每 24h 一轮） ----------
-    def _hygiene_once(self):
-        try:
-            with self.lock:
-                managed = {i.pid for i in self.instances}
-            _hygiene_scan(managed, log=self._log)
-        except Exception as e:
-            self._log("[卫生] 异常: %s" % e)
-
-    def _hygiene_loop(self):
-        time.sleep(20.0)          # 等实例表初始化完再首轮清扫
-        while True:
-            self._hygiene_once()
-            time.sleep(_HYGIENE_INTERVAL_S)
-
     def _spawn_task(self, inst):
-        """按 (PID, role) 租约串行执行扫描→Popen→登记。"""
-        key = (inst.pid, inst.role)
-        with self._task_lease_lock:
-            if key in self._task_leases:
-                self._log("p%d 任务启动已由其他流程占用，跳过" % inst.pid)
-                return
-            self._task_leases.add(key)
-        try:
-            self._spawn_task_unlocked(inst)
-        finally:
-            with self._task_lease_lock:
-                self._task_leases.discard(key)
-
-    def _spawn_task_unlocked(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
         # ★2026-09-09 用户定案（单点闸）：队长必须等所有队友到齐才能开始
         #   任务——初始组队/重登归队/看门狗补拉/满员恢复全部走这里，未到齐
@@ -1348,6 +1096,7 @@ class PPApp(tk.Tk):
         self._log("[看门狗] 启动（目标 %d 人，每 15s 判定）" % expect_members)
         stale_scan_n = 0
         hb_n = 0
+        bskip_n = 0
         self._kill_stale_tasks()   # 启动先清一遍历史僵尸
         while not self._team_watch_stop.wait(15):
             try:
@@ -1391,22 +1140,20 @@ class PPApp(tk.Tk):
                     leader_pid = leader.pid
                 if leader is None or leader.status != S_ONLINE:
                     continue   # 队长不在（掉线重登中），等归队流程
-                # ★2026-09-09 战斗保护（用户定案）：战斗中看门狗永远不做缺员
-                #   判定 / kill_task / _reteam；超过 10min 仅 WARN，绝不自动干预。
-                #   脱战后 _watch_battle_since 清零，判定自动恢复；战斗信号残留
-                #   也不会让看门狗失明（每轮都查，真脱战立即恢复）。
+                # ★2026-09-08 深夜用户定案：战斗中不要检查队伍数据——
+                #   23:41:50 实证战斗中顶栏连续 16 轮读不到刷"检查通道/面板"
+                #   误报，且战斗中也不可能补组。战斗证据为真即跳过本轮判定，
+                #   脱战后自动恢复；连续跳过 40 轮（~10 分钟）兜底恢复判定，
+                #   防战斗信号残留导致看门狗永久失明。
                 try:
                     if ZGUI.zhuagui_in_battle("file://pzxy_p%d" % leader_pid):
-                        if self._watch_battle_since is None:
-                            self._watch_battle_since = time.time()
-                        _bd = time.time() - self._watch_battle_since
-                        if _bd > 600 and hb_n % 8 == 0:
-                            self._log("[看门狗] ⚠ 队长持续战斗超 %.0f 分钟，"
-                                      "不干预，等脱战恢复" % (_bd / 60))
-                        continue
-                    self._watch_battle_since = None
+                        bskip_n += 1
+                        if bskip_n <= 40:
+                            continue
+                    else:
+                        bskip_n = 0
                 except Exception:
-                    self._watch_battle_since = None
+                    bskip_n = 0
                 # ★2026-09-07：顶栏读数零点击，战斗中也可判缺员
                 st = self._watch_team_stats(leader_pid)
                 mem = st[0] if st else -1
@@ -1545,7 +1292,9 @@ class PPApp(tk.Tk):
             cap = self.cap_world
             # ★散队判定必须读顶栏：p7 面板数据是懒加载快照，队员掉线后
             #   会残留旧的满员数据 → 判定为"队伍还在"而永不重建（02:14 实证）
-            st = self._team_stats_any(lw)
+            st = ZGUI.team_stats_topbar(lw)
+            if st is None:
+                st = ZGUI._team_stats(lw)
             mem = st[0] if st else 0
             if mem <= 1:
                 self._log("[看门狗] 队伍已散（%s 人）→ 重新建队" % mem)
@@ -1558,7 +1307,7 @@ class PPApp(tk.Tk):
             with self.lock:
                 members = [i for i in self.instances
                            if i.role != "leader" and i.status == S_ONLINE
-                           and not self._is_rejoining(i)]
+                           and i.pid not in self._rejoining]
             if members:
                 self._log("[看门狗] %d 名在线队员并行申请归队" % len(members))
 
@@ -1636,7 +1385,6 @@ class PPApp(tk.Tk):
             if name2 != want or pid in others:
                 continue
             old = inst.pid
-            inst.generation += 1
             inst.pid, inst.name, inst.title = pid, "p%d" % pid, title
             self._log("p%s 进程消失，收养同名角色窗口 PID=%d（%s）" % (old, pid, want))
             return (pid, hwnd, title)
@@ -1661,20 +1409,8 @@ class PPApp(tk.Tk):
                           % (inst.pid, inst.status))
                 self._begin_restart(inst)
                 continue
-            if inst.status in (S_LAUNCH, S_PLANT, S_RESTART):
-                # ★2026-09-10 失败终态兜底：异步流程自己还在跑就交还它；
-                #   已进失败终态（_mark_failed）或重启线程已消失 → 退避重启。
-                if self._retry_failed(inst):
-                    continue
-                if inst.status == S_RESTART and inst.pid not in self._restarting:
-                    self._mark_failed(inst, "重启流程异常退出")
-                    continue
+            if inst.status in (S_LAUNCH, S_PLANT, S_RESTART, S_TEAM):
                 continue  # 由各自的异步流程负责
-            if inst.status == S_TEAM:
-                # ★2026-09-10：归队未完成也走退避兜底（fail_at=0 时是 no-op，
-                #   不影响正常组队阶段）。否则队员会永久停在 S_TEAM。
-                self._retry_failed(inst)
-                continue  # 组队/归队由异步流程负责
             w = wins.get(inst.pid)
             logged = bool(w and LOGGED_IN_RE.search(w[2]))
             if inst.status == S_WAIT:
@@ -1690,10 +1426,9 @@ class PPApp(tk.Tk):
                         self._after_login(inst)
                     elif adopted and "([0])" in adopted[2]:
                         inst.status = S_PLANT
-                        threading.Thread(
-                            target=self._guarded(self._do_plant, inst, "播种"),
-                            args=(inst, adopted[1]),
-                            daemon=True).start()
+                        threading.Thread(target=self._do_plant,
+                                         args=(inst, adopted[1]),
+                                         daemon=True).start()
                     else:
                         self._log("p%d 窗口消失（待登录阶段）→ 重启闭环" % inst.pid)
                         self._begin_restart(inst)
@@ -1705,68 +1440,40 @@ class PPApp(tk.Tk):
                         self._log("p%d 收养后仍在线 ✓" % inst.pid)
                     elif adopted and "([0])" in adopted[2]:
                         inst.status = S_PLANT
-                        threading.Thread(
-                            target=self._guarded(self._do_plant, inst, "播种"),
-                            args=(inst, adopted[1]),
-                            daemon=True).start()
+                        threading.Thread(target=self._do_plant,
+                                         args=(inst, adopted[1]),
+                                         daemon=True).start()
                     else:
                         reason = "进程消失" if not proc_alive(inst.pid) else \
                             ("退回登录界面" if (w and "([0])" in w[2]) else "窗口/标题异常")
                         self._log("p%d 掉线判定: %s → 重启闭环" % (inst.pid, reason))
                         self._begin_restart(inst)
-                # ★2026-09-09 tp 健康检查（per-PID 独立 ~8s 抽检，用户指令）：
-                #   进程活/标题在线但 tp 被服务器抹掉时杀游戏重启。每个在线实例
-                #   独立计时，到 ~8s 才查、互不挤占同一全局 tick；连续 3 次明确
-                #   nil(~24s) 才重启；超时/未知不计数（防游戏忙碌误杀）。PID 变更
-                #   /重启由 _begin_restart 清旧记录，新 PID 从零重新计时。
+                # ★2026-09-09 tp 健康检查（用户指令：tp 被服务器抹掉时 GUI 直接
+                #   杀游戏重启，不再让任务脚本空转）——仅标题仍在线的实例查。
+                #   每 4 轮查一次（监控 2s/轮 → ~8s 一次），连续 3 次明确 nil
+                #   (~24s) 才重启；超时/未知不计数（防游戏忙碌误杀）。
                 if inst.status == S_ONLINE and logged and not self.teamflow_running:
-                    _pid = inst.pid
-                    _now = time.time()
-                    if _now - self._tp_last_check.get(_pid, 0.0) >= 8.0:
-                        self._tp_last_check[_pid] = _now
-                        r = self._tp_alive(_pid)
+                    self._tp_tick += 1
+                    if self._tp_tick % 4 == 0:
+                        r = self._tp_alive(inst.pid)
                         if r is True:
-                            self._tp_fail[_pid] = 0
+                            self._tp_fail[inst.pid] = 0
                         elif r is False:
-                            n = self._tp_fail.get(_pid, 0) + 1
-                            self._tp_fail[_pid] = n
+                            n = self._tp_fail.get(inst.pid, 0) + 1
+                            self._tp_fail[inst.pid] = n
                             if n == 1:
                                 self._log("p%d tp 状态消失（第%d次，疑似服务器抹除）"
-                                          % (_pid, n))
+                                          % (inst.pid, n))
                             if n >= 3:
                                 self._log("p%d tp 连续消失 %d 次 → 杀游戏重启闭环"
-                                          % (_pid, n))
+                                          % (inst.pid, n))
                                 self._begin_restart(inst)
 
     def _begin_restart(self, inst):
         inst.status = S_RESTART
         inst.note = "掉线重启中"
-        inst.fail_at = 0.0            # 进入重启闭环即清失败标记（防重复记账）
-        inst.fail_reason = ""
-        # 重启即清该实例的 tp 健康状态（失败计数 + 上次抽检时刻），新 PID 从零计时
-        self._tp_fail.pop(inst.pid, None)
-        self._tp_last_check.pop(inst.pid, None)
-        # ★2026-09-09 队长先行联动：队长掉线/重启 → 撤销联动信号，
-        #   队员不再接受旧（可能已死的）队长发布的 link，原地等有效新信号。
-        if inst.role == "leader":
-            self._revoke_link()
-        pid0 = inst.pid
-        self._restarting.add(pid0)
-
-        def _run():
-            try:
-                self._restart_flow(inst)
-            finally:
-                self._restarting.discard(pid0)
-
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _revoke_link(self):
-        """撤销队长联动信号（队长掉线/重启时调用）。失败不阻断重启。"""
-        try:
-            sat.revoke_link()
-        except Exception as e:
-            self._log("[联动] 撤销信号异常: %s" % e)
+        self._tp_fail.pop(inst.pid, None)   # 重启即清 tp 失败计数
+        threading.Thread(target=self._restart_flow, args=(inst,), daemon=True).start()
 
     def _tp_alive(self, pid):
         """Lua 主状态存活检查（★2026-09-09 掉线闭环新增盲区补测）。
@@ -1789,9 +1496,8 @@ class PPApp(tk.Tk):
             return None
 
     def _restart_flow(self, inst):
-        """掉线全闭环：杀旧任务 → 强杀卡死旧进程 → 重启游戏 → 补种。"""
+        """掉线全闭环：杀旧任务 → 强杀卡死旧进程 → 重启游戏 → 补种 → 重放登录 → 拉起任务。"""
         old_pid = inst.pid
-        old_generation = inst.generation
         try:
             kill_task_process(old_pid)
         except Exception:
@@ -1845,13 +1551,8 @@ class PPApp(tk.Tk):
             inst.note = "重启后未见登录界面"
             self._log("[fail] p%d 重启后 120s 未见登录界面" % old_pid)
             return
-        # 换绑并补种；递增代际使旧异步流程失效。
-        with self.lock:
-            if inst.generation != old_generation or inst.pid != old_pid:
-                self._log("p%d 重启结果已过期，忽略新 PID=%d" % (old_pid, new_pid))
-                return
-            inst.generation += 1
-            inst.pid = new_pid
+        # 换绑并补种
+        inst.pid = new_pid
         inst.name = "p%d" % new_pid
         inst.title = title
         self._do_plant(inst, hwnd)   # 成功→S_WAIT；之后监控自动拉任务

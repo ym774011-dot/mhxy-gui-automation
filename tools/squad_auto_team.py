@@ -91,21 +91,6 @@ def read_link(max_age_s=_LINK_TTL_S):
     return d
 
 
-def revoke_link():
-    """队长掉线/重启时撤销联动信号：删除信号文件，队员不再接受旧 link。
-
-    旧信号在 30min TTL 内仍可被队员读到，但队长换 PID 后已是无效信号；
-    队长侧在重启闭环入口调用本函数，强制让等信号的队员原地继续等，
-    直到新队长就位后发布带新 leader_pid 的有效信号。
-    """
-    try:
-        if os.path.exists(_LINK_PATH):
-            os.remove(_LINK_PATH)
-            _log("联动信号已撤销（队长掉线/重启，等有效新信号）")
-    except Exception as e:
-        _log("[fail] 联动信号撤销失败: %s" % e)
-
-
 def read_pos_closed(hwnd, gw, tries=3):
     """读自身实时世界坐标 —— ★零点击（2026-09-07 重写）。
 
@@ -194,7 +179,9 @@ def prep_leader(leader_pid):
     #   旧代码无条件传送：GUI 阶段1 已传过一次，这里又传 = 队长连传两次
     #   （12:55 实锤）；补组重试轮人本来就在锚点也会白传一次。
     pos0 = read_pos_closed(lhwnd, lw)
-    if _at_anchor(pos0):
+    if (pos0 is not None
+            and abs(CAP_TARGET[0] - pos0[0]) <= 60
+            and abs(CAP_TARGET[1] - pos0[1]) <= 60):
         _log("队长已在锚点附近 %s，跳过传送直接就位" % (pos0,))
         return pos0
     pos = None
@@ -249,7 +236,9 @@ def prep_leader(leader_pid):
                     break
             else:
                 stuck = 0
-        if _at_anchor(pos):
+        if (pos is not None
+                and abs(CAP_TARGET[0] - pos[0]) <= 60
+                and abs(CAP_TARGET[1] - pos[1]) <= 60):
             _log("队长已就位: %s（目标 %s，±3 格容差）" % (pos, CAP_TARGET))
             return pos
         _log("[warn] 第%d轮走位未到锚点（pos=%s）→ 重传送再来" % (attempt, pos))
@@ -306,7 +295,7 @@ def create_team(leader_pid, cap_world, tries=3):
                 _log("建队第%d次：读不到自身坐标，等 2s 重试" % (k + 1))
                 time.sleep(2.0)
                 continue
-            if _at_anchor(self_xy, cap_world):
+            if abs(cap_world[0] - self_xy[0]) <= 60 and abs(cap_world[1] - self_xy[1]) <= 60:
                 break
             off = ZGUI._screen_offset_xy(lw)
             if off is None:
@@ -347,35 +336,17 @@ def create_team(leader_pid, cap_world, tries=3):
     return False
 
 
-def _at_anchor(pos, target=CAP_TARGET, tol=60.0):
-    """世界坐标是否落在锚点 ±tol 内（tol=60px≈3 格容差）。
-
-    ★2026-09-09 去重：prep_leader/create_team 原有 3 处同款判据。
-    """
-    return (pos is not None
-            and abs(target[0] - pos[0]) <= tol
-            and abs(target[1] - pos[1]) <= tol)
-
-
-def team_stats_any(gw):
-    """队伍统计：顶栏实时优先，通道失败退 p7 面板数据（懒加载快照仅兜底）。
-
-    ★2026-09-09 去重：此前 5 处同款"先顶栏 None 再面板"两连读。
-    """
-    st = ZGUI.team_stats_topbar(gw)
-    return st if st is not None else ZGUI._team_stats(gw)
-
-
 def _read_map(gw):
     """读当前地图名（联动归队用）；读不到返回 None。"""
     try:
-        return ZGUI._read_map_name(gw)
+        return ZGUI._lua_call(gw, r'''local m=tp.地图
+__out=tostring(m and m.地图名称 or "")''')
     except Exception:
         return None
 
 
 def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
-                        leader_pid=None, verify_join=False):
+                        leader_pid=None):
     """队员上线/归队：与队长同图 → 靠近队长 → 反复点队长身体申请。
 
     tp_first=False 跳过传送（GUI 并行流程阶段1 已统一传送）。
@@ -388,15 +359,8 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
         同图但队长视野外 → 向队长方向点击走近（夹到窗口内）；
         视野内 → 点队长身体申请。
       leader_pid 提供后地图对账才生效；未提供维持旧行为。
-
-    ★2026-09-09 返回值（方案A 交叉QA 阻塞项）：返回 bool——
-      至少成功执行一次"点队长身体申请"动作才 True；窗口/tp 不可用、
-      轮次耗尽仍未申请、异常 → False。上层（GUI 归队流程）据此决定
-      是否收敛为 ONLINE/拉任务，杜绝"申请没发出却标已归队"的伪成功。
-      （服务器是否批准由队长批准流程裁决，不在本函数判定范围内。）
     """
     gw = _gw(member_pid)
-    applied = False
     for k in range(max(1, tries)):
         hwnd = find_hwnd_by_pid(member_pid)
         if hwnd is None:
@@ -436,42 +400,9 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
         ZGUI._team_click_icon(hwnd, gw)
         time.sleep(0.6)
         ZGUI._team_click_body(hwnd, gw, jx, jy)
-        applied = True          # ★至少一次真实申请动作已发出
         _log("p%d: 已点队长身体 (%d,%d)（第%d次申请）" % (member_pid, jx, jy, k + 1))
         time.sleep(random.uniform(6, 9))
-    _log("p%d: 申请轮次结束（%s）" % (member_pid, "已申请，等待队长批准"
-                                     if applied else "未发出申请"))
-    # ★2026-09-10 归队闭环确认（仅重登归队路径开启）：
-    #   初始组队里队长批准在 approve_loop 统一裁决，成员线程若在此等待会与
-    #   批准流程互锁（批准要等成员线程 join 后才开始）→ 默认关闭。
-    if not applied:
-        return False
-    if verify_join:
-        return _wait_joined(member_pid, timeout=90.0)
-    return True
-
-
-def _wait_joined(member_pid, timeout=90.0, poll=5.0):
-    """队员侧闭环确认：自身顶栏出现队伍（成员数>=1 且队长名非空）才算入队。
-
-    ★2026-09-10 方案A 第二批：此前"点过身体"即算归队成功，服务器是否批准
-      无人验证——可能出现"申请未生效却标已归队并拉起出售脚本"。队员自己的
-      顶栏（tp.窗口.人物框.队伍数据）是实时渲染，零点击可判。
-    """
-    gw = _gw(member_pid)
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        try:
-            st = ZGUI.team_stats_topbar(gw)
-        except Exception as e:      # 通道抖动不该废掉整个等待窗口
-            _log("p%d: 归队确认读取异常，继续等待（%s）" % (member_pid, e))
-            st = None
-        if st and st[0] >= 1 and bool(st[2]):
-            _log("p%d: 归队确认 ✓ 顶栏 %s 人 队长=%s" % (member_pid, st[0], st[2]))
-            return True
-        time.sleep(poll)
-    _log("p%d: 归队未确认（%.0fs 内顶栏无队伍）" % (member_pid, timeout))
-    return False
+    _log("p%d: 申请轮次结束（是否入队由队长批准裁决）" % member_pid)
 
 
 def approve_open_panel(leader_pid):
@@ -522,7 +453,9 @@ def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=2.0):
     last_mem = -1
 
     def _topbar_mem():
-        st = team_stats_any(_gw(leader_pid))
+        st = ZGUI.team_stats_topbar(_gw(leader_pid))
+        if st is None:
+            st = ZGUI._team_stats(_gw(leader_pid))
         return st[0] if st else -1
 
     while time.time() - t0 < timeout_s:
@@ -580,7 +513,9 @@ def auto_team(leader_pid, member_pids, expect_members=None, dest=TP_DEST):
         time.sleep(2.0)
     mem = approve_loop(leader_pid, expect, timeout_s=300.0)
     _log("approve_loop 成员数: %s" % mem)
-    st = team_stats_any(_gw(leader_pid))
+    st = ZGUI.team_stats_topbar(_gw(leader_pid))
+    if st is None:
+        st = ZGUI._team_stats(_gw(leader_pid))
     _log("批准后 顶栏stats: %s" % (st,))
     if not st or st[0] < expect:
         _log("[fail] 未满 %d 人" % expect)
