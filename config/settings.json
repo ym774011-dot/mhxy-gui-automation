@@ -1,7 +1,7 @@
 {
   "window": {
-    "title": "鲜衣怒马 - 怀旧江南版 - (鲜衣怒马 - 然学[701529]) - 2026年08月10日 19:50:18",
-    "pid": 14956,
+    "title": "胖子西游- (二号美人[412646]) - 2026年09月02日 21:45:04 帧率60",
+    "pid": null,
     "input_mode": "background"
   },
   "recognition": {
@@ -18,7 +18,8 @@
   },
   "logging": {
     "level": "INFO",
-    "file_path": "logs/automation.log"
+    "file_path": "logs/automation.log",
+    "auto_clean_days": 7
   },
   "task_library": {
     "modules": [
@@ -119,14 +120,20 @@
         "category": "custom"
       },
       {
-        "name": "WORLD_BOSS",
-        "path": "E:/DS/mhxy-gui-automation/tasks/library/WORLD_BOSS.py",
+        "name": "BSHC",
+        "path": "E:\\DS\\mhxy-gui-automation\\tasks\\library\\BSHC.py",
         "enabled": true,
         "category": "custom"
       },
       {
-        "name": "BSHC",
-        "path": "E:\\DS\\mhxy-gui-automation\\tasks\\library\\BSHC.py",
+        "name": "ZGUI",
+        "path": "E:\\DS\\mhxy-gui-automation\\tasks\\library\\ZGUI.py",
+        "enabled": true,
+        "category": "custom"
+      },
+      {
+        "name": "PZXY-ZG",
+        "path": "E:\\DS\\mhxy-gui-automation\\tasks\\library\\PZXY-ZG.py",
         "enabled": true,
         "category": "custom"
       }
@@ -146,5 +153,33 @@
       600
     ],
     "auto_scale": true
+  },
+  "relogin": {
+    "enabled": false,
+    "interval_min": 180,
+    "client_path": "G:/00/十年一梦.exe",
+    "click_points": [
+      [
+        701,
+        550
+      ],
+      [
+        507,
+        420
+      ],
+      [
+        705,
+        549
+      ],
+      [
+        635,
+        284
+      ],
+      [
+        699,
+        571
+      ]
+    ],
+    "click_gap": 1.2
   }
 }

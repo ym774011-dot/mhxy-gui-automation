@@ -33,7 +33,10 @@ _MEM_FILE = os.path.join(_DATA_DIR, "brain_memory.json")
 # 经验 TTL（秒）：默认 7 天，超期自动老化（可被衰减/合并逻辑覆盖）
 _DEFAULT_TTL = 7 * 24 * 3600
 # 生效阈值（P1 坑位）：fail >= BLACK_FAIL_THRESHOLD 才正式拉黑
-BLACK_FAIL_THRESHOLD = 3
+# ★2026-09-01 判定修复：降到 2——现在只有"真坑"（gone/unreachable）才记账，
+#   no_battle_option 瞬时竞争已排除。同一坐标真坑连挂 2 次 = 地理障碍确信，
+#   无需等 3 次（旧 3 次 + 被锁污染 → 70 条里只有 1 条能达标，等于没黑名单）。
+BLACK_FAIL_THRESHOLD = 2
 # 成功抵消：成功 1 次抵消 fail_bad 次（防把"偶然失误"永久黑）
 BLACK_SUCCESS_OFFSET = 2
 # 每次衰减基数（P0 骨架保留接口，P1 起按场景真正使用）
@@ -263,29 +266,38 @@ class BrainMemory:
         except Exception:
             return []
 
-    def hot_weighted_pick(self, candidates: list, pool_avg: float = 12.0) -> str:
-        """P2 效率加权选图（2026-09-01）。
+    def hot_weighted_pick(self, candidates: list, pool_avg: float = None) -> str:
+        """P2 效率加权选图（2026-09-01 修复口径）。
 
         :param candidates: 候选地图名列表（调用方已排除当前图/近期图）
-        :param pool_avg: 无历史数据图的默认平均耗时（秒）——比已统计图“差一点”，
-                         让有记录的效率洼地图优先，无数据图次之（探索与利用兼顾）
+        :param pool_avg: 无历史数据图的默认平均耗时；None 时**实时取全池加权均值**
+                         （有数据图的历史均值 × 击杀数加权）——修复旧版写死 12s
+                         偏乐观导致"无数据新图被高估反复选中、热区图反而轮空"。
         :return: 选中地图名（保证返回 candidates 内某一张）
-        加权规则：avg_cost 越小分越高 → weight = 1/(avg_cost - 3)，avg_cost 取
-        hot 里该图历史均值，没有则用 pool_avg。用随机加权避免“永远选同一个图”。
+        加权规则：avg_cost 越小分越高 → weight = 1/(avg_cost - 2)。平均战间
+        受跨图/服务器竞争干扰大，图表口径保留但降权（见 *_洗手* 注释之外的说明）。
         """
         import random as _random
         if not candidates:
             return ""
+        # 实时全池均值：已有数据图按击杀数加权平均（样本越多越可信）
+        if pool_avg is None:
+            s_k, s_sum = 0, 0.0
+            for _n, _h in self._mem.get("hot", {}).items():
+                if isinstance(_h, dict) and int(_h.get("kills", 0)) > 0:
+                    s_k += int(_h["kills"])
+                    s_sum += float(_h.get("cost_sum", 0.0))
+            pool_avg = (s_sum / s_k) if s_k > 0 else 20.0
         ws, names = [], []
         for m in candidates:
             avg = pool_avg
             try:
                 h = self._mem.get("hot", {}).get(str(m))
-                if isinstance(h, dict) and int(h.get("kills", 0)) > 0:
+                if isinstance(h, dict) and int(h.get("kills", 0)) >= 3:
                     avg = float(h.get("cost_sum", 0.0)) / int(h["kills"])
             except Exception:
                 avg = pool_avg
-            # avg_cost 越小权重越高；3s 下限防除零
+            # avg_cost 越小权重越高；2s 下限防除零（修复：3→2 防小值过度扁平）
             w = 1.0 / max(0.5, avg - 2.0)
             ws.append(w)
             names.append(str(m))

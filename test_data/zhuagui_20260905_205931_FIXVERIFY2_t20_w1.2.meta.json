@@ -1,0 +1,16 @@
+{
+  "run_id": "20260905_205931",
+  "tag": "FIXVERIFY2",
+  "role": "二号美人",
+  "gateway": "http://127.0.0.1:18082",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 3.0,
+  "max_interval": 6.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-05T20:59:31+08:00",
+  "info": [
+    "网关(显式): http://127.0.0.1:18082",
+    "窗口: 角色=二号美人 pid=26224 hwnd=0x760852"
+  ]
+}

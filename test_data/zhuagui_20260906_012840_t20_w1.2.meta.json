@@ -1,0 +1,16 @@
+{
+  "run_id": "20260906_012840",
+  "tag": "",
+  "role": "这是猛男",
+  "gateway": "file://pzxy_p1704",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 15.0,
+  "max_interval": 30.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-06T01:28:40+08:00",
+  "info": [
+    "网关(显式): file://pzxy_p1704",
+    "窗口: 角色=这是猛男 pid=1704 hwnd=0xF07BA"
+  ]
+}

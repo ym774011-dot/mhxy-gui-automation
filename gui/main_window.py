@@ -21,6 +21,8 @@ self.config_panel`` 引用访问。
 """
 import os
 import sys
+import threading
+import time as _time
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import (
@@ -179,6 +181,15 @@ class MainWindow(QMainWindow):
         # 状态栏初始状态
         self._set_status_text("就绪")
 
+        # ★2026-09-01 定时重登：初始化定时器 + 重登线程状态
+        self._relogin_running = False
+        # 首次触发必须等满一个间隔（否则启用定时后 GUI 一启动就立刻重登）
+        self._relogin_last_ts = _time.time()
+        self._relogin_timer = QTimer(self)
+        self._relogin_timer.setInterval(30000)  # 每 30s 检查一次是否到期
+        self._relogin_timer.timeout.connect(self._on_relogin_tick)
+        self._relogin_timer.start()
+
         logger.info("主窗口初始化完成")
 
     # ==================================================================
@@ -326,6 +337,15 @@ class MainWindow(QMainWindow):
             "padding: 0 8px; color: #c0392b; font-weight: bold;"
         )
         toolbar.addWidget(self._window_status_label)
+
+        # ★2026-09-01 定时重登：立即触发一次重新登录（配置见【配置】页"定时重新登录"组）
+        toolbar.addSeparator()
+        relogin_action = QAction("🔄 定时重登", self)
+        relogin_action.setStatusTip(
+            "立即重新登录：杀旧客户端→启动新客户端→自动点击登录→恢复任务"
+        )
+        relogin_action.triggered.connect(self._on_relogin_now)
+        toolbar.addAction(relogin_action)
 
         # ★2026-08-25 多组：一键启动其他组 GUI（独立进程）
         toolbar.addSeparator()
@@ -528,6 +548,12 @@ class MainWindow(QMainWindow):
             lambda d: self.status_panel.set_quest_detail(**d)
         )
 
+        # ★2026-09-01 定时重登：配置面板"立即重新登录"按钮 → 主窗口执行
+        try:
+            self.config_panel.relogin_requested.connect(self._on_relogin_now)
+        except Exception as e:
+            logger.warning(f"连接重登信号失败: {e}")
+
         logger.info("已连接 task_engine 信号到主窗口槽函数")
 
     # ==================================================================
@@ -665,6 +691,106 @@ class MainWindow(QMainWindow):
             logger.error(f"启动组{target} GUI 失败: {e}")
             self._set_status_text(f"启动组{target}失败: {e}")
 
+    # ------------------------------------------------------------------
+    # 定时重登（2026-09-01）
+    # ------------------------------------------------------------------
+    def _on_relogin_now(self):
+        """立即/定时到点触发一次重新登录（防重入）。
+
+        流程（后台线程，不卡 UI）：
+            停任务 → core/relogin.relogin_client（杀进程→启客户端→等窗绑定→
+            点击登录→网关重连）→ 成功则自动恢复原任务。
+        """
+        if getattr(self, "_relogin_running", False):
+            logger.warning("重登已在进行中，忽略本次触发")
+            self._set_status_text("重登进行中…")
+            return
+
+        client_path = str(config.get("relogin.client_path", "")).strip()
+        if not client_path:
+            QMessageBox.warning(
+                self, "定时重登",
+                "未配置游戏客户端路径。\n请在【配置】页“定时重新登录”分组中"
+                "填写客户端 exe 路径（GUI 自定义窗口）。",
+            )
+            return
+
+        # 记录重登前的任务状态，以便成功后自动恢复
+        was_running = bool(getattr(task_engine, "is_running", False))
+        resume_sequence = self._get_current_task_sequence()
+        resume_seq_ok = resume_sequence is not None \
+            and bool(getattr(resume_sequence, "tasks", None))
+        # 停止当前任务（若有）
+        if was_running:
+            logger.info("重登前停止当前任务")
+            self._on_stop()
+
+        self._relogin_running = True
+        self._relogin_last_ts = _time.time()
+        self._set_status_text("重新登录中…")
+
+        points_raw = config.get("relogin.click_points", None) or []
+        click_gap = float(config.get("relogin.click_gap", 1.2) or 1.2)
+        points = [tuple(map(int, p)) for p in points_raw if isinstance(p, (list, tuple)) and len(p) == 2]
+
+        logger.info(
+            f"开始重新登录: client={client_path}, points={points}, gap={click_gap}"
+        )
+        self._set_status_text("重新登录中…（先进战斗保护队伍）")
+
+        def _worker():
+            try:
+                from core.relogin import relogin_client
+                ok, msg, new_pid = relogin_client(
+                    client_path, click_points=points, click_gap=click_gap)
+            except Exception as e:
+                ok, msg, new_pid = False, f"重登异常: {e}", 0
+            # 调度回主线程收尾（Qt UI 只能在主线程操作）
+            try:
+                QTimer.singleShot(
+                    0, lambda: self._relogin_done(
+                        ok, msg, new_pid, was_running, resume_sequence, resume_seq_ok))
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, name="relogin-worker", daemon=True).start()
+
+    def _relogin_done(self, ok: bool, msg: str, new_pid: int,
+                      was_running: bool, resume_sequence, resume_seq_ok: bool):
+        """重登收尾（主线程）：更新状态、提示，并尝试恢复原任务。"""
+        self._relogin_running = False
+        self._set_status_text("重登完成" if ok else "重登失败")
+        if ok:
+            logger.info(f"重登完成: {msg}")
+            self._set_status_text(f"重登完成 PID={new_pid}")
+            # 自动恢复原任务
+            if was_running and resume_seq_ok and resume_sequence is not None \
+                    and getattr(resume_sequence, "tasks", None):
+                try:
+                    task_engine.start(resume_sequence)
+                    logger.info("重登完成，已自动恢复任务运行")
+                    self._progress_label.setText("重登完成，任务已恢复运行")
+                except Exception as e:
+                    logger.error(f"重登后恢复任务失败: {e}")
+            QMessageBox.information(
+                self, "重新登录", f"重新登录完成。\n{msg}\n"
+                                  f"{'任务已自动恢复运行' if (was_running and resume_seq_ok) else ''}")
+        else:
+            logger.error(f"重登失败: {msg}")
+            QMessageBox.critical(self, "重新登录", f"重新登录失败：\n{msg}")
+
+    def _on_relogin_tick(self):
+        """定时器到点检查：启用定时且距上次重登超过间隔 → 触发。"""
+        if getattr(self, "_relogin_running", False):
+            return
+        if not bool(config.get("relogin.enabled", False)):
+            return
+        interval = int(config.get("relogin.interval_min", 180) or 180) * 60
+        if self._relogin_last_ts and (_time.time() - self._relogin_last_ts) < interval:
+            return
+        logger.info(f"定时重登触发（间隔 {interval // 60} 分钟）")
+        self._on_relogin_now()
+
     def _on_bind_window(self):
         """
         工具栏 -> 绑定窗口：弹出游戏窗口列表对话框，
@@ -680,11 +806,39 @@ class MainWindow(QMainWindow):
         # 绑定结果反馈（对话框内已处理，这里只刷新工具栏状态标签）
         self._update_window_status()
         if window_manager.bound:
+            pid = window_manager.pid
             logger.info(
-                f"窗口绑定成功: pid={window_manager.pid}, "
+                f"窗口绑定成功: pid={pid}, "
                 f"hwnd=0x{window_manager.hwnd:X}, "
                 f"title={window_manager.window_title!r}"
             )
+            # ★2026-09-03 绑定即换绑网关：窗口重新绑定（游戏重开/换号/切组）后
+            # 网关仍 attach 旧 PID，徽章会一直"⚠pid不匹配"，直到下次任务运行才自愈。
+            # 这里立即在后台把网关换绑到新 PID，徽章自动变"●在线"。
+            self._sync_gateway_to_bound(pid)
+
+    def _sync_gateway_to_bound(self, pid):
+        """后台把网关换绑到指定游戏 PID（幂等，不阻塞 UI）。
+
+        ensure_gateway 在线且匹配 → 秒回 reuse；在线但不匹配 → 优雅杀旧网关
+        重新 attach 新 PID（约 1-2s）；完成后回主线程刷新网关徽章。
+        """
+        import threading as _th
+
+        def _run():
+            try:
+                from core.gateway_guard import ensure_gateway
+                ok, info = ensure_gateway(pid=pid, timeout=30.0)
+                logger.info(f"绑定后网关同步: {ok} {info}")
+            except Exception as e:
+                logger.warning(f"绑定后网关同步异常: {e}")
+            finally:
+                try:
+                    QTimer.singleShot(0, self._refresh_gateway_badge)
+                except Exception:
+                    pass
+
+        _th.Thread(target=_run, daemon=True).start()
 
     def _update_window_status(self):
         """

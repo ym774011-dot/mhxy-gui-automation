@@ -1,0 +1,6 @@
+{"ts": "2026-09-04T00:14:46", "round": 1, "role": "二号美人", "target": "", "count": "", "map": "五庄观", "ok": true, "msg": "抓鬼完成(任务栏已清空)", "dur": 25.55, "fail_kind": "", "prev_count": 0, "count_delta": null}
+{"ts": "2026-09-04T00:15:19", "round": 2, "role": "二号美人", "target": "", "count": "", "map": "女儿村", "ok": true, "msg": "抓鬼完成(任务栏已清空)", "dur": 30.36, "fail_kind": "", "prev_count": 0, "count_delta": null}
+{"ts": "2026-09-04T00:15:37", "round": 3, "role": "二号美人", "target": "", "count": "", "map": "?", "ok": false, "msg": "任务未就绪（接任务/瞬移失败）", "dur": 16.37, "fail_kind": "task", "prev_count": 0, "count_delta": null}
+{"ts": "2026-09-04T00:15:54", "round": 4, "role": "二号美人", "target": "", "count": "", "map": "?", "ok": false, "msg": "任务未就绪（接任务/瞬移失败）", "dur": 13.4, "fail_kind": "task", "prev_count": 0, "count_delta": null}
+{"ts": "2026-09-04T00:16:20", "round": 5, "role": "二号美人", "target": "", "count": "", "map": "?", "ok": false, "msg": "任务未就绪（接任务/瞬移失败）", "dur": 13.18, "fail_kind": "task", "prev_count": 0, "count_delta": null}
+{"ts": "2026-09-04T00:16:44", "round": 6, "role": "二号美人", "target": "", "count": "", "map": "?", "ok": false, "msg": "任务未就绪（接任务/瞬移失败）", "dur": 12.8, "fail_kind": "task", "prev_count": 0, "count_delta": null}

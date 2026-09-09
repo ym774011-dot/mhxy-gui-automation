@@ -214,13 +214,13 @@ def _is_game_process(pid: int) -> bool:
     psu = _psutil()
     if psu is not None:
         try:
-            return any(k in psu.Process(pid).name() for k in ("十年一梦", "快乐西游", "mhxy"))
+            return any(k in psu.Process(pid).name() for k in ("十年一梦", "快乐西游", "mhxy", "胖子西游"))
         except Exception:
             return False
     try:
         out = subprocess.check_output(
             f"tasklist /FI \"PID eq {pid}\" /FO CSV", shell=True).decode("gbk", "ignore")
-        return any(k in out for k in ("十年一梦", "快乐西游")) or ("mhxy" in out.lower())
+        return any(k in out for k in ("十年一梦", "快乐西游", "胖子西游")) or ("mhxy" in out.lower())
     except Exception:
         return False
 

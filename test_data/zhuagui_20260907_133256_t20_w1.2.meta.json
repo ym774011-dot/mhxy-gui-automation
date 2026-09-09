@@ -1,0 +1,17 @@
+{
+  "run_id": "20260907_133256",
+  "tag": "",
+  "role": "二号美人",
+  "gateway": "file://pzxy_p13752",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 15.0,
+  "max_interval": 30.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-07T13:32:56+08:00",
+  "info": [
+    "网关(显式): file://pzxy_p13752",
+    "窗口: 角色=二号美人 pid=13752 hwnd=0xE0500",
+    "警告: ZGUI.get_hwnd()=0xA05BA 与角色窗口不一致（多开时请确认）"
+  ]
+}

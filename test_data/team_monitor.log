@@ -1,0 +1,274 @@
+19:51:20 === 组队监视启动 pid=[7732, 3916, 11568, 18908, 18736] ===
+19:51:20 p7732 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:51:20 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_195120.png
+19:51:20 p3916 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:51:20 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_195120.png
+19:51:21 p11568 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:51:21 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_195121.png
+19:51:21 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:51:21 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195121.png
+19:51:21 p18736 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:51:21 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_195121.png
+19:52:22 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=true | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:22 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195222.png
+19:52:24 p7732 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:24 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_195224.png
+19:52:24 p3916 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:25 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_195225.png
+19:52:25 p11568 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:25 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_195225.png
+19:52:25 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:25 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195225.png
+19:52:25 p18736 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:25 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_195225.png
+19:52:27 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:28 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195227.png
+19:52:48 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:48 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195248.png
+19:52:52 p3916 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:52 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_195252.png
+19:52:52 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:52 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195252.png
+19:52:54 p7732 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:54 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_195254.png
+19:52:55 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:55 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195255.png
+19:52:58 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:58 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195258.png
+19:52:58 p18736 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:52:58 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_195258.png
+19:53:00 p11568 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:00 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_195300.png
+19:53:00 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:00 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195300.png
+19:53:02 p7732 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:02 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_195302.png
+19:53:02 p3916 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:02 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_195302.png
+19:53:02 p11568 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:03 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_195302.png
+19:53:03 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=true | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:03 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195303.png
+19:53:03 p18736 变更: map=女儿村 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:03 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_195303.png
+19:53:05 p18908 变更: map=女儿村 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:53:05 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195305.png
+19:55:32 p7732 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:32 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_195532.png
+19:55:33 p3916 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:33 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_195533.png
+19:55:33 p11568 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:33 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_195533.png
+19:55:33 p18908 变更: map=长安城 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:33 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195533.png
+19:55:33 p18736 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:33 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_195533.png
+19:55:35 p7732 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:35 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_195535.png
+19:55:36 p3916 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:36 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_195536.png
+19:55:36 p11568 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:36 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_195536.png
+19:55:36 p18908 变更: map=江南野外 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:36 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195536.png
+19:55:36 p18736 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:55:37 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_195537.png
+19:57:16 p7732 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:57:16 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_195716.png
+19:57:17 p3916 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:57:17 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_195717.png
+19:57:17 p11568 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:57:17 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_195717.png
+19:57:17 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:57:17 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195717.png
+19:57:17 p18736 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:57:17 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_195717.png
+19:59:19 p18908 变更: 
+19:59:19 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195919.png
+19:59:21 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+19:59:21 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_195921.png
+20:02:12 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=true | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:02:12 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_200212.png
+20:02:15 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:02:15 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_200215.png
+20:02:17 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=true | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:02:18 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_200218.png
+20:06:14 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:14 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_200614.png
+20:06:16 p3916 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:16 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_200616.png
+20:06:16 p11568 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:16 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_200616.png
+20:06:17 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:17 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_200617.png
+20:06:17 p18736 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:17 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_200617.png
+20:06:18 p7732 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:18 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_200618.png
+20:06:19 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{一号美人|412645|145|||,} 3:{这是猛男|412649|145|||,} 4:{这是帅哥|412648|145|||,} 5:{三号美人|412647|145|||,}} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:19 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_200619.png
+20:06:40 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:06:40 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_200640.png
+20:08:27 p18736 变更: 
+20:08:32 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_200827.png
+20:08:37 p18736 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=错误的数据源5007 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:08:37 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_200837.png
+20:10:44 p11568 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:10:44 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201044.png
+20:10:44 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:10:44 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201044.png
+20:10:46 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:10:46 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201046.png
+20:10:46 p18736 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:10:46 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201046.png
+20:10:48 p7732 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:10:48 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201048.png
+20:10:48 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:10:48 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201048.png
+20:11:09 p3916 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:11:09 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201109.png
+20:11:10 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=true | 阵型=普通 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:11:10 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201110.png
+20:11:13 p7732 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:11:14 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201113.png
+20:11:14 p3916 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:11:14 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201114.png
+20:11:14 p11568 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:11:14 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201114.png
+20:11:14 p18908 变更: map=朱紫国 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:11:14 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201114.png
+20:11:15 p18736 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:11:15 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201115.png
+20:14:47 p11568 变更: 
+20:14:47 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201447.png
+20:14:49 p11568 变更: map=朱紫国 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:14:49 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201449.png
+20:16:20 p7732 变更: 
+20:16:20 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201620.png
+20:16:25 p18736 变更: 
+20:16:25 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201625.png
+20:16:26 p7732 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:27 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201626.png
+20:16:27 p3916 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:27 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201627.png
+20:16:27 p11568 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:27 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201627.png
+20:16:27 p18908 变更: map=长安城 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:27 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201627.png
+20:16:27 p18736 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:28 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201627.png
+20:16:40 p7732 变更: map=建邺城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:40 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201640.png
+20:16:40 p3916 变更: map=建邺城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:40 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201640.png
+20:16:40 p11568 变更: map=建邺城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:40 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201640.png
+20:16:41 p18908 变更: map=建邺城 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:41 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201641.png
+20:16:41 p18736 变更: map=建邺城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:41 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201641.png
+20:16:51 p18908 变更: 
+20:16:51 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201651.png
+20:16:53 p18908 变更: map=建邺城 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:16:53 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201653.png
+20:17:19 p18908 变更: 
+20:17:19 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201719.png
+20:17:19 p18736 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:19 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201719.png
+20:17:21 p7732 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:21 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201721.png
+20:17:21 p3916 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:21 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201721.png
+20:17:21 p11568 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:22 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201721.png
+20:17:22 p18908 变更: map=长安城 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:22 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201722.png
+20:17:33 p7732 变更: map=普陀山 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:33 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201733.png
+20:17:33 p3916 变更: map=普陀山 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:33 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201733.png
+20:17:33 p11568 变更: map=普陀山 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:33 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201733.png
+20:17:34 p18908 变更: map=普陀山 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:34 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201734.png
+20:17:34 p18736 变更: map=普陀山 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:34 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201734.png
+20:17:42 p18908 变更: 
+20:17:42 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201742.png
+20:17:44 p18908 变更: map=普陀山 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:17:44 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201744.png
+20:18:05 p18908 变更: 
+20:18:05 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201805.png
+20:18:05 p18736 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:05 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201805.png
+20:18:07 p7732 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:07 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201807.png
+20:18:07 p3916 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:07 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201807.png
+20:18:07 p11568 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:08 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201807.png
+20:18:08 p18908 变更: map=长安城 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:08 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201808.png
+20:18:18 p7732 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:18 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201818.png
+20:18:18 p3916 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:18 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201818.png
+20:18:18 p11568 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:19 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201818.png
+20:18:19 p18908 变更: map=江南野外 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:19 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201819.png
+20:18:19 p18736 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:19 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201819.png
+20:18:56 p11568 变更: 
+20:18:56 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201856.png
+20:18:58 p11568 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:18:58 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201858.png
+20:19:06 p7732 变更: 
+20:19:06 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201906.png
+20:19:08 p7732 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:08 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201908.png
+20:19:14 p3916 变更: 
+20:19:15 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201914.png
+20:19:17 p3916 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:17 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201917.png
+20:19:42 p7732 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:42 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201942.png
+20:19:42 p3916 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:42 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201942.png
+20:19:43 p11568 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:43 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_201943.png
+20:19:43 p18908 变更: map=长安城 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:43 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201943.png
+20:19:43 p18736 变更: map=长安城 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:43 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201943.png
+20:19:57 p18908 变更: 
+20:19:57 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_201957.png
+20:19:57 p18736 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17474270 | [46]可=nil,状=2,join=0,文=table: 0x1a794488 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:57 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_201957.png
+20:19:59 p7732 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x1729f310 | [46]可=nil,状=2,join=0,文=table: 0x1a5a7160 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:59 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_201959.png
+20:19:59 p3916 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17424e28 | [46]可=nil,状=2,join=0,文=table: 0x1a735c78 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:19:59 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_201959.png
+20:20:00 p11568 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:20:00 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_202000.png
+20:20:00 p18908 变更: map=江南野外 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:20:00 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_202000.png
+20:20:10 p11568 变更: 
+20:20:10 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_202010.png
+20:20:20 p18908 变更: 
+20:20:20 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_202020.png
+20:20:22 p11568 变更: map=江南野外 | 队伍数据={} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x181db458 | [46]可=nil,状=2,join=0,文=table: 0x1a553fb8 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:20:22 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_202022.png
+20:20:23 p18908 变更: map=江南野外 | 队伍数据={1:{二号美人|412646|145||true|,} 2:{三号美人|412647|145|||,} 3:{这是帅哥|412648|145|||,} 4:{这是猛男|412649|145|||,} 5:{一号美人|412645|145|||,}} | p7开关=false | 阵型=天覆阵 | 申请列表=nil | [13]可=false,状=1,join=0,文=table: 0x17429290 | [46]可=nil,状=2,join=0,文=table: 0x1a721100 | [36]可=nil,状=,join=,文=ggeFont | [40]可=nil,状=,join=,文=ggeFontggeFont | [41]可=nil,状=,join=,文=ggeFontggeFont
+20:20:23 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_202023.png
+20:20:50 p7732 变更: 
+20:20:50 p7732 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p7732_202050.png
+20:20:50 p3916 变更: 
+20:20:50 p3916 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p3916_202050.png
+20:20:50 p11568 变更: 
+20:20:51 p11568 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p11568_202050.png
+20:20:51 p18908 变更: 
+20:20:51 p18908 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18908_202051.png
+20:20:51 p18736 变更: 
+20:20:51 p18736 截图: E:\DS\mhxy-gui-automation\test_data\team_evt_p18736_202051.png
+20:31:21 === 组队监视结束 ===

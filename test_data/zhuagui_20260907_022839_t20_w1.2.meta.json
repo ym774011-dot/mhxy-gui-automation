@@ -1,0 +1,16 @@
+{
+  "run_id": "20260907_022839",
+  "tag": "",
+  "role": "二号美人",
+  "gateway": "file://pzxy_p7976",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 15.0,
+  "max_interval": 30.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-07T02:28:39+08:00",
+  "info": [
+    "网关(显式): file://pzxy_p7976",
+    "窗口: 角色=二号美人 pid=7976 hwnd=0x170092"
+  ]
+}

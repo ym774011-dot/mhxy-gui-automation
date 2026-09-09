@@ -1,0 +1,17 @@
+{
+  "run_id": "20260907_001245",
+  "tag": "",
+  "role": "二号美人",
+  "gateway": "file://pzxy_p12928",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 15.0,
+  "max_interval": 30.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-07T00:12:45+08:00",
+  "info": [
+    "网关(显式): file://pzxy_p12928",
+    "窗口: 角色=二号美人 pid=12928 hwnd=0x60AB4",
+    "警告: ZGUI.get_hwnd()=0x80BCA 与角色窗口不一致（多开时请确认）"
+  ]
+}

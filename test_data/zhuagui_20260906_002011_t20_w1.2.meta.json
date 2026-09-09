@@ -1,0 +1,16 @@
+{
+  "run_id": "20260906_002011",
+  "tag": "",
+  "role": "二号美人",
+  "gateway": "file://pzxy",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 15.0,
+  "max_interval": 30.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-06T00:20:11+08:00",
+  "info": [
+    "网关(显式): file://pzxy",
+    "警告: 未找到角色 二号美人 的窗口（网关可能已绑到别的窗口）"
+  ]
+}

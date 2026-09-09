@@ -1077,6 +1077,18 @@ class TaskEngine(ClickMixin, YoloMixin, SwitchMixin, QObject):
         except (TypeError, ValueError) as e:
             return False, f"鼠标点击参数非法: {e}"
 
+        # ★2026-09-03 柔和化（防掉线）：固定坐标点击加随机偏移，
+        # 避免每轮循环点击同一像素被反外挂识别为脚本。
+        # 事件参数 jitter_x / jitter_y（像素），缺省 0 = 不偏移。
+        try:
+            _jx = abs(int(params.get("jitter_x", 0) or 0))
+            _jy = abs(int(params.get("jitter_y", 0) or 0))
+            if _jx or _jy:
+                x = x + random.randint(-_jx, _jx)
+                y = y + random.randint(-_jy, _jy)
+        except Exception:
+            pass
+
         # 使用统一的 _do_click 方法
         # 2026-08-18 点击验证：params.verify=true 时用像素颜色对比确认点击生效，
         # 未变自动重试（GUI 事件编辑器"点击验证"组配置）。双击场景不验证。

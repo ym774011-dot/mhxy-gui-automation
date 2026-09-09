@@ -134,17 +134,17 @@
       "updated_at": "2026-08-26 19:02:43"
     },
     {
-      "id": "37159b5b-bd0c-4dc3-9291-9d448998ed7a",
-      "name": "刷图",
-      "description": "WORLD_BOSS 世界BOSS/活动怪完整 farm 一轮：验证码门 → 30 分钟一轮 farm（公告→跨图→走路→CALL 进战斗），无限循环直到点停止",
+      "id": "c169fa80-7f93-44ee-af31-910e1ff81f40",
+      "name": "抓鬼",
+      "description": "",
       "events": [
         {
-          "id": "005db405-8398-47bd-b6ed-6306df94e3e5",
-          "name": "验证码门",
+          "id": "41b56b4d-7155-47ba-b165-4693a83e3af5",
+          "name": "胖子西游抓鬼",
           "event_type": "function",
           "params": {
-            "module": "WORLD_BOSS",
-            "function": "WORLD_BOSS_captcha_gate",
+            "module": "PZXY-ZG",
+            "function": "zhuagui_run",
             "args": [],
             "kwargs": {},
             "auto_wait_arrival": false,
@@ -161,52 +161,12 @@
           "retry_interval": 1.0,
           "enabled": true,
           "var_name": "函数调用1"
-        },
-        {
-          "id": "7c2d94e1-a56b-4f38-8f2d-63a90b17e4c2",
-          "name": "一轮farm",
-          "event_type": "function",
-          "params": {
-            "module": "WORLD_BOSS",
-            "function": "WORLD_BOSS_auto_farm",
-            "args": [],
-            "kwargs": {
-              "max_runtime": 1800,
-              "boss_scan_interval": 3.0,
-              "xiang_enabled": true,
-              "xiang_interval_min": 300,
-              "verbose": true
-            },
-            "auto_wait_arrival": false,
-            "wait_arrival_timeout": 0.0,
-            "wait_arrival_tolerance": 3.0,
-            "wait_arrival_stop_confirm_s": 1.0,
-            "wait_arrival_sample_interval": 0.2,
-            "wait_arrival_retries": 3
-          },
-          "pre_delay": 0.0,
-          "post_delay": 2.0,
-          "on_error": "skip",
-          "max_retries": 1,
-          "retry_interval": 1.0,
-          "enabled": true,
-          "var_name": "函数调用2"
         }
       ],
       "loop_count": 0,
-      "loop_delay": 1.0,
-      "created_at": "2026-08-27 20:16:12",
-      "updated_at": "2026-08-27 20:30:00"
-    },
-    {
-      "id": "c169fa80-7f93-44ee-af31-910e1ff81f40",
-      "name": "任务 4",
-      "description": "",
-      "events": [],
-      "loop_count": 1,
-      "loop_delay": 1.0,
+      "loop_delay": 0.5,
       "created_at": "2026-08-29 11:24:44",
-      "updated_at": "2026-08-29 11:24:44"
+      "updated_at": "2026-09-03 23:57:47"
     }
   ],
   "current_task_index": 0,
