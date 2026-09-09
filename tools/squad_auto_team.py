@@ -375,7 +375,7 @@ def _read_map(gw):
 
 
 def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
-                        leader_pid=None):
+                        leader_pid=None, verify_join=False):
     """队员上线/归队：与队长同图 → 靠近队长 → 反复点队长身体申请。
 
     tp_first=False 跳过传送（GUI 并行流程阶段1 已统一传送）。
@@ -441,7 +441,33 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
         time.sleep(random.uniform(6, 9))
     _log("p%d: 申请轮次结束（%s）" % (member_pid, "已申请，等待队长批准"
                                      if applied else "未发出申请"))
-    return applied
+    # ★2026-09-10 归队闭环确认（仅重登归队路径开启）：
+    #   初始组队里队长批准在 approve_loop 统一裁决，成员线程若在此等待会与
+    #   批准流程互锁（批准要等成员线程 join 后才开始）→ 默认关闭。
+    if not applied:
+        return False
+    if verify_join:
+        return _wait_joined(member_pid, timeout=90.0)
+    return True
+
+
+def _wait_joined(member_pid, timeout=90.0, poll=5.0):
+    """队员侧闭环确认：自身顶栏出现队伍（成员数>=1 且队长名非空）才算入队。
+
+    ★2026-09-10 方案A 第二批：此前"点过身体"即算归队成功，服务器是否批准
+      无人验证——可能出现"申请未生效却标已归队并拉起出售脚本"。队员自己的
+      顶栏（tp.窗口.人物框.队伍数据）是实时渲染，零点击可判。
+    """
+    gw = _gw(member_pid)
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        st = ZGUI.team_stats_topbar(gw)
+        if st and st[0] >= 1 and bool(st[2]):
+            _log("p%d: 归队确认 ✓ 顶栏 %s 人 队长=%s" % (member_pid, st[0], st[2]))
+            return True
+        time.sleep(poll)
+    _log("p%d: 归队未确认（%.0fs 内顶栏无队伍）" % (member_pid, timeout))
+    return False
 
 
 def approve_open_panel(leader_pid):

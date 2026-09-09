@@ -363,19 +363,25 @@ def _hygiene_scan(managed_pids, log=None):
             continue
         if any(now - mt < _IPC_STALE_S for _p, mt in files):
             continue
+        if proc_alive(pid):
+            continue      # ★进程仍活着（如独立编排器的 worker）：绝不删
         for p, _mt in files:
             try:
                 os.remove(p)
                 cleaned += 1
             except OSError:
                 pass
-    lp = os.path.join(ROOT, "logs", "automation.log")
-    try:
-        if os.path.getsize(lp) > _LOG_ROTATE_BYTES:
-            os.replace(lp, lp + ".bak")
-            rotated += 1
-    except OSError:
-        pass
+    # ★2026-09-10 修正：GUI 自身日志是 ROOT/pp_gui.log（原只轮转
+    #   logs/automation.log，而后者未必是 GUI 在写）→ 两个都轮转。
+    for lp, limit in ((os.path.join(ROOT, "pp_gui.log"), _LOG_ROTATE_BYTES),
+                      (os.path.join(ROOT, "logs", "automation.log"),
+                       _LOG_ROTATE_BYTES)):
+        try:
+            if os.path.getsize(lp) > limit:
+                os.replace(lp, lp + ".bak")
+                rotated += 1
+        except OSError:
+            pass
     if log and (cleaned or rotated):
         log("[卫生] 清理旧 IPC 文件 %d 个，日志轮转 %d 个" % (cleaned, rotated))
     return cleaned, rotated
@@ -396,6 +402,12 @@ class Instance:
         self.status = status
         self.title = title
         self.note = ""
+        # ★2026-09-10 失败终态记账（方案A 第二批）：此前 S_PLANT/S_LAUNCH/
+        #   S_RESTART 被监控无条件跳过，播种 11 连败/120s 无窗口/路径失效后
+        #   永久悬死。fail_at>0 表示已进失败终态，由监控按退避重走重启闭环。
+        self.fail_at = 0.0
+        self.fail_reason = ""
+        self.retry_count = 0
         # PID 绑定的异步流程必须携带此代际；收养/重启换绑时使旧流程失效。
         self.generation = 0
 
@@ -433,6 +445,7 @@ class PPApp(tk.Tk):
         self._watch_interrupted = False   # 当前处于"缺员已打断抓鬼"状态
         self._reteam_running = False
         self._watch_started = False
+        self._restarting = set()      # 正在跑 _restart_flow 的 pid（防重复重启）
         # ★2026-09-09 方案A：残留自洁循环（IPC 死文件 + 大日志轮转）
         threading.Thread(target=self._hygiene_loop, daemon=True,
                          name="hygiene").start()
@@ -680,6 +693,7 @@ class PPApp(tk.Tk):
                         self._after_login(inst)
                         return
         inst.status, inst.note = S_LAUNCH, "120s 未见到窗口"
+        self._mark_failed(inst, "120s 未见到窗口")
 
     def _do_plant(self, inst, hwnd):
         inst.status, inst.note = S_PLANT, ""
@@ -708,6 +722,7 @@ class PPApp(tk.Tk):
             if attempt > 11:
                 self._log("p%d 播种连续 11 次失败，放弃（保持登录界面，等掉线闭环重启）"
                           % inst.pid)
+                self._mark_failed(inst, "播种连续 11 次失败")
                 break
             rearm = time.time() + 60
             while time.time() < rearm:
@@ -767,6 +782,31 @@ class PPApp(tk.Tk):
         """确认异步流程仍绑定同一 PID/代际，避免旧流程回写状态。"""
         with self.lock:
             return inst.pid == pid and inst.generation == generation
+
+    def _mark_failed(self, inst, reason):
+        """把实例打进失败终态（播种连败/120s 无窗口/路径失效等死点）。
+
+        此前这些出口只改 status/note 就返回，而监控对 S_PLANT/S_LAUNCH/
+        S_RESTART 无条件 continue → 永久悬死。打标记后由 _retry_failed
+        按指数退避重走重启闭环。
+        """
+        inst.fail_at = time.time()
+        inst.fail_reason = reason
+        inst.note = "%s（等待自动重试）" % reason
+
+    def _retry_failed(self, inst):
+        """失败终态兜底：到点就重走重启闭环，退避 2/4/8/16 分钟（上限 15min）。"""
+        if not getattr(inst, "fail_at", 0.0):
+            return False
+        delay = min(120.0 * (2 ** min(getattr(inst, "retry_count", 0), 3)), 900.0)
+        if time.time() - inst.fail_at < delay:
+            return False
+        inst.retry_count = getattr(inst, "retry_count", 0) + 1
+        reason = inst.fail_reason or inst.note or inst.status
+        self._log("[兜底] p%d 卡在失败态（%s）已 %.0fs → 第%d次重走重启闭环"
+                  % (inst.pid, reason, time.time() - inst.fail_at, inst.retry_count))
+        self._begin_restart(inst)
+        return True
 
     def _is_rejoining(self, inst):
         """该实例是否正在归队流程中（按 pid+generation 精确匹配）。
@@ -839,9 +879,11 @@ class PPApp(tk.Tk):
                 self._log("p%d 收到队长联动 → 传送+申请归队" % inst.pid)
                 # ★2026-09-09 交叉QA 阻塞项修复：以 member_tp_and_apply 真实
                 #   返回（是否真的发出申请）为准，禁止无条件 success=True
+                #   返回（申请已真实发出 + 归队闭环确认）为准；verify_join=True
+                #   走队员自身顶栏确认（服务器是否批准），禁止无条件 success。
                 success = bool(sat.member_tp_and_apply(
                     pid, link["cap_world"], tries=3,
-                    tp_first=True, leader_pid=_lp))
+                    tp_first=True, leader_pid=_lp, verify_join=True))
         except Exception as e:
             self._log("p%d 归队异常: %s" % (pid, e))
         finally:
@@ -1585,8 +1627,17 @@ class PPApp(tk.Tk):
                           % (inst.pid, inst.status))
                 self._begin_restart(inst)
                 continue
-            if inst.status in (S_LAUNCH, S_PLANT, S_RESTART, S_TEAM):
+            if inst.status in (S_LAUNCH, S_PLANT, S_RESTART):
+                # ★2026-09-10 失败终态兜底：异步流程自己还在跑就交还它；
+                #   已进失败终态（_mark_failed）或重启线程已消失 → 退避重启。
+                if self._retry_failed(inst):
+                    continue
+                if inst.status == S_RESTART and inst.pid not in self._restarting:
+                    self._mark_failed(inst, "重启流程异常退出")
+                    continue
                 continue  # 由各自的异步流程负责
+            if inst.status == S_TEAM:
+                continue  # 组队/归队由异步流程负责
             w = wins.get(inst.pid)
             logged = bool(w and LOGGED_IN_RE.search(w[2]))
             if inst.status == S_WAIT:
@@ -1651,6 +1702,8 @@ class PPApp(tk.Tk):
     def _begin_restart(self, inst):
         inst.status = S_RESTART
         inst.note = "掉线重启中"
+        inst.fail_at = 0.0            # 进入重启闭环即清失败标记（防重复记账）
+        inst.fail_reason = ""
         # 重启即清该实例的 tp 健康状态（失败计数 + 上次抽检时刻），新 PID 从零计时
         self._tp_fail.pop(inst.pid, None)
         self._tp_last_check.pop(inst.pid, None)
@@ -1658,7 +1711,16 @@ class PPApp(tk.Tk):
         #   队员不再接受旧（可能已死的）队长发布的 link，原地等有效新信号。
         if inst.role == "leader":
             self._revoke_link()
-        threading.Thread(target=self._restart_flow, args=(inst,), daemon=True).start()
+        pid0 = inst.pid
+        self._restarting.add(pid0)
+
+        def _run():
+            try:
+                self._restart_flow(inst)
+            finally:
+                self._restarting.discard(pid0)
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def _revoke_link(self):
         """撤销队长联动信号（队长掉线/重启时调用）。失败不阻断重启。"""
