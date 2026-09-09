@@ -179,9 +179,7 @@ def prep_leader(leader_pid):
     #   旧代码无条件传送：GUI 阶段1 已传过一次，这里又传 = 队长连传两次
     #   （12:55 实锤）；补组重试轮人本来就在锚点也会白传一次。
     pos0 = read_pos_closed(lhwnd, lw)
-    if (pos0 is not None
-            and abs(CAP_TARGET[0] - pos0[0]) <= 60
-            and abs(CAP_TARGET[1] - pos0[1]) <= 60):
+    if _at_anchor(pos0):
         _log("队长已在锚点附近 %s，跳过传送直接就位" % (pos0,))
         return pos0
     pos = None
@@ -236,9 +234,7 @@ def prep_leader(leader_pid):
                     break
             else:
                 stuck = 0
-        if (pos is not None
-                and abs(CAP_TARGET[0] - pos[0]) <= 60
-                and abs(CAP_TARGET[1] - pos[1]) <= 60):
+        if _at_anchor(pos):
             _log("队长已就位: %s（目标 %s，±3 格容差）" % (pos, CAP_TARGET))
             return pos
         _log("[warn] 第%d轮走位未到锚点（pos=%s）→ 重传送再来" % (attempt, pos))
@@ -295,7 +291,7 @@ def create_team(leader_pid, cap_world, tries=3):
                 _log("建队第%d次：读不到自身坐标，等 2s 重试" % (k + 1))
                 time.sleep(2.0)
                 continue
-            if abs(cap_world[0] - self_xy[0]) <= 60 and abs(cap_world[1] - self_xy[1]) <= 60:
+            if _at_anchor(self_xy, cap_world):
                 break
             off = ZGUI._screen_offset_xy(lw)
             if off is None:
@@ -336,11 +332,29 @@ def create_team(leader_pid, cap_world, tries=3):
     return False
 
 
+def _at_anchor(pos, target=CAP_TARGET, tol=60.0):
+    """世界坐标是否落在锚点 ±tol 内（tol=60px≈3 格容差）。
+
+    ★2026-09-09 去重：prep_leader/create_team 原有 3 处同款判据。
+    """
+    return (pos is not None
+            and abs(target[0] - pos[0]) <= tol
+            and abs(target[1] - pos[1]) <= tol)
+
+
+def team_stats_any(gw):
+    """队伍统计：顶栏实时优先，通道失败退 p7 面板数据（懒加载快照仅兜底）。
+
+    ★2026-09-09 去重：此前 5 处同款"先顶栏 None 再面板"两连读。
+    """
+    st = ZGUI.team_stats_topbar(gw)
+    return st if st is not None else ZGUI._team_stats(gw)
+
+
 def _read_map(gw):
     """读当前地图名（联动归队用）；读不到返回 None。"""
     try:
-        return ZGUI._lua_call(gw, r'''local m=tp.地图
-__out=tostring(m and m.地图名称 or "")''')
+        return ZGUI._read_map_name(gw)
     except Exception:
         return None
 
@@ -453,9 +467,7 @@ def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=2.0):
     last_mem = -1
 
     def _topbar_mem():
-        st = ZGUI.team_stats_topbar(_gw(leader_pid))
-        if st is None:
-            st = ZGUI._team_stats(_gw(leader_pid))
+        st = team_stats_any(_gw(leader_pid))
         return st[0] if st else -1
 
     while time.time() - t0 < timeout_s:
@@ -513,9 +525,7 @@ def auto_team(leader_pid, member_pids, expect_members=None, dest=TP_DEST):
         time.sleep(2.0)
     mem = approve_loop(leader_pid, expect, timeout_s=300.0)
     _log("approve_loop 成员数: %s" % mem)
-    st = ZGUI.team_stats_topbar(_gw(leader_pid))
-    if st is None:
-        st = ZGUI._team_stats(_gw(leader_pid))
+    st = team_stats_any(_gw(leader_pid))
     _log("批准后 顶栏stats: %s" % (st,))
     if not st or st[0] < expect:
         _log("[fail] 未满 %d 人" % expect)

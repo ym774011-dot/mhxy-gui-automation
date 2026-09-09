@@ -690,16 +690,6 @@ class PPApp(tk.Tk):
         threading.Thread(target=self._rejoin_flow,
                          args=(inst,), daemon=True).start()
 
-    def _find_cap_world(self):
-        """从在线队长客户端读队长世界坐标（★read_pos_closed 保证面板关闭）。"""
-        with self.lock:
-            leaders = [i for i in self.instances
-                       if i.role == "leader" and i.status == S_ONLINE]
-        if not leaders:
-            return None
-        return sat.read_pos_closed(find_hwnd_by_pid(leaders[0].pid),
-                                   "file://pzxy_p%d" % leaders[0].pid)
-
     def _rejoin_flow(self, inst):
         try:
             if self.paused:
@@ -779,9 +769,7 @@ class PPApp(tk.Tk):
             #   任务（重复组队会白传送/点面板，还对在队成员传送无效）。
             if leader is not None:
                 lw = "file://pzxy_p%d" % leader.pid
-                st = ZGUI.team_stats_topbar(lw)
-                if st is None:
-                    st = ZGUI._team_stats(lw)
+                st = self._team_stats_any(lw)
                 mem = st[0] if st else -1
                 if mem >= len(insts):
                     self._log("[autoTeam] Lua 队伍读数 %d/%d 已满员 → 跳过组队，直接执行任务"
@@ -1032,6 +1020,11 @@ class PPApp(tk.Tk):
             return ("未到齐：%s（队伍 %s/%s）——请先完成组队或确认队友在线"
                     % ("、".join(missing), mem if mem >= 0 else "?", expect))
         return None
+
+    def _team_stats_any(self, lw):
+        """★2026-09-09 去重：队伍统计 顶栏实时优先 → p7 面板快照兜底。"""
+        st = ZGUI.team_stats_topbar(lw)
+        return st if st is not None else ZGUI._team_stats(lw)
 
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
@@ -1292,9 +1285,7 @@ class PPApp(tk.Tk):
             cap = self.cap_world
             # ★散队判定必须读顶栏：p7 面板数据是懒加载快照，队员掉线后
             #   会残留旧的满员数据 → 判定为"队伍还在"而永不重建（02:14 实证）
-            st = ZGUI.team_stats_topbar(lw)
-            if st is None:
-                st = ZGUI._team_stats(lw)
+            st = self._team_stats_any(lw)
             mem = st[0] if st else 0
             if mem <= 1:
                 self._log("[看门狗] 队伍已散（%s 人）→ 重新建队" % mem)

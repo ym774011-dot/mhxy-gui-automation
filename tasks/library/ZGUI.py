@@ -1245,6 +1245,17 @@ def _dialog_option_rect(gateway, target_map):
     return None, (r == "NOOPT")
 
 
+# ★2026-09-09 去重：地图名读取原有 7 处内联重复，收敛为一个助手。
+#   失败（tp 不可用/IPC 瞬态）返回 ""——各调用点原语义：""/None 同为假值、
+#   同样不等于任何图名，行为完全等价。
+_MAP_NAME_LUA = r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")'''
+
+
+def _read_map_name(gateway):
+    """读当前地图名；读不到返回 ""。"""
+    return _lua_call(gateway, _MAP_NAME_LUA) or ""
+
+
 def _npc_hop_map(gateway, hwnd, target_map, tries=2):
     """天眼落点错位兜底：找当前图 "<目标图>接引人" NPC，点击→对话→点"送我过去"跨图。
 
@@ -1268,8 +1279,7 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
     #   地图数据可能滞后（传送/瞬移后地图名延迟刷新），一旦已经在目标图上，
     #   绝不再对候选 NPC 做任何点击（08:07 左下角 11 连点同源场景）。
     #   读图为空（IPC 瞬态）不拦截，保持通道可用。
-    _cur0 = _lua_call(gateway,
-                      r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') or ""
+    _cur0 = _read_map_name(gateway)
     if _cur0 and (_cur0 == target_map or target_map in _cur0
                   or _cur0 in target_map):
         logger.info("跨图：已在目标图 %s，异图候选不启用（目标≠当前图才启用）" % _cur0)
@@ -1408,8 +1418,7 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
         # 等跨图完成（含走路+切换），轮询校验地图
         for _ in range(8):
             _sleep(random.uniform(0.5, 0.8))
-            cur = _lua_call(gateway,
-                            r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') or ""
+            cur = _read_map_name(gateway)
             if cur and (cur == target_map or target_map in cur or cur in target_map):
                 return True
         # 跨图未生效：若对话还开着点第2行「取消」收尾，防残留对话挡后续点击
@@ -1610,7 +1619,7 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
     task = {"name": snap["name"], "count": snap["count"]}
     if not task.get("name") and not member_mode:
         # 无任务（非组员）：回长安接取
-        mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
+        mm = _read_map_name(gateway)
         if mm != "长安城":
             if not zhuagui_go_back_changan(gateway):
                 logger.warning("确保任务：回长安失败")
@@ -3056,7 +3065,7 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
             logger.warning("回长安：战斗超时未结束")
             return False
     # 已在长安城直接成功（★force=True 跳过：用户规则允许重飞）
-    if not force and _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
+    if not force and _read_map_name(gateway) == "长安城":
         return True
     # ★2026-09-08 用户规则（所有任务通用）：用旗前确保背包有红色合成旗，
     #   没有就商城自动购买（用完下一轮此处自动再补）。失败只告警，
@@ -3094,7 +3103,7 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
     post_click(hwnd, jx, jy, gateway=gateway)
     _sleep(random.uniform(1.2, 1.8))  # ★2026-09-05 提速 1.8~2.5 → 1.2~1.8（飞行落地图弹出）
     _mouse_clear(hwnd, gateway)
-    mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
+    mm = _read_map_name(gateway)
     if mm == "长安城":
         return True
     # ★2026-09-07 兜底（实证 08:0x 起反复"回长安失败"空转）：
@@ -3104,12 +3113,12 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
                    % (mm, flagpos, red_x, red_y))
     if _npc_hop_map(gateway, hwnd, "长安城"):
         _sleep(random.uniform(0.8, 1.4))
-        if _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
+        if _read_map_name(gateway) == "长安城":
             logger.info("回长安：接引人跨图成功")
             return True
     if _portal_walk_back(gateway, hwnd, "长安城"):
         _sleep(random.uniform(0.8, 1.4))
-        if _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''') == "长安城":
+        if _read_map_name(gateway) == "长安城":
             logger.info("回长安：传送圈走回成功")
             return True
     logger.warning("回长安：合成旗/接引人/传送圈三路均未到达长安城")
