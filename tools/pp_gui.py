@@ -1036,9 +1036,16 @@ class PPApp(tk.Tk):
         role_name = rm.group(1).strip() if rm else ("p%d" % inst.pid)
         try:
             CREATE_NO_WINDOW = 0x08000000
+            if inst.role == "leader":
+                cmd = [PYEXE, RUN_UNLIMITED, "--gateway", gw, "--role", role_name,
+                       "--timeout", "20", "--wait-dialog", "1.2"]
+            else:
+                cmd = [PYEXE, MEMBER_LOOP, "--pid", str(inst.pid), "--gateway", gw]
             # ★2026-09-09 尸检通道：此前 stderr=DEVNULL，任务脚本崩溃 traceback
             #   直接丢弃（07:28 leader 闯关完成后静默死亡、昨夜 04:38 同款，
             #   死因永远查不到）。stdout/stderr 全落 logs/task_p<pid>_run.log。
+            #   （08:00 事故注：本次编辑曾把上面 cmd 构造块吞掉，导致
+            #   "name 'cmd' is not defined" 补拉全灭——编辑后必须 grep 校验。）
             try:
                 _runlog = open(os.path.join(ROOT, "logs",
                                 "task_p%d_run.log" % inst.pid), "ab")
