@@ -19,6 +19,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -313,6 +314,78 @@ def _dismiss_popup(hwnd):
     return True
 
 
+# ---------- 卫生机制（★残留自洁，用户 2026-09-10 定案保留） ----------
+_IPC_TMP_DIR = r"E:\DS\tmp"          # pzxy IPC 文件目录（与 pzxy_ipc 默认一致）
+_IPC_STALE_S = 24 * 3600.0           # 死 PID 文件保留期：整组 mtime 超 24h 才删
+_HYGIENE_INTERVAL_S = 24 * 3600.0    # 卫生循环周期
+_LOG_ROTATE_BYTES = 20 * 1024 * 1024  # 日志轮转阈值 20MB
+_IPC_PID_RE = re.compile(r"pzxy_p(\d+)_")
+
+
+def _hygiene_scan(managed_pids, log=None):
+    """IPC 死文件清理 + 日志轮转。返回 (cleaned, rotated)。
+
+    - E:\\DS\\tmp\\pzxy_p<pid>_*：PID 不在托管实例里 且 整组 mtime 超 24h
+      且 **进程已死** → 整组删除。三重保护：托管 PID 不动、新鲜文件不动、
+      活进程（如独立编排器的 worker）绝不动。
+    - pp_gui.log / logs/automation.log 超 20MB → 改名 .bak；被占用
+      （常驻 FileHandler，WinError 32）时复制到 .bak 后原地截断——追加
+      模式写者下次写入定位新 EOF，不产生空洞。
+    """
+    cleaned = rotated = 0
+    now = time.time()
+    groups = {}
+    try:
+        for f in os.listdir(_IPC_TMP_DIR):
+            m = _IPC_PID_RE.match(f)
+            if not m:
+                continue
+            p = os.path.join(_IPC_TMP_DIR, f)
+            try:
+                mt = os.path.getmtime(p)
+            except OSError:
+                continue
+            groups.setdefault(int(m.group(1)), []).append((p, mt))
+    except OSError:
+        pass
+    for pid, files in groups.items():
+        if pid in managed_pids:
+            continue
+        if any(now - mt < _IPC_STALE_S for _p, mt in files):
+            continue
+        if proc_alive(pid):
+            continue      # ★进程仍活着（如独立编排器的 worker）：绝不删
+        for p, _mt in files:
+            try:
+                os.remove(p)
+                cleaned += 1
+            except OSError:
+                pass
+    for lp, limit in ((os.path.join(ROOT, "pp_gui.log"), _LOG_ROTATE_BYTES),
+                      (os.path.join(ROOT, "logs", "automation.log"),
+                       _LOG_ROTATE_BYTES)):
+        try:
+            if os.path.getsize(lp) > limit:
+                os.replace(lp, lp + ".bak")
+                rotated += 1
+        except OSError:
+            # 被常驻句柄持有（WinError 32）→ copy+truncate 兜底
+            try:
+                shutil.copyfile(lp, lp + ".bak")
+                with open(lp, "w"):
+                    pass
+                rotated += 1
+            except OSError as e:
+                if log:
+                    log("[卫生] 日志轮转兜底也失败: %s → %s" % (lp, e))
+        except Exception as e:
+            if log:
+                log("[卫生] 日志轮转异常: %s → %s" % (lp, e))
+    if log and (cleaned or rotated):
+        log("[卫生] 清理旧 IPC 文件 %d 个，日志轮转 %d 个" % (cleaned, rotated))
+    return cleaned, rotated
+
+
 class Instance:
     _seq = 0
     _role_count = {}
@@ -363,6 +436,9 @@ class PPApp(tk.Tk):
         self._watch_interrupted = False   # 当前处于"缺员已打断抓鬼"状态
         self._reteam_running = False
         self._watch_started = False
+        # ★残留自洁循环（启动 20s 首轮，之后每 24h 一轮）
+        threading.Thread(target=self._hygiene_loop, daemon=True,
+                         name="hygiene").start()
         self._rejoining = set()           # 正在归队流程的实例 pid（防双驱动）
         self.paused = False               # ★暂停接管：True=自动化全面撒手
         # ★2026-09-09 tp 健康检查状态：pid -> 连续消失计数（服务器抹 tp 时
@@ -1032,6 +1108,21 @@ class PPApp(tk.Tk):
             return ("未到齐：%s（队伍 %s/%s）——请先完成组队或确认队友在线"
                     % ("、".join(missing), mem if mem >= 0 else "?", expect))
         return None
+
+    # ---------- 卫生循环（启动 20s 首轮，之后每 24h 一轮） ----------
+    def _hygiene_once(self):
+        try:
+            with self.lock:
+                managed = {i.pid for i in self.instances}
+            _hygiene_scan(managed, log=self._log)
+        except Exception as e:
+            self._log("[卫生] 异常: %s" % e)
+
+    def _hygiene_loop(self):
+        time.sleep(20.0)          # 等实例表初始化完再首轮清扫
+        while True:
+            self._hygiene_once()
+            time.sleep(_HYGIENE_INTERVAL_S)
 
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""

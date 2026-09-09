@@ -32,6 +32,7 @@ ROOT = os.path.normpath(os.path.join(HERE, ".."))
 GATEWAY_DIR = r"E:\DS\mhxy-mcp-gateway"
 PYEXE = sys.executable
 STATE_PATH = os.path.join(ROOT, "test_data", "squad_state.json")
+TMP_DIR = r"E:\DS\tmp"          # pzxy IPC 文件目录（与 pzxy_ipc 默认一致）
 LOGGED_IN_RE = re.compile(r"\[\d{4,}\]")
 ROLE_RE = re.compile(r"\(([^()\[\]]+)\[\d+\]\)")
 
@@ -89,6 +90,21 @@ def enum_game_windows():
     return list(seen.values())
 
 
+def clean_pid_ipc(pid):
+    """★残留自洁：播种前清掉该 PID 的旧 IPC 三件套。
+
+    Windows PID 复用窗口：新游戏进程可能拿到死进程的旧 PID，残留的
+    hb/out 文件会让 PzxyWorker 在首个真实心跳/响应前读到陈旧数据。
+    播种即覆盖 + 先清残留 = 双保险。文件不存在/被占用静默忽略。
+    """
+    import glob
+    for f in glob.glob(os.path.join(TMP_DIR, "pzxy_p%d_*" % pid)):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+
+
 def plant(pid, name, port):
     """登录界面播种：复用 pzxy_plant（--pid 定点 + --name 通道隔离）。
 
@@ -97,6 +113,7 @@ def plant(pid, name, port):
     播种偶发失败在日志里查不到任何原因，无法排查。
     """
     print("[播种] PID=%d name=%s port=%d ..." % (pid, name, port))
+    clean_pid_ipc(pid)          # ★播种前清旧 IPC（防 PID 复用读陈旧通道）
     try:
         r = subprocess.run(
             [PYEXE, os.path.join(GATEWAY_DIR, "tools", "pzxy_plant.py"),
