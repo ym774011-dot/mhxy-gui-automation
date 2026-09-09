@@ -380,8 +380,15 @@ def _hygiene_scan(managed_pids, log=None):
             if os.path.getsize(lp) > limit:
                 os.replace(lp, lp + ".bak")
                 rotated += 1
-        except OSError:
-            pass
+        except OSError as e:
+            # ★2026-09-10 QA 实锤：automation.log 被常驻 FileHandler 持有 →
+            #   os.replace 必抛 PermissionError，旧代码 except 静默吞掉，
+            #   导致 72MB 的日志"轮转 0 个"躺了 42 天无人知晓。至少告警。
+            if log:
+                log("[卫生] 日志轮转失败（文件被占用？）: %s → %s" % (lp, e))
+        except Exception as e:
+            if log:
+                log("[卫生] 日志轮转异常: %s → %s" % (lp, e))
     if log and (cleaned or rotated):
         log("[卫生] 清理旧 IPC 文件 %d 个，日志轮转 %d 个" % (cleaned, rotated))
     return cleaned, rotated
@@ -661,8 +668,9 @@ class PPApp(tk.Tk):
             self.instances.append(inst)
         self._log("已启动%s进程 PID=%s，等待登录界面窗口…"
                   % ("队长" if role == "leader" else "队员", popen.pid))
-        threading.Thread(target=self._wait_login_window,
-                         args=(inst,), daemon=True).start()
+        threading.Thread(
+            target=self._guarded(self._wait_login_window, inst, "等待登录窗口"),
+            args=(inst,), daemon=True).start()
 
     def _wait_login_window(self, inst):
         """等游戏窗口出现并播种（播种成功后才标记可用，用户再去登录）。"""
@@ -818,7 +826,20 @@ class PPApp(tk.Tk):
         with self.lock:
             return (inst.pid, inst.generation) in self._rejoining
 
+    def _guarded(self, fn, inst, what):
+        """异步流程统一异常兜底：线程体抛异常时不打标会永久悬死（QA 缺口4）。"""
+        def _run(*a):
+            try:
+                fn(*a)
+            except Exception as e:
+                self._log("p%d %s异常终止: %s" % (inst.pid, what, e))
+                self._mark_failed(inst, "%s异常" % what)
+        return _run
+
     def _after_login(self, inst):
+        inst.fail_at = 0.0            # ★重登成功即清失败态与退避计数
+        inst.fail_reason = ""
+        inst.retry_count = 0
         if not self.scripts_started:
             inst.note = "已登录，待【启动脚本】"
             return
@@ -899,6 +920,11 @@ class PPApp(tk.Tk):
                         self._spawn_task(inst)
             else:
                 inst.status, inst.note = S_TEAM, "归队未完成，等待重试"
+                # ★2026-09-10 QA 实锤缺陷：S_TEAM 被监控无条件跳过、补组又只挑
+                #   S_ONLINE → 归队未确认的队员会永久悬死（不拉任务/不被重邀/
+                #   进程活着也不走重启闭环）。必须打失败标记交给退避重试兜底。
+                if self._is_current_generation(inst, pid, generation):
+                    self._mark_failed(inst, "归队未完成")
                 self._log("p%d 归队未成功，保留可恢复状态" % pid)
 
     def _start_all_tasks(self):
@@ -1637,6 +1663,9 @@ class PPApp(tk.Tk):
                     continue
                 continue  # 由各自的异步流程负责
             if inst.status == S_TEAM:
+                # ★2026-09-10：归队未完成也走退避兜底（fail_at=0 时是 no-op，
+                #   不影响正常组队阶段）。否则队员会永久停在 S_TEAM。
+                self._retry_failed(inst)
                 continue  # 组队/归队由异步流程负责
             w = wins.get(inst.pid)
             logged = bool(w and LOGGED_IN_RE.search(w[2]))
@@ -1653,9 +1682,10 @@ class PPApp(tk.Tk):
                         self._after_login(inst)
                     elif adopted and "([0])" in adopted[2]:
                         inst.status = S_PLANT
-                        threading.Thread(target=self._do_plant,
-                                         args=(inst, adopted[1]),
-                                         daemon=True).start()
+                        threading.Thread(
+                            target=self._guarded(self._do_plant, inst, "播种"),
+                            args=(inst, adopted[1]),
+                            daemon=True).start()
                     else:
                         self._log("p%d 窗口消失（待登录阶段）→ 重启闭环" % inst.pid)
                         self._begin_restart(inst)
@@ -1667,9 +1697,10 @@ class PPApp(tk.Tk):
                         self._log("p%d 收养后仍在线 ✓" % inst.pid)
                     elif adopted and "([0])" in adopted[2]:
                         inst.status = S_PLANT
-                        threading.Thread(target=self._do_plant,
-                                         args=(inst, adopted[1]),
-                                         daemon=True).start()
+                        threading.Thread(
+                            target=self._guarded(self._do_plant, inst, "播种"),
+                            args=(inst, adopted[1]),
+                            daemon=True).start()
                     else:
                         reason = "进程消失" if not proc_alive(inst.pid) else \
                             ("退回登录界面" if (w and "([0])" in w[2]) else "窗口/标题异常")

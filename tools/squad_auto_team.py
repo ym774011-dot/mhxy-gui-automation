@@ -461,7 +461,11 @@ def _wait_joined(member_pid, timeout=90.0, poll=5.0):
     gw = _gw(member_pid)
     t0 = time.time()
     while time.time() - t0 < timeout:
-        st = ZGUI.team_stats_topbar(gw)
+        try:
+            st = ZGUI.team_stats_topbar(gw)
+        except Exception as e:      # 通道抖动不该废掉整个等待窗口
+            _log("p%d: 归队确认读取异常，继续等待（%s）" % (member_pid, e))
+            st = None
         if st and st[0] >= 1 and bool(st[2]):
             _log("p%d: 归队确认 ✓ 顶栏 %s 人 队长=%s" % (member_pid, st[0], st[2]))
             return True
