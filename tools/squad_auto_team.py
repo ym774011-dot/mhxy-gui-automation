@@ -91,6 +91,21 @@ def read_link(max_age_s=_LINK_TTL_S):
     return d
 
 
+def revoke_link():
+    """队长掉线/重启时撤销联动信号：删除信号文件，队员不再接受旧 link。
+
+    旧信号在 30min TTL 内仍可被队员读到，但队长换 PID 后已是无效信号；
+    队长侧在重启闭环入口调用本函数，强制让等信号的队员原地继续等，
+    直到新队长就位后发布带新 leader_pid 的有效信号。
+    """
+    try:
+        if os.path.exists(_LINK_PATH):
+            os.remove(_LINK_PATH)
+            _log("联动信号已撤销（队长掉线/重启，等有效新信号）")
+    except Exception as e:
+        _log("[fail] 联动信号撤销失败: %s" % e)
+
+
 def read_pos_closed(hwnd, gw, tries=3):
     """读自身实时世界坐标 —— ★零点击（2026-09-07 重写）。
 
@@ -373,8 +388,15 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
         同图但队长视野外 → 向队长方向点击走近（夹到窗口内）；
         视野内 → 点队长身体申请。
       leader_pid 提供后地图对账才生效；未提供维持旧行为。
+
+    ★2026-09-09 返回值（方案A 交叉QA 阻塞项）：返回 bool——
+      至少成功执行一次"点队长身体申请"动作才 True；窗口/tp 不可用、
+      轮次耗尽仍未申请、异常 → False。上层（GUI 归队流程）据此决定
+      是否收敛为 ONLINE/拉任务，杜绝"申请没发出却标已归队"的伪成功。
+      （服务器是否批准由队长批准流程裁决，不在本函数判定范围内。）
     """
     gw = _gw(member_pid)
+    applied = False
     for k in range(max(1, tries)):
         hwnd = find_hwnd_by_pid(member_pid)
         if hwnd is None:
@@ -414,9 +436,12 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
         ZGUI._team_click_icon(hwnd, gw)
         time.sleep(0.6)
         ZGUI._team_click_body(hwnd, gw, jx, jy)
+        applied = True          # ★至少一次真实申请动作已发出
         _log("p%d: 已点队长身体 (%d,%d)（第%d次申请）" % (member_pid, jx, jy, k + 1))
         time.sleep(random.uniform(6, 9))
-    _log("p%d: 申请轮次结束（是否入队由队长批准裁决）" % member_pid)
+    _log("p%d: 申请轮次结束（%s）" % (member_pid, "已申请，等待队长批准"
+                                     if applied else "未发出申请"))
+    return applied
 
 
 def approve_open_panel(leader_pid):
