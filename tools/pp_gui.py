@@ -1001,8 +1001,48 @@ class PPApp(tk.Tk):
                              args=(leader.pid, len(insts)),
                              daemon=True).start()
 
+    def _leader_wait_reason(self):
+        """★2026-09-09 用户定案：队长必须等所有队友到齐才能开始任务。
+
+        到齐 = 所有队员实例均 S_ONLINE 且队长顶栏队伍数 >= 注册总人数。
+        返回 None（到齐，可启动）或提示串（明确列出未到齐的队友）。
+        """
+        with self.lock:
+            insts = list(self.instances)
+        leader = next((i for i in insts if i.role == "leader"), None)
+        members = [i for i in insts if i.role != "leader"]
+        if leader is None or leader.status != S_ONLINE:
+            return "无在线队长"
+        if not members:
+            return None          # 单队长配置：无队友可等
+        missing = []
+        for m in members:
+            if m.status != S_ONLINE:
+                missing.append("%s p%d（掉线/未登录）" % (m.name or m.role_cn, m.pid))
+        st = ZGUI.team_stats_topbar("file://pzxy_p%d" % leader.pid)
+        mem = st[0] if st else -1
+        expect = 1 + len(members)
+        if mem >= 0 and mem < expect:
+            short = expect - mem
+            for m in [x for x in members if x.status == S_ONLINE][:short]:
+                missing.append("%s p%d（在线但未入队）" % (m.name or m.role_cn, m.pid))
+        elif mem < 0 and not missing:
+            return "队长顶栏队伍数据读不到（通道/面板），暂缓启动"
+        if missing:
+            return ("未到齐：%s（队伍 %s/%s）——请先完成组队或确认队友在线"
+                    % ("、".join(missing), mem if mem >= 0 else "?", expect))
+        return None
+
     def _spawn_task(self, inst):
         """按角色拉起任务脚本（已在跑则跳过）。"""
+        # ★2026-09-09 用户定案（单点闸）：队长必须等所有队友到齐才能开始
+        #   任务——初始组队/重登归队/看门狗补拉/满员恢复全部走这里，未到齐
+        #   一律阻止队长任务启动并明确提示缺谁；队员出售脚本不在此限。
+        if inst.role == "leader":
+            reason = self._leader_wait_reason()
+            if reason:
+                self._log("[任务闸] 队长任务暂不启动：%s" % reason)
+                return
         # ★2026-09-07 加固：区分"扫描失败"与"真的没在跑"。此前扫描异常返回
         #   空列表 → 防重失效 → 同客户端可能被拉起两个任务脚本互抢背包；
         #   但也不能把"真的没在跑"（如 00:59 手动全停后）误判为失败拒拉
