@@ -71,6 +71,20 @@ def publish_link(leader_pid, cap_world):
         return False
 
 
+def revoke_link():
+    """撤销联动信号（队长掉线/重启时调用）：删除信号文件，队员回到等待。
+
+    ★2026-09-10 用户重申的联动铁律：队长没到 [139,80] 重建队伍，队员绝不
+      动。旧信号在 30min TTL 内仍有效 → 队长掉线/重启必须立即撤销。
+    文件不存在/被占用静默忽略。
+    """
+    try:
+        os.remove(_LINK_PATH)
+        _log("联动信号已撤销（队长掉线/重启）")
+    except OSError:
+        pass
+
+
 def read_link(max_age_s=_LINK_TTL_S):
     """队员侧：读队长联动信号；无/过期/未就绪 → None（=等队长，不动）。"""
     try:
