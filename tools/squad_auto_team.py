@@ -391,21 +391,18 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
             _log("p%d: 找不到窗口" % member_pid)
             time.sleep(6)
             continue
-        # ---- 地图对账（联动核心）----
-        if leader_pid:
+        # ---- 传送（★2026-09-11 用户定案）：第 1 轮无条件传送——不管在不在
+        #   队长地图都传，传送本身会刷新自身坐标（同图异位/地图数据陈旧
+        #   一并修正）；后续轮仅在异图时再传送。tp_first 参数保留但不再
+        #   影响行为（历史调用兼容）。
+        if k == 0:
+            _teleport(member_pid)
+        elif leader_pid:
             my_map = _read_map(gw)
             cap_map = _read_map(_gw(leader_pid))
             if my_map and cap_map and my_map != cap_map:
-                _log("p%d: 异图(%s≠队长%s) 就地传送" % (member_pid, my_map, cap_map))
+                _log("p%d: 异图(%s≠队长%s) → 再次传送" % (member_pid, my_map, cap_map))
                 _teleport(member_pid)
-            elif tp_first and k == 0:
-                _teleport(member_pid)
-            elif not tp_first and k == 0:
-                _log("p%d: 已与队长同图(%s)，直接申请" % (member_pid, my_map or "?"))
-        elif tp_first and k == 0:
-            _teleport(member_pid)
-        elif not tp_first and k == 0:
-            _log("p%d: 阶段1已传送，直接申请" % member_pid)
         off = ZGUI._screen_offset_xy(gw)
         if off is None or hwnd is None:
             _log("p%d: tp/窗口不可用" % member_pid)
