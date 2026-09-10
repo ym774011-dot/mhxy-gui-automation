@@ -362,6 +362,15 @@ def member_tp_and_apply(member_pid, cap_world, tries=4, tp_first=True,
     """
     gw = _gw(member_pid)
     for k in range(max(1, tries)):
+        # ★2026-09-10 用户实锤：已在队伍中的队员若再点队长身体"申请"，
+        #   游戏会打开队伍信息面板，正好挡住背包出售装备。每轮先零点击读
+        #   自身顶栏（人物框.队伍数据），在队（成员数>=1 且队长名非空）即
+        #   跳过申请——包括批准生效后本轮循环的后续轮次。
+        _st = ZGUI.team_stats_topbar(gw)
+        if _st and _st[0] >= 1 and bool(_st[2]):
+            _log("p%d: 已在队伍中（顶栏 %s 人 队长=%s）→ 跳过申请，不碰 UI"
+                 % (member_pid, _st[0], _st[2]))
+            return
         hwnd = find_hwnd_by_pid(member_pid)
         if hwnd is None:
             _log("p%d: 找不到窗口" % member_pid)
