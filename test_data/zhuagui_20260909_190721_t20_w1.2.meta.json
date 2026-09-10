@@ -1,0 +1,17 @@
+{
+  "run_id": "20260909_190721",
+  "tag": "",
+  "role": "二号美人",
+  "gateway": "file://pzxy_p21376",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 15.0,
+  "max_interval": 30.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-09T19:07:21+08:00",
+  "info": [
+    "网关(显式): file://pzxy_p21376",
+    "窗口: 角色=二号美人 pid=21376 hwnd=0x39054C",
+    "警告: ZGUI.get_hwnd()=0x380602 与角色窗口不一致（多开时请确认）"
+  ]
+}
