@@ -588,6 +588,15 @@ def resolve_gateway(zgui, args):
 
 
 def main(argv=None):
+    # ★2026-09-11 编码安全网：stdout/stderr 被 pp_gui 重定向为 GBK 管道，
+    #   print("完成 ✓") 的 ✓（U+2713）无法 GBK 编码 → UnicodeEncodeError
+    #   直接崩掉整个任务脚本（02:09 实锤：闯关每次打完就崩，巡检反复补拉，
+    #   闯关被无限重跑）。errors="replace" 让不可编码字符降级为 ?，不再崩。
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(errors="replace")
+        except Exception:
+            pass
     args = build_parser().parse_args(argv)
     random.seed()
 
