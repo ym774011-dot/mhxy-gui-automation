@@ -1,8 +1,10 @@
 # MHXY GUI 自动化脚本平台 - 用户操作手册
 
-> 版本：v1.0  
-> 文档路径：`docs/user_manual.md`  
-> 适用项目：`mhxy-gui-automation`
+> **版本：v2.0**
+> **更新日期：2026-09-10**
+> **适用入口：`main.py`（函数专用 GUI）**
+
+> **说明：本手册依据当前代码（main.py 与 gui/ 各模块）重写，所有菜单名、按钮名、文件路径、字段名均以代码为准。若本手册与代码实际行为不一致，以代码为准。**
 
 ---
 
@@ -19,7 +21,7 @@
 9. [窗口绑定与输入模式](#9-窗口绑定与输入模式)
 10. [配置文件说明](#10-配置文件说明)
 11. [任务序列 JSON 格式](#11-任务序列-json-格式)
-12. [常见问题与故障排查](#12-常见问题与故障排查)
+12. [常见问题](#12-常见问题)
 
 ---
 
@@ -27,31 +29,38 @@
 
 ### 1.1 项目简介
 
-**MHXY GUI 自动化脚本平台**是一款基于 PyQt5 的梦幻西游自动化脚本图形化平台。它将原有的命令行脚本封装为可视化操作界面，让用户无需编写代码即可创建、编辑、管理和执行自动化任务序列。
+本项目是一套**梦幻西游**自动化任务编排平台，采用 **Python + PyQt5** 构建图形界面。
+用户通过可视化界面编排「任务序列」（由若干「事件」按序组成），由 `core/task_engine.py`
+驱动在绑定的游戏窗口上自动执行点击、按键、图像识别、函数调用、条件分支等操作。
+
+> **重要：本项目包含两套 GUI，请勿混淆**
+> - **函数专用 GUI（本文档描述对象）**：入口为仓库根目录 `main.py`，由 `gui/main_window.py`
+>   承载主窗口，提供「主控制面板 / 任务编辑 / 任务库 / 配置」四个标签页，用于编排并执行
+>   单个游戏账号的任务序列。配套启动脚本：`启动GUI.bat`、`start_group1.bat`、`start_group2.bat`、
+>   `启动函数专用GUI.bat`。
+> - **五开集成 GUI（PP GUI）**：入口为 `tools/pp_gui.py`，用于同时编排并驱动最多 5 个
+>   账号（多进程）。其使用方式不在本文档范围内，详见仓库根目录 `README.md`。
 
 ### 1.2 核心能力
 
-- **可视化任务编辑**：通过图形界面创建任务、添加事件、调整顺序，无需手写 JSON。
-- **事件管理**：支持 7 种事件类型（鼠标点击、键盘输入、等待延迟、图像识别、YOLO 检测、函数调用、条件分支）。
-- **任务库导入**：支持将外部 `.py` 脚本作为模块导入，并在事件中调用模块内的函数。
-- **YOLO 目标检测**：集成 ultralytics YOLOv8，可识别游戏画面中的目标对象。
-- **窗口捕获与输入控制**：支持前台（PyAutoGUI）和后台（win32 PostMessage）两种输入模式。
-- **实时日志与进度监控**：彩色日志区与进度条实时反映执行状态。
-- **配置持久化**：所有配置和任务序列均以 JSON 文件存储，便于版本管理和迁移。
+- 可视化编排任务序列：新建/打开/保存 JSON 格式的任务序列。
+- 七种事件类型：点击、按键、等待、图像识别、YOLO 识别、函数调用、条件分支。
+- 条件分支支持 `simple`（单条件判断）与 `switch`（多值匹配）两种模式，`switch` 的每个
+  分支（case）和默认动作均可承载一段独立的子流程（SubFlow）。
+- 任务库机制：导入 Python 脚本模块，作为「函数调用」事件的可选函数来源。
+- YOLO 目标检测：基于 `ultralytics` 模型对游戏画面做目标类别检测并点击。
+- 窗口绑定：通过 PID/角色名/窗口标题选择并锁定目标游戏窗口。
+- 后台输入：通过 `window.input_mode` 配置，支持不抢占鼠标的前台/后台两种输入模式。
+- 定时重新登录：可配置定时杀掉旧客户端并启动新客户端自动登录，完成后自动恢复任务。
+- 多组（多账号并行）：通过 `--group N` 启动多个独立 GUI 进程，各组有独立配置与网关。
 
 ### 1.3 技术栈
 
-| 技术 | 用途 |
-| --- | --- |
-| PyQt5 | GUI 框架 |
-| OpenCV（opencv-python） | 图像识别 / 模板匹配 |
-| PyAutoGUI | 前台键鼠输入 |
-| ultralytics（YOLO） | 目标检测 |
-| mss | 屏幕截图 |
-| numpy | 数值计算 |
-| Pillow | 图像处理 |
-| pygetwindow | 窗口查找 |
-| pywin32 | Windows API（后台输入 / 窗口控制） |
+- 语言：Python 3
+- GUI：PyQt5（`QMainWindow` / `QTabWidget` / `QDialog`）
+- 目标检测（可选）：`ultralytics` + `torch`
+- 窗口操作：自研 `core/window_manager.py`、`core/input_controller.py`
+- 进程内 Lua 网关：经 frida attach 游戏进程并捕获 Lua state（组级网关独立）
 
 ---
 
@@ -59,69 +68,38 @@
 
 ### 2.1 系统要求
 
-- **操作系统**：Windows 10 / Windows 11（依赖 win32 API，不支持 Linux/macOS）
-- **Python 版本**：3.8 及以上
-- **显示器**：建议 1366×768 及以上分辨率
-- **游戏**：梦幻西游客户端（需运行于 Windows 桌面环境）
+- Windows 操作系统（窗口绑定与输入依赖 Windows API）。
+- 已安装 Python 3（建议 3.9+）。
+- 已安装并登录梦幻西游客户端。
 
 ### 2.2 安装步骤
 
-1. 进入项目目录：
-
-   ```bash
-   cd E:\DS\mhxy-gui-automation
-   ```
-
-2. （推荐）创建并激活虚拟环境：
-
-   ```bash
-   python -m venv venv
-   venv\Scripts\activate
-   ```
-
-3. 安装依赖：
-
-   ```bash
-   pip install -r requirements.txt
-   ```
+1. 克隆/解压本项目到本地目录（下文称「项目根目录」）。
+2. 安装依赖（见 [2.3](#23-依赖列表说明)）。
+3. 按需安装 YOLO 相关依赖（见 [2.4](#24-yolo-模型可选安装说明)）。
+4. 如首次运行遇到 `torch`/`cv2` 因 MSVC 运行库冲突报错，启动脚本 `启动GUI.bat` 已内置
+   `_preload_vcruntime()` 预加载处理，正常使用启动脚本即可。
 
 ### 2.3 依赖列表说明
 
-`requirements.txt` 内容如下：
+核心依赖（来自 `requirements.txt` 或项目内声明）：
 
-```
-PyQt5>=5.15.0
-opencv-python>=4.5.0
-pyautogui>=0.9.54
-ultralytics>=8.0.0
-mss>=9.0.0
-numpy>=1.20.0
-Pillow>=9.0.0
-pygetwindow>=0.0.9
-pywin32>=305
-```
-
-| 包名 | 作用 |
-| --- | --- |
-| PyQt5 | GUI 框架，提供主窗口、控件、信号槽机制 |
-| opencv-python | 图像识别 / 模板匹配 |
-| pyautogui | 前台键鼠输入（foreground 模式） |
-| ultralytics | YOLOv8 目标检测 |
-| mss | 高性能屏幕截图 |
-| numpy | 数值计算（图像矩阵运算） |
-| Pillow | 图像处理 |
-| pygetwindow | 按标题查找窗口 |
-| pywin32 | Windows API，支持后台 PostMessage 输入 |
+- `PyQt5`：界面框架。
+- `numpy`：数值与图像数组处理。
+- `opencv-python`（cv2）：模板匹配、图像比对。
+- `pillow`：图像处理辅助。
+- `ultralytics` / `torch`：仅 YOLO 事件需要（见 [2.4](#24-yolo-模型可选安装说明)）。
 
 ### 2.4 YOLO 模型可选安装说明
 
-YOLO 检测依赖 `ultralytics` 库，体积较大（含 PyTorch）。若您不需要 YOLO 检测功能，可暂时跳过安装：
+YOLO 事件为**可选功能**，使用实时导入（`core/yolo_detector` 在函数专用 GUI 中按需懒加载）。
+仅当任务中实际使用「YOLO 识别」事件时才需要安装：
 
-```bash
-pip install PyQt5 opencv-python pyautogui mss numpy Pillow pygetwindow pywin32
-```
+- `torch`
+- `ultralytics`
 
-> 注意：未安装 `ultralytics` 时，添加并执行 YOLO 检测事件会失败，但其他功能不受影响。
+并准备模型文件（默认路径见 [8.2](#82-模型文件)）。未安装时，涉及 YOLO 的事件会在执行时
+报缺包错误，不影响其他事件类型的正常使用。
 
 ---
 
@@ -129,171 +107,114 @@ pip install PyQt5 opencv-python pyautogui mss numpy Pillow pygetwindow pywin32
 
 ### 3.1 启动命令
 
-在项目根目录下执行：
+本项目提供多个启动脚本，对应不同的启动方式（均在项目根目录）：
 
-```bash
-python main.py
+| 脚本 | 实际命令 | 说明 |
+| --- | --- | --- |
+| `启动GUI.bat` | `python main.py --group 1` | 启动组 1 函数专用 GUI（默认）。 |
+| `start_group1.bat` | `set MHXY_NO_WATCHDOG=1` 后 `main.py --group 1` | 启动组 1，且**禁用验证码看门狗**。 |
+| `start_group2.bat` | `set MHXY_NO_WATCHDOG=1` 后 `main.py --group 2` | 启动组 2（独立进程），且禁用验证码看门狗。 |
+| `启动函数专用GUI.bat` | 启动 `函数专用/main.py` | 启动**子项目** `函数专用/` 下的另一套 GUI（与本文档的 `main.py` 不同）。 |
+
+> 说明：
+> - `main.py` 支持命令行参数 `--group N`（默认 1），相应设置环境变量 `MHXY_GROUP`。
+>   不同组使用独立配置目录（见 [10.1](#101-文件位置)）与独立网关端口。
+> - `start_group*.bat` 在启动前设置 `MHXY_NO_WATCHDOG=1`，用于**关闭验证码看门狗**
+>   （即不自动启动 `core.captcha_link` 的 watchdog 进程）；`启动GUI.bat` 不设置该变量，
+>   由 `main.py` 默认启动验证码看门狗。
+> - 多组并行时，也可在已运行的 GUI 内点击工具栏「🚀 启动其他组」按钮，以独立子进程拉起
+>   其他组的 GUI（见 [5.2](#52-工具栏)）。
+
+直接用命令行启动：
+
+```bat
+python main.py --group 1
 ```
 
 ### 3.2 首次启动说明
 
-- 应用启动后会自动加载 `config/settings.json` 配置文件。
-- 同时会根据配置中的 `task_library.modules` 列表自动加载预置任务库模块（详见第 7 章）。
-- 主窗口默认大小为 1280×800，居中显示。
-- 状态栏初始显示"就绪"，主控制面板日志区会显示"主控制面板已就绪，等待任务执行。"提示。
+- 首次启动会尝试加载 `config/settings.json`，若该文件不存在则使用 `gui/config_panel.py`
+  中 `_DEFAULTS` 的默认值。
+- 启动时自动从 `data/task_sequence_autosave.json`（组 1）或组配置对应的自动保存路径
+  加载上次的任务序列；文件不存在则创建空序列。
+- 若配置了 `window.auto_restore`（默认 `true`），启动时会尝试自动恢复上次绑定的游戏窗口。
+- 主窗口标题会显示组号；绑定窗口后会追加已绑定的角色名。
 
 ---
 
 ## 4. 界面介绍
 
-主窗口分为四个标签页，从左到右依次为：**主控制面板**、**任务编辑**、**任务库**、**配置**。
+主窗口（`gui/main_window.py` 的 `MainWindow`）包含：菜单栏、工具栏、中央 `QTabWidget`
+（四个标签页）、状态栏。
 
-### 4.1 主控制面板（标签页 1）
+### 4.1 主控制面板（标签页 1，StatusPanel）
 
-主控制面板用于实时监控任务执行状态，分为三个区域：
+对应 `gui/status_panel.py`，包含：
 
-#### 执行状态区
+- **执行状态**分组：
+  - 当前任务
+  - 执行状态（就绪 / 运行中 / 已暂停 / 已停止 / 已完成 / 正在停止，各状态有对应颜色）
+  - 进度条（由 `task_engine.progress_signal` 驱动）
+  - 当前事件
+- **执行日志**分组：多色日志文本框（等宽字体 Consolas），按级别着色
+  （DEBUG 灰、INFO 黑、WARNING 橙、ERROR 红、CRITICAL 暗红）。
+  - 按钮：**清空日志**、**保存日志**
+- 函数事件成功返回的游戏任务信息会导出为 `data/current_quest.json`
+  （字段：task / status / progress{current,total} / map / coord / npc / loops / ts），
+  供外部程序 IPC 读取。
 
-| 元素 | 说明 |
-| --- | --- |
-| 当前任务 | 显示当前正在执行的任务序列名称 |
-| 执行状态 | 显示状态文字：**就绪 / 运行中 / 已暂停 / 已停止 / 已完成**，并按颜色区分（灰/绿/橙/红/蓝） |
-| 进度条 | 显示当前任务的事件执行进度百分比（如 `40% (2/5)`） |
-| 当前事件 | 显示正在执行的事件名称，右侧显示 `当前 / 总数` 计数 |
+### 4.2 任务编辑（标签页 2，TaskEditor）
 
-#### 日志区
+对应 `gui/task_editor.py`，分左右两部分：
 
-- 只读的等宽字体文本框（Consolas），自动滚动到最新行。
-- 日志按级别彩色显示：
-  - **DEBUG** = 灰色 `#888888`
-  - **INFO** = 黑色 `#000000`
-  - **WARNING** = 橙色 `#FF8C00`
-  - **ERROR** = 红色 `#FF0000`
-  - **CRITICAL** = 深红 `#B22222`
-- 日志格式：`[HH:MM:SS] [级别] 消息`，例如 `[14:25:36] [INFO] 已添加事件: name='鼠标点击 1'`
+- **左侧·任务列表**分组：
+  - 任务下拉框（combo，选择当前编辑的任务）
+  - 按钮：**新建任务**、**删除任务**
+  - 任务属性表单：名称、描述、**循环次数**（0=无限循环）、**循环间隔**（秒）
+  - **序列循环（整体重复执行）**分组：循环次数（0=无限循环，默认 1）、循环间隔（秒）
+    —— 控制整个任务序列执行完一轮后是否整体重来。
+- **左侧·事件列表**分组（当前任务下的事件）：
+  - 按钮：**添加事件**、**编辑事件**、**删除事件**、**上移**、**下移**、
+    **复制选中事件**、**粘贴事件**
+- **右侧·事件详情**：只读预览当前选中事件的参数（实际编辑在「编辑事件」弹出的
+  `EventEditorDialog` 中完成）。
 
-#### 底部按钮
+> 复制/粘贴：任务编辑器与条件分支的「子流程编辑器」共享同一套剪贴板
+> （模块级 `_SUBFLOW_CLIPBOARD`），可在不同任务、不同子流程之间复制粘贴事件。
 
-- **清空日志**：清空日志区内容（同时写入一条"日志已清空"提示）。
-- **保存日志**：弹出文件保存对话框，将日志区纯文本保存为 `.log` 或 `.txt` 文件，默认文件名形如 `execution_20260730_142536.log`。
+### 4.3 任务库（标签页 3，TaskLibraryPanel）
 
-### 4.2 任务编辑（标签页 2）
+对应 `gui/task_library.py`：
 
-任务编辑面板采用水平分割布局，左侧为列表区，右侧为详情区。
+- 顶部按钮：**导入脚本**、**刷新**、**保存配置**
+- **模块列表**（左侧 `QListWidget`）：勾选框控制启用/禁用，按分类着色
+  （built_in 蓝、custom 绿、map 橙）。
+- 模块操作按钮（底部）：**启用**、**禁用**、**重新加载**、**移除**
+- **函数列表**（右侧 `QListWidget`）：展示选中模块导出的函数。
+- **函数详情**（右侧 `QTextEdit`）：展示函数签名与文档字符串。
 
-#### 左侧任务列表区
+### 4.4 配置（标签页 4，ConfigPanel）
 
-- **任务下拉框**：选择当前要编辑的任务，显示格式为 `序号. 任务名 (事件数)`。
-- **新建任务**按钮：在当前任务序列末尾追加一个空任务，并自动选中。
-- **删除任务**按钮：删除当前选中的任务（带二次确认）。
-- **任务属性表单**：
-  - 名称：任务名称（任意可读字符串）
-  - 描述：任务描述（可选）
-  - 循环次数：取值 0~999999，**0 表示无限循环**（下拉框显示"无限"）
-  - 循环间隔：每次循环之间的间隔秒数（0.00~86400.00 秒）
+对应 `gui/config_panel.py`，包含**三个分组**：
 
-#### 左侧事件列表区
+- **识别参数**分组：
+  - 模板匹配阈值（0–1，步进 0.05）
+  - YOLO 置信度（0–1）
+  - YOLO 模型（路径 + 浏览按钮）
+  - 截图间隔（0.1–10 秒，步进 0.1）
+- **日志配置**分组：
+  - 日志级别（DEBUG / INFO / WARNING / ERROR）
+  - 日志文件（路径 + 浏览按钮）
+  - 自动清理（天）（0–365）
+- **定时重新登录**分组：
+  - 启用定时重新登录（勾选）
+  - 间隔（分钟）（1–43200）
+  - 客户端 exe（路径 + 浏览按钮）
+  - 登录点击坐标（每行 `x,y`）
+  - 按钮：**🔁 立即重新登录**
 
-- **事件列表**：显示当前任务下的所有事件，格式为 `[图标] 事件名称`。已禁用事件前缀标记 `[已禁用]` 并灰显。
-- 事件图标对应类型：
-  - 🖱 鼠标点击
-  - ⌨ 键盘输入
-  - ⏱ 等待延迟
-  - 🖼 图像识别
-  - 👁 YOLO 检测
-  - ⚙ 函数调用
-  - ❓ 条件分支
-- **操作按钮行**（从左到右）：
-  - **添加事件**：弹出事件类型选择对话框
-  - **编辑事件**：弹出编辑对话框修改事件名称（参数编辑器将在后续版本完善）
-  - **删除事件**：删除选中事件（带二次确认）
-  - **上移**：将选中事件上移一位
-  - **下移**：将选中事件下移一位
-
-#### 右侧事件详情区
-
-显示当前选中事件的基本信息（只读）：
-
-- 事件类型：图标 + 中文名 + 类型字符串（如 `🖱  鼠标点击 (click)`）
-- 事件名称
-- 是否启用：是 / 否
-- 执行前延迟（秒）
-- 执行后延迟（秒）
-- 错误处理策略：`retry` / `skip` / `stop`
-- 参数 JSON 预览：格式化显示事件的 `params` 字段
-
-> 说明：当前版本的事件详情区为只读预览，完整的可视化参数编辑器将在后续版本实现。如需修改参数，可保存任务序列后手动编辑 JSON 文件，再重新打开。
-
-### 4.3 任务库（标签页 3）
-
-任务库面板采用水平分割布局，左侧为模块管理区，右侧为函数浏览区。
-
-#### 顶部按钮
-
-- **导入脚本**：弹出文件选择对话框，选择 `.py` 文件导入到任务库（自动以文件名作为模块名）。
-- **刷新**：重新加载所有模块（逐个重载，弹出结果统计）。
-- **保存配置**：将当前任务库模块列表持久化到 `settings.json`。
-
-#### 模块列表
-
-- 每项显示格式：`[分类] 模块名 (已启用/已禁用)`。
-- 分类标签颜色：
-  - **内置**（built_in） = 蓝色 `#2980b9`
-  - **自定义**（custom） = 绿色 `#27ae60`
-  - **地图函数**（map） = 橙色 `#e67e22`
-  - 其他 = 灰色 `#7f8c8d`
-- 每项前有复选框，勾选/取消即启用/禁用模块。
-- 鼠标悬停显示工具提示：模块名、分类、状态、文件路径、函数数。
-
-#### 底部按钮
-
-- **启用**：启用当前选中模块。
-- **禁用**：禁用当前选中模块。
-- **重新加载**：重新加载当前选中模块（修改源码后生效）。
-- **移除**：从任务库移除当前选中模块（不删除原文件，带二次确认）。
-
-#### 右侧函数区
-
-- **函数列表**：选中模块后显示其全部可调用函数，格式为 `函数名(参数签名)`。
-- **函数详情**：选中函数后显示：
-  - 函数名
-  - 完整签名（如 `my_func(x, y=0, *, name='')`）
-  - docstring 文档（若存在）
-
-### 4.4 配置（标签页 4）
-
-配置面板采用垂直布局，分为三个分组和底部按钮行。
-
-#### 窗口配置组
-
-| 控件 | 说明 |
-| --- | --- |
-| 窗口标题 | 输入框 + **绑定**按钮，支持子串匹配 |
-| 进程 PID | 数值输入框（0~99999，0 显示为"未设置"）+ **绑定**按钮 |
-| 输入模式 | 下拉框：`前台输入 (foreground)` / `后台输入 (background)` |
-| 窗口状态 | 实时显示绑定状态：未绑定（红）/ 已绑定: 标题（绿） |
-
-#### 识别参数组
-
-| 控件 | 范围 | 默认值 |
-| --- | --- | --- |
-| 模板匹配阈值 | 0.00~1.00，步长 0.05 | 0.80 |
-| YOLO 置信度 | 0.00~1.00，步长 0.05 | 0.50 |
-| YOLO 模型 | 文本框 + **浏览**按钮（选择 `.pt` 文件） | 空 |
-| 截图间隔(秒) | 0.10~10.00，步长 0.1 | 0.50 |
-
-#### 日志配置组
-
-| 控件 | 说明 |
-| --- | --- |
-| 日志级别 | 下拉框：DEBUG / INFO / WARNING / ERROR |
-| 日志文件 | 文本框 + **浏览**按钮，默认 `logs/automation.log` |
-
-#### 底部按钮
-
-- **保存配置**：将界面值写入 `config` 单例并落盘到 `settings.json`。
-- **重新加载**：从 `settings.json` 重新加载配置并刷新界面。
-- **恢复默认**：将界面重置为默认值（**不立即落盘**，需再点"保存配置"才会写入文件）。
+> 注意：**窗口绑定不在配置面板内**。窗口绑定通过工具栏「🔗 绑定窗口」按钮弹出的
+> `WindowSelectorDialog` 完成（见 [9.1](#91-绑定方式)）。
 
 ---
 
@@ -301,510 +222,208 @@ python main.py
 
 ### 5.1 菜单栏
 
-#### 文件菜单
+菜单栏由 `gui/main_window.py` 的 `_init_menu_bar()` 构建，共三个菜单：
 
-| 菜单项 | 快捷键 | 功能 |
-| --- | --- | --- |
-| 新建任务序列 | Ctrl+N | 清空当前编辑器，新建空任务序列 |
-| 打开任务序列... | Ctrl+O | 从 JSON 文件加载任务序列 |
-| 保存任务序列 | Ctrl+S | 将当前任务序列保存为 JSON 文件 |
-| 退出 | Ctrl+Q | 退出程序 |
+**文件**
+- 新建任务序列（`Ctrl+N`）：清空当前编辑器，创建空任务序列（若有未保存内容会先确认）。
+- 打开任务序列...（`Ctrl+O`）：从 JSON 文件加载任务序列。
+- 保存任务序列（`Ctrl+S`）：将当前任务序列保存为 JSON 文件。
+- 退出（`Ctrl+Q`）：关闭程序（会先停止任务引擎与本组网关）。
 
-#### 设置菜单
+**设置**
+- 保存配置：将当前配置写入 `settings.json`。
+- 重新加载配置：从 `settings.json` 重新加载配置并刷新窗口状态。
 
-| 菜单项 | 功能 |
-| --- | --- |
-| 保存配置 | 将当前配置保存到 `settings.json` |
-| 重新加载配置 | 从 `settings.json` 重新加载配置 |
-
-#### 帮助菜单
-
-| 菜单项 | 功能 |
-| --- | --- |
-| 用户手册 | 提示用户手册文件路径（`docs/user_manual.md`） |
+**帮助**
+- 用户手册：提示 `docs/user_manual.md` 的文件路径（当前以消息框提示，未内置阅读器）。
 
 ### 5.2 工具栏
 
-工具栏从左到右依次包含：
+工具栏由 `_init_tool_bar()` 构建，从左到右依次为：
 
-| 按钮 | 功能 |
-| --- | --- |
-| ▶ 开始执行 | 启动当前任务序列执行 |
-| ⏸ 暂停 | 暂停任务执行（可恢复） |
-| ⏹ 停止 | 停止任务执行 |
-| 🔗 绑定窗口 | 弹出对话框，选择按窗口标题或 PID 绑定 |
-| 窗口状态标签 | 实时显示"未绑定"（红）或"已绑定: 标题"（绿） |
+- **▶ 开始执行**：执行当前任务序列中**全部**任务。
+- **▶ 执行当前任务**：仅执行任务下拉框当前选中的单个任务。
+- **⏸ 暂停**：暂停执行。
+- **⏹ 停止**：停止执行。
+- （分隔符）
+- **🔗 绑定窗口**：弹出游戏窗口选择对话框，绑定目标窗口（见 [9.1](#91-绑定方式)）。
+- **窗口状态标签**（非按钮，实时文本）：显示「未绑定」或「已绑定: PID=...」。
+- （分隔符）
+- **🔄 定时重登**：立即触发一次重新登录（杀旧客户端→启新客户端→点击登录→恢复任务）。
+- （分隔符）
+- **🚀 启动其他组**：下拉按钮，点击拉起其他组的 GUI（组 2 / 组 3 / 组 4，排除当前组），
+  以独立子进程运行 `main.py --group N`。
 
-> 工具栏右侧的窗口状态标签会根据 `window_manager` 的绑定状态实时更新颜色和文字。
+### 5.3 状态栏
+
+状态栏由 `_init_status_bar()` 构建，常驻显示：
+
+- **组徽章**（左侧永久部件）：格式「组N · x号 · 网关:port」，并实时刷新网关状态：
+  - ●在线（绿）：HTTP 通 + 已 attach 本组游戏 PID + Lua 已捕获
+  - ⚠启动中（橙）：网关在线但未就绪
+  - ⚠pid不匹配（橙）：网关在线但 attach 的是别的进程
+  - ○离线（灰）：HTTP 不通
+- **运行状态文字**（右侧永久部件）：就绪 / 运行中 / 已暂停 / 已完成 / 已停止 等。
+- **进度信息**（中间部件）：如「进度: 3/10 - 事件名」「任务已结束」等。
 
 ---
 
 ## 6. 任务编辑流程
 
-本节通过一个完整的示例，演示从零开始创建并执行任务序列的全过程。
-
 ### 6.1 新建任务序列
 
-1. 点击菜单 **文件 → 新建任务序列**（或按 Ctrl+N）。
-2. 若当前已有任务序列，会弹出确认对话框，点击"是"清空当前内容。
-3. 系统创建一个名为"新建任务序列"的空任务序列，任务编辑器自动同步。
+菜单 **文件 → 新建任务序列**（`Ctrl+N`），或直接启动后从自动保存继续编辑。
 
 ### 6.2 创建任务
 
-1. 切换到 **任务编辑** 标签页。
-2. 在左侧任务列表区点击 **新建任务** 按钮。
-3. 系统自动创建一个名为 `任务 1` 的空任务，并选中。
+在「任务编辑」标签页：
+1. 点击 **新建任务**，输入任务名称。
+2. 在任务列表中选中该任务。
+3. 填写任务属性（名称、描述、循环次数、循环间隔）。
 
 ### 6.3 配置任务属性
 
-在任务属性表单中设置：
-
-- **名称**：例如 `日常签到`
-- **描述**：例如 `每日登录签到任务`
-- **循环次数**：例如 `1`（执行一次）；若需挂机循环，填 `0` 表示无限循环。
-- **循环间隔**：例如 `2.00 秒`（每次循环间隔 2 秒）。
+- **名称 / 描述**：任务的基本信息。
+- **循环次数**：该任务自身的循环次数，`0` 表示无限循环，默认 `1`。
+- **循环间隔**：每轮任务循环之间的等待（秒）。
+- **序列循环（整体重复执行）**：控制整个任务序列执行完一轮后是否整体重来，包含
+  「循环次数」（0=无限，默认 1）与「循环间隔」。
 
 ### 6.4 添加事件
 
-1. 在事件列表区点击 **添加事件** 按钮。
-2. 系统弹出 **选择事件类型** 对话框，列出 7 种事件类型（双击可直接确认）：
-   - 🖱 鼠标点击 (click)
-   - ⌨ 键盘输入 (key)
-   - ⏱ 等待延迟 (wait)
-   - 🖼 图像识别 (image)
-   - 👁 YOLO 检测 (yolo)
-   - ⚙ 函数调用 (function)
-   - ❓ 条件分支 (condition)
-3. 选中所需类型后点击"确定"。
-4. 系统创建默认参数的事件并添加到事件列表末尾，自动选中。
+在「事件列表」分组点击 **添加事件**，弹出 `EventEditorDialog`，选择事件类型并填写参数。
+支持的七种事件类型见 [6.5](#65-七种事件类型说明)。
 
 ### 6.5 七种事件类型说明
 
-每种事件类型的 `params` 结构如下（参考 `models/event.py`）：
+每个事件除各自参数外，还包含通用字段（见 [11.2](#112-事件-event-字段)）：`name`、
+`event_type`、`pre_delay`、`post_delay`、`on_error`、`max_retries`、`retry_interval`、
+`enabled`、`var_name`。其中 `var_name` 用于把本事件结果存入变量上下文，供后续事件通过
+`${var_name.field}` 模板变量引用（例如函数调用事件返回的 `target_location`）。
 
-#### 鼠标点击 (click)
+#### 6.5.1 点击（click）
 
-```json
-{
-  "x": 0,
-  "y": 0,
-  "button": "left",
-  "background": false
-}
-```
+参数：`x`、`y`（可为整数，也可为含 `${...}` 的模板变量字符串）、`button`（left/right）、
+`background`（是否后台点击）、`press_delay`（按下到弹起延迟，秒）、
+`verify`（点击后是否做像素颜色验证确认生效）、`probe_x`、`probe_y`（验证采样点）、
+`verify_retries`、`verify_threshold`。
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| x | int | 点击横坐标 |
-| y | int | 点击纵坐标 |
-| button | string | 按键类型：`left` / `right` / `double` |
-| background | bool | 是否后台点击 |
+#### 6.5.2 按键（key）
 
-#### 键盘输入 (key)
+参数：`keys`（按键序列文本）、`text`（直接输入的文本）、`duration`（按住时长，秒）。
 
-```json
-{
-  "keys": "",
-  "text": "",
-  "duration": 0.0
-}
-```
+#### 6.5.3 等待（wait）
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| keys | string | 按键组合，如 `alt+q`、`ctrl+s`、`f1` |
-| text | string | 输入文本（如需输入字符串） |
-| duration | float | 持续时间（秒） |
+参数：`duration`（等待秒数）、`wait_for_image`（是否等待某图出现）、
+`image_path`（目标图路径）、`timeout`（超时，秒）、
+`region`（`[x, y, w, h]` 截图区域）。
 
-#### 等待延迟 (wait)
+#### 6.5.4 图像识别（image）
 
-```json
-{
-  "duration": 1.0,
-  "wait_for_image": false,
-  "image_path": "",
-  "timeout": 10.0
-}
-```
+基于模板匹配，参数较多：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| duration | float | 等待时长（秒） |
-| wait_for_image | bool | 是否等待图像出现 |
-| image_path | string | 等待的图像路径 |
-| timeout | float | 超时时间（秒） |
+- 基础：`source_mode`（direct / dyn / batch）、`template_path`、`threshold`（匹配阈值）、
+  `action`（click / none / ...）、`button`、`click_delay`、`region`（`[x,y,w,h]`）。
+- 动态构建（source_mode=dyn）：`prefix`、`dir_path`、`suffix`、`dyn_field`
+  （默认 `target_location`）、`dyn_custom_field`。
+- 地图白名单：`allowed_maps`（字符串列表）。
+- 识别重试：`recognize_retries`、`recognize_retry_interval`。
+- 批量识别（source_mode=batch）：`batch_dir`、`batch_ext`、`batch_use_var`、
+  `batch_var_field`、`batch_sort`、`batch_click_mode`。
+- 附加点击：`additional_click_enabled`、`additional_mode`、`additional_x`、
+  `additional_y`、`coord_file`、`match_field`（默认 `target_location`）、
+  `match_custom_field`、`additional_button`、`additional_delay`。
 
-#### 图像识别 (image)
+#### 6.5.5 YOLO 识别（yolo）
 
-```json
-{
-  "template_path": "",
-  "threshold": 0.8,
-  "action": "click",
-  "region": [0, 0, 0, 0]
-}
-```
+基于 `ultralytics` 模型的目标检测，参数：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| template_path | string | 模板图片路径 |
-| threshold | float | 匹配阈值（0.0~1.0） |
-| action | string | 识别后动作：`click` / `wait` / `record` |
-| region | list | 识别区域 `[x, y, w, h]`，全 0 表示全屏 |
+- 基础：`template_path`（兼容旧字段，单条存字符串）、`template_paths`（始终存列表）、
+  `threshold`、`action`、`button`、`region`（`[x,y,w,h]`）。
+- 模型增强：`target_class`（目标类别，可为英文类别名或空=不限）、
+  `near_mode`（近距增强）、`near_radius`、`mid_radius`、
+  `conf_near`、`conf_mid`、`conf_far`（近/中/远三档置信度）。
+- 全局置信度来自「配置 → 识别参数 → YOLO 置信度」；模型文件来自
+  「配置 → 识别参数 → YOLO 模型」（`recognition.yolo_model_path`），事件内不单独存模型路径。
 
-#### YOLO 检测 (yolo)
+#### 6.5.6 函数调用（function）
 
-```json
-{
-  "target_class": "",
-  "confidence": 0.5,
-  "action": "record",
-  "model_path": ""
-}
-```
+调用「任务库」中已启用模块的函数：
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| target_class | string | 目标类别名称 |
-| confidence | float | 置信度阈值（0.0~1.0） |
-| action | string | 检测后动作：`click` / `record` |
-| model_path | string | YOLO 模型路径（覆盖全局配置） |
+- 基础：`module`（模块名，含特殊值 `auto`=自动按地图匹配）、`function`（函数名）、
+  `args`（JSON 数组）、`kwargs`（JSON 对象）。
+- 结果验证：`result_validate_field`（默认 `target_location`）、
+  `result_validate_whitelist`（白名单列表）、`result_validate_retries`、
+  `result_validate_retry_interval`（勾选「启用结果验证」后生效）。
+- 自动等待到达：`auto_wait_arrival`、`wait_arrival_timeout`、`wait_arrival_tolerance`、
+  `wait_arrival_stop_confirm_s`、`wait_arrival_sample_interval`、`wait_arrival_retries`。
 
-**重要说明**：
+#### 6.5.7 条件分支（condition）
 
-1. **必须配置YOLO模型文件**：
-   - YOLO检测事件需要预先配置 `.pt` 模型文件才能正常使用
-   - 在配置面板的"识别参数"组中设置"YOLO模型"路径
-   - 或者在事件的 `model_path` 参数中单独指定模型文件路径
+支持两种模式（由 `mode` 区分）：
 
-2. **自动降级机制**：
-   - 如果未配置YOLO模型文件,系统会自动降级为模板匹配方式
-   - 降级时会在日志中记录 `[WARNING] YOLO模型未配置,降级为模板匹配`
-   - 建议始终配置有效的YOLO模型以确保检测准确性
-
-3. **检测结果格式**：
-   - YOLO推理返回目标列表,包含以下信息：
-     - **类别（class）**：识别到的目标类别名称
-     - **置信度（confidence）**：识别结果的置信度分数（0.0~1.0）
-     - **边界框（bbox）**：目标在画面中的位置 `[x, y, width, height]`
-   - 示例返回值：
-     ```json
-     {
-       "class": "NPC",
-       "confidence": 0.85,
-       "bbox": [100, 200, 50, 80]
-     }
-     ```
-
-4. **使用示例**：
-   ```json
-   {
-     "target_class": "怪物",
-     "confidence": 0.6,
-     "action": "click",
-     "model_path": "models/yolov8_game.pt"
-   }
-   ```
-
-#### 函数调用 (function)
-
-```json
-{
-  "module": "",
-  "function": "",
-  "args": [],
-  "kwargs": {}
-}
-```
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| module | string | 模块名（来自任务库） |
-| function | string | 函数名 |
-| args | list | 位置参数（JSON 数组） |
-| kwargs | object | 关键字参数（JSON 对象） |
-
-#### 条件分支 (condition)
-
-条件分支事件支持两种模式：**simple模式**（简单条件判断）和 **switch模式**（多分支选择）。
-
-##### simple模式 - 基础条件判断
-
-```json
-{
-  "mode": "simple",
-  "variable": "",
-  "operator": "==",
-  "value": "",
-  "true_branch": [],
-  "false_branch": []
-}
-```
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| mode | string | 固定为 `"simple"` |
-| variable | string | 变量名,支持嵌套访问（如 `result.success`） |
-| operator | string | 运算符：`==` / `!=` / `>` / `<` / `>=` / `<=` |
-| value | any | 比较值（可以是字符串、数字、布尔值等） |
-| true_branch | array | 条件为真时执行的事件列表（会被递归执行） |
-| false_branch | array | 条件为假时执行的事件列表（会被递归执行） |
-
-**simple模式示例**：
-
-```json
-{
-  "mode": "simple",
-  "variable": "result.success",
-  "operator": "==",
-  "value": true,
-  "true_branch": [
-    {
-      "event_type": "click",
-      "params": {"x": 100, "y": 200}
-    },
-    {
-      "event_type": "key",
-      "params": {"keys": "enter"}
-    }
-  ],
-  "false_branch": [
-    {
-      "event_type": "key",
-      "params": {"keys": "esc"}
-    }
-  ]
-}
-```
-
-**说明**：
-- 当变量 `result.success` 的值等于 `true` 时,执行 `true_branch` 中的点击和按键事件
-- 否则执行 `false_branch` 中的 ESC 按键事件
-- `true_branch` 和 `false_branch` 中的事件序列会被递归执行,支持嵌套其他事件类型
-
-##### switch模式 - 多分支选择
-
-```json
-{
-  "mode": "switch",
-  "match_field": "",
-  "cases": []
-}
-```
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| mode | string | 固定为 `"switch"` |
-| match_field | string | 要匹配的字段名（如 `target_location`） |
-| cases | array | 分支列表,每项包含 `match_value` 和 `actions` |
-
-**switch模式示例**：
-
-```json
-{
-  "mode": "switch",
-  "match_field": "target_location",
-  "cases": [
-    {
-      "match_value": "江南野外",
-      "actions": [
-        {
-          "event_type": "click",
-          "params": {"x": 727, "y": 438}
-        },
-        {
-          "event_type": "wait",
-          "params": {"duration": 2.0}
-        }
-      ]
-    },
-    {
-      "match_value": "长安城",
-      "actions": [
-        {
-          "event_type": "click",
-          "params": {"x": 500, "y": 300}
-        }
-      ]
-    },
-    {
-      "match_value": "建邺城",
-      "actions": [
-        {
-          "event_type": "click",
-          "params": {"x": 600, "y": 400}
-        }
-      ]
-    }
-  ]
-}
-```
-
-**说明**：
-- 系统会依次检查 `match_field` 的值是否匹配每个 `case` 的 `match_value`
-- 匹配成功后,执行该 `case` 的 `actions` 事件序列
-- 如果所有 `case` 都不匹配,则不执行任何动作
-
-##### 嵌套条件分支
-
-条件分支支持最多 **3层嵌套**,可以在 `true_branch` 或 `actions` 中再次嵌套 `condition` 事件：
-
-```json
-{
-  "mode": "simple",
-  "variable": "level",
-  "operator": ">",
-  "value": 50,
-  "true_branch": [
-    {
-      "event_type": "condition",
-      "params": {
-        "mode": "simple",
-        "variable": "hp",
-        "operator": "<",
-        "value": 30,
-        "true_branch": [
-          {
-            "event_type": "click",
-            "params": {"x": 100, "y": 100}
-          }
-        ],
-        "false_branch": [
-          {
-            "event_type": "click",
-            "params": {"x": 200, "y": 200}
-          }
-        ]
-      }
-    }
-  ]
-}
-```
-
-**重要提示**：
-- `true_branch` 和 `false_branch` 中的事件序列会被递归执行
-- 嵌套深度限制为3层,超出会触发错误日志
-- 建议使用清晰的变量命名和注释来提高可读性
+- **simple 模式**：`variable`（变量名）、`operator`
+  （支持 `==` / `!=` / `>` / `<` / `>=` / `<=`）、`value`、`true_branch`、`false_branch`。
+- **switch 模式**：
+  - `match_field`：匹配字段（可选 `target_location` / `quest_name` / `progress_num` /
+    `map_name` / `__custom__`）。
+  - `match_custom_field`：`match_field` 为 `__custom__` 时填写自定义字段名。
+  - `source_var`：上游函数调用事件的变量名（留空=自动向上游搜索）。
+  - `cases`：匹配分支列表，每项为 `{ "match_value": ..., "actions": [ 事件字典列表 ] }`；
+    每个 case 的子流程通过「子流程编辑器」（`SubFlowEditorDialog`）编辑。
+  - `default_action`：默认动作，取值 `none` / `click` / `file_lookup` / `subflow`：
+    - `none`：不匹配时什么都不做；
+    - `click`：点击固定坐标（`x`,`y`,`button`）；
+    - `file_lookup`：查坐标文件点击（`coord_file`,`button`）；
+    - `subflow`：执行一段子流程（`actions`）。
+  - `true_branch` / `false_branch`：向后兼容字段。
 
 ### 6.6 编辑事件参数
 
-1. 在事件列表中选中要编辑的事件。
-2. 点击 **编辑事件** 按钮。
-3. 在弹出的对话框中修改事件名称（当前版本仅支持修改名称）。
-4. 如需修改事件参数，请保存任务序列后手动编辑 JSON 文件，再重新打开。
+在「事件列表」中选中事件后点击 **编辑事件**，弹出 `EventEditorDialog`。该对话框按事件类型
+加载对应参数页，可修改全部参数（并非仅改名称）。确认后写回事件的 `params`。
 
 ### 6.7 事件重试机制
 
-每个事件都支持配置重试机制,以增强任务执行的容错能力：
+事件通用字段控制容错（来自 `models/event.py`）：
 
-#### 重试参数说明
-
-| 参数 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| max_retries | int | 3 | 最大重试次数（0表示不重试） |
-| retry_interval | float | 1.0 | 重试间隔时间（秒） |
-
-#### 配置方式
-
-在事件的JSON配置中,通过以下字段设置重试参数：
-
-```json
-{
-  "event_type": "click",
-  "params": {"x": 100, "y": 200},
-  "max_retries": 5,
-  "retry_interval": 2.0
-}
-```
-
-#### 重试行为说明
-
-1. **触发条件**：
-   - 事件执行过程中发生异常（如点击失败、图像识别失败等）
-   - 事件的 `on_error` 策略设置为 `retry`
-
-2. **重试流程**：
-   - 首次执行失败后,等待 `retry_interval` 秒
-   - 再次执行该事件
-   - 重复此过程直到成功或达到 `max_retries` 次数
-
-3. **失败处理**：
-   - 如果达到最大重试次数仍失败,根据 `on_error` 策略处理：
-     - `skip`：跳过当前事件,继续执行下一个事件
-     - `stop`：停止整个任务序列
-     - `retry`：（已达到重试上限）按 `skip` 处理
-
-#### 使用建议
-
-- **图像识别事件**：建议设置 3-5 次重试,间隔 1-2 秒,以应对画面变化
-- **点击事件**：建议设置 2-3 次重试,间隔 0.5-1 秒,以应对点击延迟
-- **函数调用**：根据函数稳定性设置重试次数,避免无意义的重试
-
-**示例配置**：
-
-```json
-{
-  "event_type": "image",
-  "params": {
-    "template_path": "images/button.png",
-    "threshold": 0.8,
-    "action": "click"
-  },
-  "max_retries": 5,
-  "retry_interval": 1.5,
-  "on_error": "skip"
-}
-```
-
-**注意**：重试机制会延长任务执行时间,请根据实际场景合理配置重试次数和间隔。
+- `on_error`：出错时的处理，默认 `skip`（跳过继续）。
+- `max_retries`：最大重试次数，默认 `3`。
+- `retry_interval`：重试间隔（秒），默认 `1.0`。
+- `pre_delay`：事件执行前延迟（秒），默认 `0`。
+- `post_delay`：事件执行后延迟（秒），默认 `0.5`。
+- `enabled`：是否启用，默认 `true`。
 
 ### 6.8 调整事件顺序
 
-- 选中事件后点击 **上移** 按钮，事件上移一位。
-- 选中事件后点击 **下移** 按钮，事件下移一位。
-- 已在边界（顶部/底部）的事件点击上移/下移无效。
+在「事件列表」中使用 **上移** / **下移** 调整事件执行顺序。
 
 ### 6.9 保存任务序列
 
-1. 点击菜单 **文件 → 保存任务序列**（或按 Ctrl+S）。
-2. 在弹出的保存对话框中选择目录、输入文件名（默认使用任务序列名称，自动追加 `.json` 后缀）。
-3. 点击"保存"，系统弹出"保存成功"提示。
+- 自动保存：每次任务/事件增删改，自动写入自动保存路径（组 1 为
+  `data/task_sequence_autosave.json`；组 2+ 为组配置指定的 `task_sequence` 路径或
+  `data/task_sequence_autosave_gN.json`）。
+- 手动保存：菜单 **文件 → 保存任务序列**（`Ctrl+S`），选择路径导出为 `.json`。
 
 ### 6.10 绑定游戏窗口
 
-1. 点击工具栏 **🔗 绑定窗口** 按钮。
-2. 在弹出的对话框中选择绑定方式：
-   - **按窗口标题绑定**：输入窗口标题（支持子串匹配，如"梦幻西游"）。
-   - **按 PID 绑定**：输入目标进程 PID（整数）。
-3. 点击"确定"，系统查找匹配窗口并绑定。
-4. 绑定成功后会弹出对话框显示窗口标题、PID 和 hwnd，工具栏右侧状态标签变为绿色"已绑定: 标题"。
+见 [9.1](#91-绑定方式)。
 
 ### 6.11 开始执行
 
-1. 切换到 **主控制面板** 标签页（可选，便于观察日志）。
-2. 点击工具栏 **▶ 开始执行** 按钮。
-3. 系统调用 `task_engine` 启动任务序列，状态栏显示"运行中"，主控制面板进度条开始更新。
-4. 若任务序列为空，会弹出"任务序列为空"警告；若引擎已在运行，会弹出"启动失败"警告。
+- 工具栏 **▶ 开始执行**：执行任务序列全部任务。
+- 工具栏 **▶ 执行当前任务**：仅执行任务下拉框当前选中的任务。
+- 执行前需先绑定窗口（见 [9.1](#91-绑定方式)）。
 
 ### 6.12 监控执行
 
-- **主控制面板**实时显示：
-  - 当前任务名称
-  - 执行状态（运行中/已暂停/已停止/已完成）
-  - 进度条百分比和事件计数
-  - 当前事件名称
-  - 彩色日志流（含时间戳、级别、消息）
-- **状态栏**显示当前事件名和进度，如 `进度: 3/5 - 鼠标点击 2`。
+- 「主控制面板」实时显示执行状态、进度、当前事件与多色日志。
+- 执行结束后弹窗提示「任务完成 / 任务终止」。
 
-#### 验证码监控（已移除，待重做）
+### 6.13 暂停 / 停止
 
-> 验证码弹窗自动点击功能已于 2026-08-03 按需求整体移除（模块、接线、`settings.json` 配置块、测试一并删除），后续版本将重新实现。当前版本任务运行时**不再自动处理验证码弹窗**，遇验证码需手动处理。
-
-### 6.12 暂停 / 停止
-
-- 点击工具栏 **⏸ 暂停** 按钮：任务暂停，状态变为"已暂停"。再次点击 **▶ 开始执行** 可恢复。
-- 点击工具栏 **⏹ 停止** 按钮：任务终止，状态变为"已停止"。
-- 任务全部完成后，系统弹出"任务完成"提示框，状态显示"已完成"。
+- **⏸ 暂停**：暂停当前执行。
+- **⏹ 停止**：停止当前执行。
 
 ---
 
@@ -812,53 +431,38 @@ python main.py
 
 ### 7.1 预置模块
 
-系统在 `config/settings.json` 中已预置导入以下模块（共 10 个）：
-
-| 模块名 | 类别 | 路径 | 用途 |
-| --- | --- | --- | --- |
-| JHRW | custom | `E:\DS\梦幻西游脚本函数包\JHRW.py` | 任务获取 |
-| JNYW | map | `E:\DS\梦幻西游脚本函数包\地图数据\JNYW.py` | 江南野外地图函数 |
-| CAC | map | `E:\DS\梦幻西游脚本函数包\地图数据\CAC.py` | 长安城地图函数 |
-| DHW | map | `E:\DS\梦幻西游脚本函数包\地图数据\DHW.py` | 大海坞地图函数 |
-| CSC | map | `E:\DS\梦幻西游脚本函数包\地图数据\CSC.py` | 长寿村地图函数 |
-| XLNR | map | `E:\DS\梦幻西游脚本函数包\地图数据\XLNR.py` | 小雷音寺地图函数 |
-| BXG | map | `E:\DS\梦幻西游脚本函数包\地图数据\BXG.py` | 宝象国地图函数 |
-| ZZG | map | `E:\DS\梦幻西游脚本函数包\地图数据\ZZG.py` | 朱紫国地图函数 |
-| JYC | map | `E:\DS\梦幻西游脚本函数包\地图数据\JYC.py` | 建邺城地图函数 |
-| ALG | map | `E:\DS\梦幻西游脚本函数包\地图数据\ALG.py` | 傲来国地图函数 |
+预置模块列表定义在 `config/settings.json` 的 `task_library.modules` 字段，每个条目指向
+`tasks/library/` 或 `library/map_packs/` 下的一个 Python 模块（以文件名作为模块名）。
+默认包含约 19 个模块，例如：`SYHS`、`HCA`、`JHRW1`、`JNYW`、`CAC`、`DHW`、`CSC`、`XLNR`、
+`BXG`、`ZZG`、`JYC`、`ALG`、`JHRW`、`MPCG`、`SYBUZ2`、`DSHNPC`、`BSHC`、`ZGUI`、`PZXY-ZG`。
+（权威列表以 `settings.json` 为准。）
 
 ### 7.2 导入新脚本
 
-1. 切换到 **任务库** 标签页。
-2. 点击顶部 **导入脚本** 按钮。
-3. 在文件选择对话框中选中 `.py` 文件。
-4. 系统以文件名（不含扩展名）作为模块名导入。若同名模块已存在，会提示是否覆盖。
-5. 导入成功后模块自动加入列表，分类标记为 `custom`。
+在「任务库」标签页点击 **导入脚本**，选择本地 Python 文件，作为自定义（custom）模块加入。
+导入后出现在模块列表中，勾选即启用。
 
 ### 7.3 模块管理
 
-- **启用 / 禁用**：勾选/取消列表项复选框，或选中后点击底部 **启用** / **禁用** 按钮。
-- **重新加载**：选中模块后点击 **重新加载** 按钮，可重新加载最新源码（修改 `.py` 文件后使用）。
-- **移除**：选中模块后点击 **移除** 按钮，从任务库移除（**不会删除原始 `.py` 文件**）。
-- **批量刷新**：点击顶部 **刷新** 按钮，逐个重载所有模块，完成后弹出统计结果。
+- **刷新**：重新从配置加载模块列表。
+- **保存配置**：将当前模块启用状态写入 `settings.json`。
+- **启用 / 禁用**：切换模块勾选状态（也可直接勾选列表项）。
+- **重新加载**：重新导入模块（修改脚本后使用）。
+- **移除**：从列表中移除自定义模块。
 
 ### 7.4 模块分类
 
-- **custom**（自定义）：用户通过"导入脚本"按钮导入的模块。
-- **map**（地图函数）：预置的地图数据模块。
-- **built_in**（内置）：系统内置模块（如有）。
+模块按 `category` 着色：
+
+- `built_in`：内置模块（蓝）
+- `custom`：自定义导入模块（绿）
+- `map`：地图包模块（橙）
 
 ### 7.5 函数调用
 
-在任务编辑中调用任务库函数：
-
-1. 在任务编辑面板添加 **⚙ 函数调用** 事件。
-2. 在事件 `params` 中设置：
-   - `module`：模块名（如 `JHRW`、`JNYW`）
-   - `function`：函数名（可在任务库面板右侧函数列表中查看）
-   - `args`：位置参数数组，如 `[100, 200]`
-   - `kwargs`：关键字参数对象，如 `{"timeout": 5.0}`
-3. 当前版本需通过编辑 JSON 文件修改 `params` 字段，未来版本将提供可视化编辑器。
+在「任务编辑」中添加「函数调用」事件，从 `module` 下拉选择已启用模块（含 `auto` 自动按
+地图匹配），再从 `function` 下拉选择该模块导出的函数，填写 `args` / `kwargs`（JSON）。
+函数执行结果（如 `target_location`）会进入变量上下文，供后续事件或条件分支引用。
 
 ---
 
@@ -866,39 +470,30 @@ python main.py
 
 ### 8.1 配置位置
 
-YOLO 模型在 **配置** 标签页的 **识别参数** 组中配置：
+YOLO 相关配置位于「配置 → 识别参数」分组：
 
-- **YOLO 模型**：文本框 + **浏览** 按钮，选择 `.pt` 模型文件路径。
-- **YOLO 置信度**：数值框，设置置信度阈值（默认 0.5，范围 0.0~1.0）。
+- **YOLO 置信度**：全局检测置信度阈值（0–1），作为事件 `conf_*` 档位的基准。
+- **YOLO 模型**：模型文件路径，写入 `recognition.yolo_model_path`。
 
 ### 8.2 模型文件
 
-- 模型文件格式为 `.pt`，由 YOLOv8 训练产物生成。
-- 若不知如何训练，可使用官方预训练模型（如 `yolov8n.pt`）作为起点。
-- 配置完成后点击 **保存配置** 持久化到 `settings.json`。
+默认模型路径为 `models/active.pt`（由 `recognition.yolo_model_path` 决定，可在配置面板
+用浏览按钮修改）。
 
 ### 8.3 置信度阈值
 
-- 默认值 0.5，表示检测置信度 ≥ 0.5 的目标才会被采纳。
-- 阈值越高，误检越少但漏检可能增多；阈值越低，召回率提高但误检增多。
-- 推荐范围：0.3~0.8。
+事件内通过 `conf_near` / `conf_mid` / `conf_far` 三档置信度控制近/中/远目标的判定；
+同时受全局「YOLO 置信度」约束。
 
 ### 8.4 使用方式
 
-1. 在配置面板设置 YOLO 模型路径并保存配置。
-2. 在任务编辑中添加 **👁 YOLO 检测** 事件。
-3. 设置 `params`：
-   - `target_class`：目标类别名称（须与训练时的类别一致）
-   - `confidence`：可单独覆盖全局置信度
-   - `action`：`click`（识别后点击）/ `record`（仅记录日志）
-   - `model_path`：可单独覆盖全局模型路径（留空则使用全局配置）
+在「任务编辑」中添加「YOLO 识别」事件，填写 `target_class`、`region`、`action` 等参数
+（见 [6.5.5](#655-yolo-识别yolo)）。需要 `torch` + `ultralytics` 已安装。
 
 ### 8.5 注意事项
 
-- 未配置模型路径时，YOLO 事件会执行失败，日志报错。
-- `ultralytics` 库需单独安装（`pip install ultralytics`），且依赖 PyTorch，体积较大。
-- YOLO 推理较慢，不适合对实时性要求极高的场景，建议适当增大 `截图间隔`。
-- 模型文件较大（数十 MB 到数百 MB），请确保磁盘空间充足。
+- YOLO 依赖为可选，未安装时相关事件执行会报缺包错误。
+- `core.yolo_detector` 为懒加载，仅在首次使用 YOLO 事件时导入，避免无谓占用显存。
 
 ---
 
@@ -906,37 +501,38 @@ YOLO 模型在 **配置** 标签页的 **识别参数** 组中配置：
 
 ### 9.1 绑定方式
 
-系统支持两种窗口绑定方式：
+点击工具栏 **🔗 绑定窗口**，弹出 `WindowSelectorDialog`（`gui/window_selector.py`）。
 
-#### 按窗口标题绑定
+对话框以表格列出当前游戏窗口，列为：**PID**、**角色名**、**状态**、**窗口标题**、**句柄**。
 
-- 输入窗口标题（支持子串匹配）。
-- 例如游戏窗口标题为"梦幻西游 Online - 角色名"，输入"梦幻西游"即可匹配。
-- 若同时匹配多个窗口，系统会绑定找到的第一个。
+操作按钮：
 
-#### 按 PID 绑定
+- **锁定选中窗口**：绑定选中的窗口，将 `window.pid`（及标题）持久化到配置。
+- **解除绑定**：解除当前绑定。
+- **关闭**：关闭对话框。
 
-- 输入目标进程 PID（整数）。
-- 可通过任务管理器查看游戏进程的 PID。
-- PID 绑定更精确，避免多开场景下的误绑定。
+绑定成功后，工具栏「窗口状态标签」变为「已绑定: PID=...」，并自动把网关换绑到该 PID。
+启动时可配置 `window.auto_restore`（默认 `true`）自动恢复上次绑定。
+多组环境下，绑定仅对当前组生效（绑定信息写入对应组的 `config/group<N>/settings.json`）。
 
 ### 9.2 输入模式
 
-| 模式 | 实现 | 特点 |
-| --- | --- | --- |
-| foreground（前台） | PyAutoGUI | 需要游戏窗口处于前台；兼容性最好 |
-| background（后台） | win32 PostMessage | 窗口可在后台运行；部分游戏不支持 |
+输入模式由配置文件 `window.input_mode` 控制（`core/input_controller.py` 读取，未配置默认
+`foreground`）：
 
-#### 切换输入模式
+- `foreground`：前台输入（会操作真实鼠标/键盘）。
+- `background`：后台输入（不抢占鼠标，默认 `background`）。
 
-在 **配置** 标签页的 **窗口配置** 组中，通过 **输入模式** 下拉框切换。切换后需点击 **保存配置** 持久化。
+> 注意：输入模式**不在 GUI 配置面板中编辑**，需手动修改 `settings.json` 的
+> `window.input_mode` 字段。`input_mode=background` 时，地图类函数会自动注入
+> `background=True` 参数。
 
 ### 9.3 注意事项
 
-- **后台模式对部分游戏可能不生效**：梦幻西游等游戏可能使用 DirectInput 或自绘控件，PostMessage 发送的鼠标/键盘消息可能被忽略。建议先在测试场景验证后台模式是否可用，无效则切换为前台模式。
-- 前台模式下，任务执行期间请勿切换窗口，否则输入会发送到错误的目标。
-- 后台模式下可同时操作其他窗口，但需要保证游戏窗口不被最小化（最小化后窗口句柄可能失效）。
-- 鼠标点击事件的 `params.background` 字段可单独覆盖单个事件的输入模式（true=后台，false=前台）。
+- 绑定窗口后会立即同步网关到新 PID，使状态栏网关徽章变为「●在线」。
+- 多开场景下请用 PID 区分不同账号窗口。
+- 关闭 GUI 时会优雅停止任务引擎与本组网关（detach frida session），请勿直接任务管理器
+  强杀，以免游戏闪退。
 
 ---
 
@@ -944,388 +540,254 @@ YOLO 模型在 **配置** 标签页的 **识别参数** 组中配置：
 
 ### 10.1 文件位置
 
-配置文件路径：`config/settings.json`
+- 默认配置：`config/settings.json`
+- 多组配置：`config/group1/settings.json`、`config/group2/settings.json` ...（由 `MHXY_GROUP`
+  决定，组 1 仍用根目录 `config/settings.json` 兼容历史）。
+- 任务序列自动保存：
+  - 组 1：`data/task_sequence_autosave.json`
+  - 组 2+：`data/task_sequence_group<N>.json`（组配置 `task_sequence` 指定）或
+    `data/task_sequence_autosave_g<N>.json`
+- 运行期导出：`data/current_quest.json`（函数事件返回的游戏任务信息，供 IPC）
 
 ### 10.2 结构说明
 
-```json
-{
-  "window": {
-    "title": "",
-    "pid": null,
-    "input_mode": "background"
-  },
-  "recognition": {
-    "template_threshold": 0.8,
-    "yolo_confidence": 0.5,
-    "yolo_model_path": "",
-    "screenshot_interval": 0.5
-  },
-  "logging": {
-    "level": "INFO",
-    "file_path": "logs/automation.log"
-  },
-  "task_library": {
-    "modules": [
-      {"name": "JHRW", "path": "...", "enabled": true, "category": "custom"},
-      {"name": "JNYW", "path": "...", "enabled": true, "category": "map"}
-    ]
-  }
-}
-```
+`config/settings.json` 主要分区（以代码 `_DEFAULTS` 与实际文件为准）：
+
+- `window`：`title`、`pid`、`input_mode`（默认 `background`）、`auto_restore` 等。
+- `recognition`：`template_threshold`（默认 0.8）、`yolo_confidence`（默认 0.5）、
+  `yolo_model_path`（默认 `models/active.pt`）、`screenshot_interval`（默认 0.5）、
+  `jhrw_roi`（`[x,y,w,h]`）。
+- `logging`：`level`（默认 INFO）、`file_path`（默认 `logs/automation.log`）、
+  `auto_clean_days`（默认 7）。
+- `task_library`：`modules`（模块列表）。
+- `input`：`debug_click`、`cursor_sync_click`、`confirm_click_done`、`verify_retries`
+  （默认 3）、`verify_threshold`（默认 30）、`verify_settle_delay`（默认 0.2）。
+- `resolution`：`base_size`（`[1000,600]`）、`auto_scale`（默认 `true`）。
+- `relogin`：`enabled`（默认 false）、`interval_min`（默认 180）、`client_path`、
+  `click_points`（坐标列表）、`click_gap`（默认 1.2）。
 
 ### 10.3 字段说明
 
-#### window（窗口配置）
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| title | string | 窗口标题（支持子串匹配），空字符串表示未设置 |
-| pid | int / null | 进程 PID，null 表示未设置 |
-| input_mode | string | 输入模式：`foreground` / `background` |
-
-#### recognition（识别参数）
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| template_threshold | float | 模板匹配阈值（0.0~1.0） |
-| yolo_confidence | float | YOLO 置信度阈值（0.0~1.0） |
-| yolo_model_path | string | YOLO 模型文件路径 |
-| screenshot_interval | float | 截图间隔（秒） |
-
-#### logging（日志配置）
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| level | string | 日志级别：`DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| file_path | string | 日志文件路径 |
-
-#### task_library（任务库配置）
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| modules | array | 模块列表，每项含 `name` / `path` / `enabled` / `category` |
-
-每个模块项的字段：
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| name | string | 模块名（用于函数调用事件引用） |
-| path | string | 模块文件绝对路径 |
-| enabled | bool | 是否启用 |
-| category | string | 分类：`custom` / `map` / `built_in` |
+| 分区 | 字段 | 说明 | 默认值 |
+| --- | --- | --- | --- |
+| window | input_mode | 输入模式 | background |
+| recognition | template_threshold | 模板匹配阈值 | 0.8 |
+| recognition | yolo_confidence | YOLO 置信度 | 0.5 |
+| recognition | yolo_model_path | YOLO 模型路径 | models/active.pt |
+| recognition | screenshot_interval | 截图间隔(秒) | 0.5 |
+| recognition | jhrw_roi | 节日任务 ROI | [840,156,150,77] |
+| logging | level | 日志级别 | INFO |
+| logging | auto_clean_days | 日志自动清理(天) | 7 |
+| input | verify_retries | 点击验证重试 | 3 |
+| input | verify_threshold | 点击验证阈值 | 30 |
+| resolution | base_size | 基准分辨率 | [1000,600] |
+| resolution | auto_scale | 自动缩放 | true |
+| relogin | enabled | 定时重登开关 | false |
+| relogin | interval_min | 重登间隔(分钟) | 180 |
 
 ### 10.4 手动编辑
 
-- 可使用任意文本编辑器手动修改 `settings.json`。
-- 修改后需在应用中点击菜单 **设置 → 重新加载配置**（或在配置面板点击 **重新加载** 按钮）才会生效。
-- 修改时请保持 JSON 格式合法（注意引号、逗号、括号匹配），否则加载会失败。
+可用菜单 **设置 → 重新加载配置** 重新读取修改后的 `settings.json`；修改后点击
+**设置 → 保存配置** 可写回。手动编辑 JSON 后请确保格式合法。
 
 ---
 
 ## 11. 任务序列 JSON 格式
 
+任务序列以 `.json` 文件保存，由 `models/task_sequence.py` 与 `models/task.py` /
+`models/event.py` 序列化。
+
 ### 11.1 JSON 结构
 
-任务序列采用嵌套结构，参考 `models/task_sequence.py`、`models/task.py`、`models/event.py` 的 `to_dict()` 方法。
-
-顶层结构（TaskSequence）：
+顶层（`TaskSequence`）：
 
 ```json
 {
-  "id": "UUID 字符串",
+  "id": "uuid",
   "name": "任务序列名称",
-  "tasks": [ ...任务列表... ],
+  "tasks": [ "Task 对象", ... ],
   "current_task_index": 0,
-  "current_event_index": 0
+  "current_event_index": 0,
+  "loop_count": 0,
+  "loop_delay": 1.0
 }
 ```
 
-任务结构（Task）：
+- `loop_count`：整个序列的循环次数，`0`=无限，默认 `1`。
+- `loop_delay`：序列每轮循环间隔（秒），默认 `1.0`。
+
+每个 `Task` 对象：
 
 ```json
 {
-  "id": "UUID 字符串",
+  "id": "uuid",
   "name": "任务名称",
   "description": "任务描述",
-  "events": [ ...事件列表... ],
+  "events": [ "Event 对象", ... ],
   "loop_count": 1,
   "loop_delay": 1.0,
-  "created_at": "2026-07-30 14:25:36",
-  "updated_at": "2026-07-30 14:25:36"
+  "created_at": "2026-09-10 12:00:00",
+  "updated_at": "2026-09-10 12:00:00"
 }
 ```
 
-事件结构（Event）：
+- `loop_count`：该任务自身循环次数，`0`=无限，默认 `1`。
+- `loop_delay`：任务每轮循环间隔（秒），默认 `1.0`。
+
+### 11.2 事件（Event）字段
+
+每个事件（`models/event.py` 的 `to_dict()`）：
 
 ```json
 {
-  "id": "UUID 字符串",
-  "name": "事件名称",
-  "event_type": "click",
-  "params": { ...事件参数... },
-  "pre_delay": 0.0,
+  "id": "uuid",
+  "name": "事件名",
+  "event_type": "click | key | wait | image | yolo | function | condition",
+  "params": { },
+  "pre_delay": 0,
   "post_delay": 0.5,
   "on_error": "skip",
   "max_retries": 3,
-  "enabled": true
+  "retry_interval": 1.0,
+  "enabled": true,
+  "var_name": ""
 }
 ```
 
-### 11.2 完整示例
+`params` 各事件类型的具体字段见 [6.5](#65-七种事件类型说明)。
 
-以下是一个包含 1 个任务、2 个事件的完整任务序列示例：
+### 11.3 完整示例
 
 ```json
 {
-  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "name": "日常签到",
+  "id": "seq-001",
+  "name": "示例序列",
   "tasks": [
     {
-      "id": "task-uuid-001",
-      "name": "签到任务",
-      "description": "每日登录并签到",
+      "id": "task-001",
+      "name": "抓鬼一轮",
+      "description": "自动完成一轮抓鬼",
+      "loop_count": 0,
+      "loop_delay": 2.0,
+      "created_at": "2026-09-10 12:00:00",
+      "updated_at": "2026-09-10 12:00:00",
       "events": [
         {
-          "id": "event-uuid-001",
-          "name": "点击签到按钮",
+          "id": "evt-001",
+          "name": "点击领取",
           "event_type": "click",
           "params": {
-            "x": 500,
-            "y": 400,
-            "button": "left",
-            "background": false
+            "x": 327, "y": 345, "button": "left", "background": true,
+            "press_delay": 0.05, "verify": false,
+            "probe_x": 0, "probe_y": 0,
+            "verify_retries": 3, "verify_threshold": 30
           },
-          "pre_delay": 1.0,
-          "post_delay": 0.5,
-          "on_error": "retry",
-          "max_retries": 3,
-          "enabled": true
+          "pre_delay": 0.2, "post_delay": 0.5,
+          "on_error": "skip", "max_retries": 3,
+          "retry_interval": 1.0, "enabled": true, "var_name": ""
         },
         {
-          "id": "event-uuid-002",
-          "name": "等待签到完成",
-          "event_type": "wait",
+          "id": "evt-002",
+          "name": "调用寻路",
+          "event_type": "function",
           "params": {
-            "duration": 2.0,
-            "wait_for_image": false,
-            "image_path": "",
-            "timeout": 10.0
+            "module": "JHRW", "function": "go_target",
+            "args": [], "kwargs": {},
+            "result_validate_field": "target_location",
+            "result_validate_whitelist": null,
+            "result_validate_retries": 3,
+            "result_validate_retry_interval": 1.0,
+            "auto_wait_arrival": true,
+            "wait_arrival_timeout": 30.0,
+            "wait_arrival_tolerance": 5,
+            "wait_arrival_stop_confirm_s": 2.0,
+            "wait_arrival_sample_interval": 0.5,
+            "wait_arrival_retries": 3
           },
-          "pre_delay": 0.0,
-          "post_delay": 0.5,
-          "on_error": "skip",
-          "max_retries": 3,
-          "enabled": true
+          "pre_delay": 0, "post_delay": 0.5,
+          "on_error": "skip", "max_retries": 3,
+          "retry_interval": 1.0, "enabled": true, "var_name": "JHRW"
+        },
+        {
+          "id": "evt-003",
+          "name": "按地图分流",
+          "event_type": "condition",
+          "params": {
+            "mode": "switch",
+            "match_field": "target_location",
+            "match_custom_field": "",
+            "source_var": "JHRW",
+            "cases": [
+              {
+                "match_value": "长寿村",
+                "actions": [
+                  { "id": "sub-1", "name": "长寿动作",
+                    "event_type": "click", "params": { "x": 100, "y": 200, "button": "left", "background": true },
+                    "pre_delay": 0, "post_delay": 0.5, "on_error": "skip",
+                    "max_retries": 3, "retry_interval": 1.0, "enabled": true, "var_name": "" }
+                ]
+              }
+            ],
+            "default_action": { "action": "none" },
+            "true_branch": [], "false_branch": []
+          },
+          "pre_delay": 0, "post_delay": 0.5,
+          "on_error": "skip", "max_retries": 3,
+          "retry_interval": 1.0, "enabled": true, "var_name": ""
         }
-      ],
-      "loop_count": 1,
-      "loop_delay": 1.0,
-      "created_at": "2026-07-30 14:25:36",
-      "updated_at": "2026-07-30 14:25:36"
+      ]
     }
   ],
   "current_task_index": 0,
-  "current_event_index": 0
+  "current_event_index": 0,
+  "loop_count": 1,
+  "loop_delay": 1.0
 }
 ```
 
-### 11.3 字段说明
+---
 
-#### TaskSequence 顶层字段
+## 12. 常见问题
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| id | string | 序列唯一标识（UUID） |
-| name | string | 序列名称 |
-| tasks | array | 任务列表（按执行顺序） |
-| current_task_index | int | 当前任务下标（游标） |
-| current_event_index | int | 当前事件下标（游标） |
+**Q1：函数专用 GUI 和 PP GUI 有什么区别？**
+A：函数专用 GUI 入口为 `main.py`，编排并执行单个账号的任务序列（本文档描述对象）；
+PP GUI 入口为 `tools/pp_gui.py`，用于五开多账号并行，详见根目录 `README.md`。
 
-#### Task 字段
+**Q2：启动后提示窗口未绑定？**
+A：点击工具栏「🔗 绑定窗口」，在表格中选中目标游戏窗口并「锁定选中窗口」。若设置了
+`window.auto_restore`（默认开启），下次启动会自动恢复。
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| id | string | 任务唯一标识（UUID） |
-| name | string | 任务名称 |
-| description | string | 任务描述 |
-| events | array | 事件列表（按执行顺序） |
-| loop_count | int | 循环次数，0=无限循环 |
-| loop_delay | float | 循环间隔（秒） |
-| created_at | string | 创建时间 |
-| updated_at | string | 更新时间 |
+**Q3：YOLO 事件报错缺包？**
+A：未安装 `torch` / `ultralytics`。按 [2.4](#24-yolo-模型可选安装说明) 安装后重试。
 
-#### Event 字段
+**Q4：如何修改输入模式（前台/后台）？**
+A：输入模式不在 GUI 配置面板内，需手动编辑 `settings.json` 的 `window.input_mode`
+（`foreground` 或 `background`，默认 `background`）。
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| id | string | 事件唯一标识（UUID） |
-| name | string | 事件名称 |
-| event_type | string | 事件类型：`click` / `key` / `wait` / `image` / `yolo` / `function` / `condition` |
-| params | object | 事件参数（结构随 event_type 变化，详见第 6.5 节） |
-| pre_delay | float | 执行前延迟（秒） |
-| post_delay | float | 执行后延迟（秒） |
-| on_error | string | 错误处理：`retry` / `skip` / `stop` |
-| max_retries | int | 最大重试次数 |
-| enabled | bool | 是否启用 |
+**Q5：任务序列会自动保存吗？**
+A：会。每次增删改自动写入自动保存路径（见 [10.1](#101-文件位置)）；也可菜单
+**文件 → 保存任务序列**（`Ctrl+S`）手动导出。
+
+**Q6：条件分支支持几层嵌套？**
+A：条件分支通过递归执行子流程实现，引擎按深度递归处理，没有固定的「最多 3 层」硬限制；
+实际嵌套深度取决于任务编排。
+
+**Q7：如何并行多开？**
+A：使用 `start_group1.bat` / `start_group2.bat` 启动不同组（独立进程、独立配置与网关），
+或在已运行 GUI 中点击工具栏「🚀 启动其他组」。
+
+**Q8：验证码看门狗是什么？**
+A：`main.py` 默认会启动验证码看门狗（`core.captcha_link.ensure_watchdog`）；而
+`start_group*.bat` 通过环境变量 `MHXY_NO_WATCHDOG=1` 禁用它。
+
+**Q9：定时重新登录如何配置？**
+A：在「配置 → 定时重新登录」分组勾选「启用定时重新登录」，填写客户端路径、间隔与登录
+点击坐标；也可点工具栏「🔄 定时重登」立即触发一次。
+
+**Q10：函数调用结果怎么给后续事件用？**
+A：给函数事件设置 `var_name`，其结果字段（如 `target_location`）会进入变量上下文，
+后续事件坐标或条件分支 `source_var` 可用 `${var_name.field}` 或该变量名引用。
 
 ---
 
-## 12. 常见问题与故障排查
-
-### Q1：启动时提示缺少模块？
-
-**A**：依赖未安装完整。在项目根目录运行：
-
-```bash
-pip install -r requirements.txt
-```
-
-若仅需核心功能（不含 YOLO），可参考第 2.4 节单独安装必要依赖。
-
-### Q2：窗口绑定失败？
-
-**A**：请按以下步骤排查：
-
-1. 确认游戏窗口标题或 PID 正确（可通过任务管理器查看）。
-2. 确认游戏正在运行，且窗口未最小化。
-3. 标题绑定时使用子串匹配，建议输入标题中的关键部分（如"梦幻西游"）。
-4. PID 绑定时确认 PID 为整数，且对应进程确实存在。
-5. 多开场景下，标题绑定可能命中错误窗口，建议改用 PID 绑定。
-
-### Q3：后台点击无效？
-
-**A**：部分游戏（包括梦幻西游）可能不支持后台输入。请按以下方式处理：
-
-1. 在 **配置** 面板将 **输入模式** 切换为 `前台输入 (foreground)`。
-2. 保存配置后重新执行任务。
-3. 前台模式下执行任务时，请勿切换窗口，保持游戏窗口在前台。
-4. 若必须使用后台模式，可尝试在鼠标点击事件的 `params.background` 字段单独设置。
-
-### Q4：YOLO 检测报错？
-
-**A**：常见原因与解决方案：
-
-1. **未安装 ultralytics**：运行 `pip install ultralytics` 安装。
-2. **模型路径错误**：在配置面板检查 YOLO 模型路径是否指向有效的 `.pt` 文件。
-3. **模型类别不匹配**：`params.target_class` 必须与训练模型时的类别名称完全一致。
-4. **置信度过高**：尝试降低 `confidence` 阈值（如 0.3）。
-5. **GPU 不可用**：ultralytics 会自动回退到 CPU 推理，速度较慢但功能正常。
-
-### Q5：任务库导入失败？
-
-**A**：可能原因：
-
-1. **文件路径错误**：确认 `.py` 文件存在且路径正确。
-2. **语法错误**：用 Python 解释器单独运行该脚本检查语法：`python 你的脚本.py`。
-3. **缺少依赖**：脚本内部导入了未安装的第三方库，请安装相应依赖。
-4. **同名模块冲突**：若模块名已存在，系统会提示是否覆盖，选择"是"重新导入。
-5. 导入失败时查看主控制面板的 ERROR 日志获取详细错误信息。
-
-### Q6：图像识别不准？
-
-**A**：优化建议：
-
-1. **降低匹配阈值**：在配置面板将 **模板匹配阈值** 从 0.8 降至 0.6 或更低。
-2. **使用清晰模板**：模板图片应直接来自游戏画面截图，避免缩放或压缩。
-3. **分辨率一致**：模板图片的分辨率须与游戏运行时分辨率一致。
-4. **限定识别区域**：在 `params.region` 中设置 `[x, y, w, h]` 缩小搜索范围，提升准确度和速度。
-5. **避免相似区域**：模板应具有足够独特性，避免在画面中存在多个相似区域。
-
-### Q7：日志在哪里？
-
-**A**：日志有两个查看位置：
-
-1. **实时日志**：主控制面板的"执行日志"区，彩色显示，自动滚动。
-2. **日志文件**：默认写入 `logs/automation.log`（路径可在配置面板修改）。
-
-日志文件按配置的日志级别（DEBUG/INFO/WARNING/ERROR）过滤写入。如需更详细日志，可将级别调整为 `DEBUG`。
-
-### Q8：如何循环执行？
-
-**A**：在任务编辑面板的任务属性表单中设置 **循环次数**：
-
-- `1`（默认）：执行一次。
-- `0`：无限循环（需手动点击 **⏹ 停止** 按钮才会终止）。
-- 其他正整数 N：执行 N 次。
-
-**循环间隔**控制每次循环之间的等待秒数。例如设置循环次数为 10、循环间隔为 5 秒，则任务会执行 10 次，每次之间间隔 5 秒。
-
-### Q9：如何修改事件参数？
-
-**A**：当前版本的"编辑事件"对话框仅支持修改事件名称。若需修改参数：
-
-1. 在任务编辑器中完成事件结构搭建。
-2. 点击 **文件 → 保存任务序列** 保存为 JSON 文件。
-3. 用文本编辑器打开 JSON 文件，找到对应事件的 `params` 字段手动编辑。
-4. 在应用中点击 **文件 → 打开任务序列** 重新加载修改后的 JSON。
-
-未来版本将提供完整的可视化事件参数编辑器。
-
-### Q10：任务执行中途卡住怎么办？
-
-**A**：
-
-1. 点击工具栏 **⏹ 停止** 按钮终止任务。
-2. 查看主控制面板日志，定位卡住的事件。
-3. 常见卡住原因：
-   - 等待延迟事件 `duration` 设置过长 → 调小参数。
-   - 图像识别等待 `wait_for_image=true` 但模板未出现 → 检查模板路径和阈值。
-   - 函数调用阻塞 → 检查被调用函数是否包含死循环或长时间阻塞逻辑。
-4. 修正后重新执行。
-
-### Q11：配置修改后未生效？
-
-**A**：
-
-- 在配置面板修改后，必须点击 **保存配置** 按钮才会写入 `settings.json` 并生效。
-- 直接编辑 `settings.json` 文件后，需在应用中点击 **设置 → 重新加载配置** 或配置面板的 **重新加载** 按钮。
-- 部分配置（如窗口绑定）需要重新绑定窗口才会应用新设置。
-
-### Q12：如何查看模块内有哪些函数？
-
-**A**：
-
-1. 切换到 **任务库** 标签页。
-2. 在左侧模块列表中选中要查看的模块。
-3. 右侧 **函数列表** 会显示该模块的全部可调用函数及签名。
-4. 选中具体函数后，下方 **函数详情** 区会显示完整签名和 docstring 文档。
-
----
-
-## 附录：项目目录结构
-
-```
-mhxy-gui-automation/
-├── main.py                    # 程序入口
-├── requirements.txt           # 依赖列表
-├── config/
-│   ├── config.py              # 配置管理单例
-│   └── settings.json          # 默认配置文件
-├── core/
-│   ├── task_engine.py         # 任务执行引擎
-│   ├── task_library_manager.py # 任务库管理单例
-│   └── window_manager.py      # 窗口管理单例
-├── gui/
-│   ├── main_window.py         # 主窗口（菜单栏/工具栏/标签页）
-│   ├── status_panel.py        # 主控制面板（标签页 1）
-│   ├── task_editor.py         # 任务编辑器（标签页 2）
-│   ├── task_library.py        # 任务库面板（标签页 3）
-│   └── config_panel.py        # 配置面板（标签页 4）
-├── models/
-│   ├── event.py               # 事件模型（7 种事件类型）
-│   ├── task.py                # 任务模型
-│   └── task_sequence.py       # 任务序列模型
-├── utils/
-│   ├── logger.py              # 日志工具
-│   └── helpers.py             # 辅助函数
-├── logs/
-│   └── automation.log         # 运行日志
-└── docs/
-    └── user_manual.md         # 本手册
-```
-
----
-
-**文档结束**  
-如需了解更多实现细节，请参阅项目源码或开发者文档。
+> 本手册依据当前代码重写，与代码不一致以代码为准。
