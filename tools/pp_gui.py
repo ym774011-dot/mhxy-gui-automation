@@ -435,6 +435,7 @@ class PPApp(tk.Tk):
         self._team_watch_stop = threading.Event()
         self._watch_interrupted = False   # 当前处于"缺员已打断抓鬼"状态
         self._reteam_running = False
+        self._task_dead_n = {}            # 任务脚本巡检：连续判死计数（pid→n）
         self._watch_started = False
         # ★残留自洁循环（启动 20s 首轮，之后每 24h 一轮）
         threading.Thread(target=self._hygiene_loop, daemon=True,
@@ -1201,19 +1202,36 @@ class PPApp(tk.Tk):
                 #   完成后静默死亡（stderr 被 DEVNULL 吞掉），全队发呆无人管——
                 #   掉线闭环只管游戏进程，没人管任务脚本进程。每 ~1min 巡检
                 #   在线实例，任务脚本不在了就补拉（_spawn_task 自带防双跑）。
-                if stale_scan_n % 4 == 2 and not self.teamflow_running:
+                # ★2026-09-10 两项收紧（11:49 实锤误报）：①补组进行中不巡检
+                #   ——补组自己会打断/重拉任务，高负载下 PowerShell 扫描还易
+                #   漏报（p4120 "已死"补拉 1s 后 "已在跑"=假死误报）；②同一
+                #   PID 连续 2 轮扫描未命中才补拉（1 轮≈1min，真死最多晚 1min）。
+                if (stale_scan_n % 4 == 2 and not self.teamflow_running
+                        and not self._reteam_running):
                     with self.lock:
                         _online = [i for i in self.instances
                                    if i.status == S_ONLINE]
                     for it in _online:
                         try:
                             _ok, _cls = running_squad_cmdlines_ex()
-                            if _ok and not process_alive_for(
-                                    _cls, it.pid, it.role == "leader"):
-                                self._log("p%d 任务脚本已死 → 自动补拉" % it.pid)
-                                self._spawn_task(it)
+                            _alive = _ok and process_alive_for(
+                                _cls, it.pid, it.role == "leader")
                         except Exception as e:
                             self._log("p%d 任务脚本巡检异常: %s" % (it.pid, e))
+                            continue
+                        if _alive:
+                            self._task_dead_n.pop(it.pid, None)
+                            continue
+                        _n = self._task_dead_n.get(it.pid, 0) + 1
+                        self._task_dead_n[it.pid] = _n
+                        if _n < 2:
+                            self._log("p%d 任务脚本扫描未命中（第%d次），下轮复验"
+                                      % (it.pid, _n))
+                            continue
+                        self._task_dead_n.pop(it.pid, None)
+                        self._log("p%d 任务脚本已死（连续2轮未命中）→ 自动补拉"
+                                  % it.pid)
+                        self._spawn_task(it)
                 if not self.scripts_started or self.teamflow_running:
                     continue
                 # ★2026-09-07：队长重登后 PID 会变（02:21 实证 p9472→24712）。
