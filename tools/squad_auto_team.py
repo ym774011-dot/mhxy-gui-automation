@@ -47,6 +47,7 @@ def _log(msg):
 #   [139,80] 就位且建队成功后发布的联动信号文件。队长没到/建队没成功 →
 #   信号不存在或过期 → 队员一律不动（不传送/不申请），原地等队长。
 #   每次发布都是新 epoch；补组轮按需重发，新信号覆盖旧信号。
+_WIDGET_CLEAN_PID = None   # 挂件清理会话闸：已点过的队长 PID（与自动战斗闸同逻辑）
 _LINK_PATH = os.path.join(_ROOT, "test_data", "team_link.json")
 _LINK_TTL_S = 1800.0     # 信号有效期 30min
 
@@ -501,12 +502,16 @@ __out = tostring(p7 and p7.当前阵法) .. '/' .. tostring(p7 and p7.当前阵�
     _log("阵法验证: %s" % r)
     # ★2026-09-10 用户定案：阵法验证后、开任务前，依次点三个挂件位各一次，
     #   关掉可能挡住鼠标点击的 UI 窗口/挂件（位置用户标定）。
-    if lhwnd:
+    # ★触发与自动战斗会话闸同逻辑：只在 初始组队 / 队长重登（PID 变化）后
+    #   点；普通缺员补组（队长未变）不点。
+    global _WIDGET_CLEAN_PID
+    if lhwnd and _WIDGET_CLEAN_PID != leader_pid:
+        _WIDGET_CLEAN_PID = leader_pid
         for (x, y) in ((677, 584), (24, 566), (20, 57)):
             ZGUI.post_click(lhwnd, x + random.randint(-2, 2),
                             y + random.randint(-2, 2), gateway=lw)
             time.sleep(0.45)
-        _log("已点挂件位 (677,584)/(24,566)/(20,57) 清理可能遮挡的 UI")
+        _log("已点挂件位 (677,584)/(24,566)/(20,57) 清理可能遮挡的 UI（队长会话首次）")
     return name in r
 
 
