@@ -317,6 +317,7 @@ def _dismiss_popup(hwnd):
 # ---------- 卫生机制（★残留自洁，用户 2026-09-10 定案保留） ----------
 _IPC_TMP_DIR = r"E:\DS\tmp"          # pzxy IPC 文件目录（与 pzxy_ipc 默认一致）
 _IPC_STALE_S = 24 * 3600.0           # 死 PID 文件保留期：整组 mtime 超 24h 才删
+_TP_NIL_GRACE_S = 75.0               # tp=nil 宽限期：worker 存活时等自愈/重连再杀
 _HYGIENE_INTERVAL_S = 24 * 3600.0    # 卫生循环周期
 _LOG_ROTATE_BYTES = 20 * 1024 * 1024  # 日志轮转阈值 20MB
 _IPC_PID_RE = re.compile(r"pzxy_p(\d+)_")
@@ -446,6 +447,7 @@ class PPApp(tk.Tk):
         #   进程活着/标题在线但 Lua 主状态亡，任务脚本会无限空转——用户指令：
         #   这种情况 GUI 直接杀游戏重启）
         self._tp_fail = {}
+        self._tp_nil_since = {}           # tp=nil 宽限计时（worker 存活时等自愈）
         self._tp_tick = 0
 
         # ★2026-09-07 可观测性：squad_auto_team 的 _log 原本只 print 到
@@ -1559,29 +1561,43 @@ class PPApp(tk.Tk):
                         self._begin_restart(inst)
                 # ★2026-09-09 tp 健康检查（用户指令：tp 被服务器抹掉时 GUI 直接
                 #   杀游戏重启，不再让任务脚本空转）——仅标题仍在线的实例查。
-                #   每 4 轮查一次（监控 2s/轮 → ~8s 一次），连续 3 次明确 nil
-                #   (~24s) 才重启；超时/未知不计数（防游戏忙碌误杀）。
+                #   每 4 轮查一次（监控 2s/轮 → ~8s 一次）。
+                # ★2026-09-10 重连宽限（用户选 a，13:43 风暴复盘）：r=False
+                #   本身就代表 worker 心跳存活、只是 tp=nil——这可能是服务端
+                #   脚本热更新/客户端自愈重连中（实锤持续 ~15min 也会自愈）。
+                #   改为时间宽限：首次 nil 起 75s 内不动，超时仍 nil 才杀重启。
+                #   超时/未知（None）不计数不计时（防游戏忙碌误杀）。
                 if inst.status == S_ONLINE and logged and not self.teamflow_running:
                     self._tp_tick += 1
                     if self._tp_tick % 4 == 0:
                         r = self._tp_alive(inst.pid)
                         if r is True:
-                            self._tp_fail[inst.pid] = 0
+                            self._tp_fail.pop(inst.pid, None)
+                            self._tp_nil_since.pop(inst.pid, None)
                         elif r is False:
-                            n = self._tp_fail.get(inst.pid, 0) + 1
-                            self._tp_fail[inst.pid] = n
-                            if n == 1:
-                                self._log("p%d tp 状态消失（第%d次，疑似服务器抹除）"
-                                          % (inst.pid, n))
-                            if n >= 3:
-                                self._log("p%d tp 连续消失 %d 次 → 杀游戏重启闭环"
-                                          % (inst.pid, n))
+                            _now = time.time()
+                            _since = self._tp_nil_since.get(inst.pid)
+                            if _since is None:
+                                self._tp_nil_since[inst.pid] = _now
+                                self._log("p%d tp 状态消失（worker存活）→ 宽限%ds 等待自愈/重连，期间不杀"
+                                          % (inst.pid, int(_TP_NIL_GRACE_S)))
+                            elif _now - _since < _TP_NIL_GRACE_S:
+                                pass          # 宽限期内：不杀，等自愈
+                            else:
+                                self._tp_nil_since.pop(inst.pid, None)
+                                self._log("p%d tp 持续 nil 超 %ds（worker存活）→ 状态确认丢失，杀游戏重启闭环"
+                                          % (inst.pid, int(_TP_NIL_GRACE_S)))
                                 self._begin_restart(inst)
+                        else:
+                            # None=worker 未应答（未知）：清宽限计时，避免把
+                            # "worker 恢复后的新鲜观察"错接到旧窗口上
+                            self._tp_nil_since.pop(inst.pid, None)
 
     def _begin_restart(self, inst):
         inst.status = S_RESTART
         inst.note = "掉线重启中"
         self._tp_fail.pop(inst.pid, None)   # 重启即清 tp 失败计数
+        self._tp_nil_since.pop(inst.pid, None)  # 同时清 tp 宽限计时
         threading.Thread(target=self._restart_flow, args=(inst,), daemon=True).start()
 
     def _tp_alive(self, pid):
