@@ -499,6 +499,14 @@ local p7 = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数
 __out = tostring(p7 and p7.当前阵法) .. '/' .. tostring(p7 and p7.当前阵型)
 """, timeout=10.0) or ""
     _log("阵法验证: %s" % r)
+    # ★2026-09-10 用户定案：阵法验证后、开任务前，依次点三个挂件位各一次，
+    #   关掉可能挡住鼠标点击的 UI 窗口/挂件（位置用户标定）。
+    if lhwnd:
+        for (x, y) in ((677, 584), (24, 566), (20, 57)):
+            ZGUI.post_click(lhwnd, x + random.randint(-2, 2),
+                            y + random.randint(-2, 2), gateway=lw)
+            time.sleep(0.45)
+        _log("已点挂件位 (677,584)/(24,566)/(20,57) 清理可能遮挡的 UI")
     return name in r
 
 
