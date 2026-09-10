@@ -244,6 +244,11 @@ def _lua_call_file(code: str, timeout: float, gateway="file://pzxy"):
         return None
 
 
+_TP_FALLBACK_LUA = ("-- tp 回退：tp 别名被服务端脚本重载清掉时，降级绑定引擎场景对象\n"
+                    "-- （实锤 tp==引擎.场景 同一对象，2026-09-10）\n"
+                    "local tp = tp or ((_G.引擎) and (_G.引擎.场景)) or nil\n")
+
+
 def _lua_call(gateway: str, code: str, timeout: float = 8.0):
     """调网关 /api/lua 执行 Lua，返回 value 或 None（容错）。
 
@@ -251,7 +256,14 @@ def _lua_call(gateway: str, code: str, timeout: float = 8.0):
     走文件通道（游戏内常驻 worker，零 frida 依赖）；否则走 HTTP 网关。
 
     柔和限速：每次调用前等待 >= MIN_GAP 且带随机抖动，让操作更接近人工节奏。
+
+    ★2026-09-10 tp 回退（B 方案）：每段脚本头部注入
+      `local tp = tp or 引擎.场景` —— tp 别名被服务端脚本重载/维护清掉时
+      （tp==nil 但引擎.场景 存活），所有既有读取自动降级到引擎场景对象，
+      自动化不再因服务端脚本窗口而失明（tp==引擎.场景 同一对象已实锤）。
+      全局 tp 存在时行为与旧版完全一致。
     """
+    code = _TP_FALLBACK_LUA + code
     try:
         wait = _LUA_LAST[0] + _LUA_MIN_GAP * random.uniform(1.0, _LUA_GAP_JITTER) - time.time()
         if wait > 0:

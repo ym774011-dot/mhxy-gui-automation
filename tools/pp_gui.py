@@ -1641,22 +1641,34 @@ class PPApp(tk.Tk):
         threading.Thread(target=self._restart_flow, args=(inst,), daemon=True).start()
 
     def _tp_alive(self, pid):
-        """Lua 主状态存活检查（★2026-09-09 掉线闭环新增盲区补测）。
+        """Lua 主状态存活检查（★2026-09-09 掉线闭环；★2026-09-10 B方案双旗）。
 
-        进程活着、窗口标题仍在线，但 tp 被服务器整点/维护事件抹掉（06:47
-        全队实证）——任务脚本会补旗/回长安无限空转。此检查返回：
-          True  = tp 存活
-          False = Lua 明确回答 tp 为 nil（状态已亡）
+        此检查返回：
+          True  = tp 或 引擎.场景 任一存活（含服务端脚本热更新窗口——
+                  tp 别名被清但引擎场景存活 → 不杀，自动化经场景降级读取）
+          False = tp 与 引擎.场景 双双为 nil（状态真死）→ 计数杀重启
           None  = worker 死/超时/执行失败（未知，不计数，防误杀）
         """
         try:
             w = PzxyWorker(name="p%d" % pid)
             if not w.is_alive():
                 return None
-            ok, val = w.cmd("__out = tostring(tp ~= nil)", timeout=2.5)
+            # ★2026-09-10 B方案：tp 别名被服务端脚本重载清掉 ≠ 客户端死——
+            #   引擎.场景（与 tp 同一对象）仍存活。双旗探测：
+            #   场景或 tp 任一存在 = 存活（返回 True，不杀）；
+            #   双双为 nil = 状态真死（返回 False，计数）。
+            ok, val = w.cmd("__out = tostring(((tp) or ((_G.引擎) and (_G.引擎.场景))) ~= nil) .. '|' .. tostring(tp ~= nil)",
+                            timeout=2.5)
             if not ok:
                 return None
-            return str(val).strip() == "true"
+            flags = str(val).strip().split("|")
+            scene_alive = flags[0] == "true"
+            tp_gone = flags[1] == "false"
+            if scene_alive:
+                return True
+            return False if tp_gone else None
+        except Exception:
+            return None
         except Exception:
             return None
 
