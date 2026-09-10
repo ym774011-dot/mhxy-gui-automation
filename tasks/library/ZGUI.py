@@ -3763,9 +3763,11 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
     import re as _re
     m = _re.search(r"pzxy_p(\d+)", str(gateway or ""))
     pid = int(m.group(1)) if m else 0
-    _buf = ctypes.create_unicode_buffer(256)
-    user32.GetWindowTextW(hwnd, _buf, 256)
-    key = "%s|%s" % (pid, _buf.value)
+    # ★2026-09-10 实锤（多点 bug 真正根源）：窗口标题含实时时钟+帧率，
+    #   每秒都在变（实测 3s 内 22:16:49→22:16:52）——旧 key 含标题 →
+    #   key 每秒跳动 → done 每次被重置 → 会话闸失效、每场战斗都多点。
+    #   会话语义只需 PID：游戏重启=新 PID，脚本重启 PID 不变。
+    key = str(pid)
     if _AUTO_ONCE["key"] != key:
         _AUTO_ONCE["key"] = key
         _AUTO_ONCE["done"] = False
