@@ -283,6 +283,27 @@ def _enum_dialogs_of(pids):
     return hits
 
 
+def _dialog_text(hwnd):
+    """抓对话框内所有可见 Static 子控件的文本（诊断崩溃/弹窗原因用）。"""
+    user32 = ctypes.windll.user32
+    texts = []
+    CB = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+
+    def cb(h, _lp):
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(h, cls, 64)
+        if cls.value == "Static" and user32.IsWindowVisible(h):
+            buf = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(h, buf, 512)
+            if buf.value.strip():
+                texts.append(buf.value.strip())
+        return True
+
+    cbref = CB(cb)
+    user32.EnumChildWindows(hwnd, cbref, 0)
+    return " | ".join(texts)[:180]
+
+
 def _dismiss_popup(hwnd):
     """点掉对话框：枚举子按钮，优先「确定/关闭程序/关闭」，BM_CLICK。"""
     user32 = ctypes.windll.user32
@@ -1091,9 +1112,10 @@ class PPApp(tk.Tk):
                 if not pids:
                     continue
                 for hwnd, pid, title in _enum_dialogs_of(pids):
+                    txt = _dialog_text(hwnd)     # ★先取文本再点掉（点掉即消失）
                     if _dismiss_popup(hwnd):
-                        self._log("p%d 检测到系统弹窗(%s) → 已点确定/关闭"
-                                  % (pid, (title or "")[:30]))
+                        self._log("p%d 检测到系统弹窗(%s) → 已点确定/关闭 文本:%s"
+                                  % (pid, (title or "")[:30], txt or "无"))
             except Exception:
                 pass
 
