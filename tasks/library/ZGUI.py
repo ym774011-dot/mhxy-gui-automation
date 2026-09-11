@@ -1629,6 +1629,9 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
             _sleep(random.uniform(1.2, 1.8))
             t_wait += 1.5
         if zhuagui_in_battle(gateway):
+            # ★2026-09-11 幻影战斗自愈（同回长安路径）
+            if battle_phantom_escape(gateway):
+                return False
             logger.warning("确保任务：战斗超时仍未结束，返回失败（等下一轮）")
             return False
     task = {"name": snap["name"], "count": snap["count"]}
@@ -3050,6 +3053,43 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
     return True
 
 
+def battle_phantom_escape(gateway, max_wait=75.0):
+    """幻影战斗检测与自愈（★2026-09-11）。
+
+    幻影战斗特征：in_battle 指标持续（敌方数量>0/参战判定 true），但
+    战斗类.加载结束==false 持续不完成——战斗 10v10 单位已分配、首条命令
+    已排队，场景加载却永不结束（服务端战斗类脚本 957 行 nil 错误的产物）
+    → 空战斗永远打不起来，角色站桩。
+
+    处理：确认幻影（75s 内 加载结束 始终为 false）→ 杀本游戏进程，
+    GUI 掉线闭环自动重启并清掉幻影战斗。返回 True=已杀进程。
+    """
+    import ctypes as _ctypes
+    import re as _re
+    t0 = time.time()
+    while time.time() - t0 < max_wait:
+        if not zhuagui_in_battle(gateway):
+            return False                      # 战斗已自行结束（非幻影）
+        le = _lua_call(gateway, r'''local b = tp and tp.战斗类
+__out = tostring(b and b.加载结束)''')
+        if le != "false":
+            return False                      # 加载完成/读不到 → 非幻影
+        time.sleep(5.0)
+    m = _re.search(r"pzxy_p(\d+)", str(gateway or ""))
+    gpid = int(m.group(1)) if m else 0
+    if not gpid:
+        return False
+    logger.warning("幻影战斗确认（加载结束=false 持续 %ds）→ 终止游戏 p%d 自愈",
+                   int(max_wait), gpid)
+    k32 = _ctypes.windll.kernel32
+    h = k32.OpenProcess(0x0001, False, gpid)   # PROCESS_TERMINATE
+    if h:
+        k32.TerminateProcess(h, 1)
+        k32.CloseHandle(h)
+        return True
+    return False
+
+
 def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
                             force=False, **kw):
     """从任意地图回长安城钟馗身边（合成旗地图红点）。
@@ -3077,6 +3117,12 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
             _sleep(random.uniform(1.2, 1.8))
             t_wait += 1.5
         if zhuagui_in_battle(gateway):
+            # ★2026-09-11 幻影战斗自愈：战斗类.加载结束==false 持续 = 战斗
+            #   生成失败（服务端战斗类脚本 957 行 nil 错误：10v10 单位已分配
+            #   但场景加载永不完成 → 空战斗卡死，角色站桩）。杀本游戏进程，
+            #   GUI 掉线闭环自动重启并清掉幻影战斗。
+            if battle_phantom_escape(gateway):
+                return False
             logger.warning("回长安：战斗超时未结束")
             return False
     # 已在长安城直接成功（★force=True 跳过：用户规则允许重飞）
