@@ -1790,7 +1790,7 @@ _LAST_ROUND_STAGES = {}  # ★2026-09-05 提速观测：最近一轮的分段耗
 _DIZHA_KINDS = ("地煞星", "天罡星")
 _DIZHA_RECT = (123, 307, 176, 317)   # 罡煞进战斗选项（用户 2026-09-08 深夜标定，宽高 53,10）
 _BONUS_NAMES = ("知了王", "星宿", "远古", "恶作剧大王") + _DIZHA_KINDS   # ★2026-09-06 定案：知了王/远古按名称命中；星宿与恶作剧大王名称多变（尾火虎/小毛头等），按 称谓 命中；★2026-09-08 加地煞星、★2026-09-09 加天罡星（称谓="N级地煞星/天罡星"，N=70~140 不限）
-_BONUS_MAX_KILLS = 5                        # 单轮最多顺手打几只（防连环刷体）★2026-09-08 用户要求 3→5
+_BONUS_MAX_KILLS = 5                        # ★已废弃（2026-09-12）：白名单全量轮询后不再限次，保留仅为兼容引用
 # ★2026-09-08 地煞星难度门槛（用户定案：只打 ≤2星，等级不限）。
 #   识别链路：CALL 弹对话 → tp.主界面.界面数据[8].超级文本.已加文本
 #   → match '难度：(%d+)星'（2026-09-08 实测地猛星返回 5）。
@@ -1875,7 +1875,11 @@ def _bonus_dialog_rows(hwnd):
 
 def zhuagui_bonus_battle(gateway=DEFAULT_GATEWAY, verbose=False,
                          max_battle_wait=180.0, hwnd=None, **kw):
-    """扫本图稀有怪并顺手打一只。命中并打完返回怪名，未命中/未进战返回 None。
+    """扫本图稀有怪并顺手打——★2026-09-12 用户定案：白名单全量轮询。
+
+    地图里每一只白名单怪都 CALL 一次出难度：符合要求（≤上限星）的逐只打完
+    再继续下一只；不符合（超星/读不到）的取消并进 300s skip 名单后跳过。
+    整轮扫完所有候选才收工。返回本轮打掉的怪名列表 []。
 
     复用抓鬼 CALL 通道 `客户端:发送数据(0,3,6,标识,1)` 与 _call_guard 防重冷却。
     ★2026-09-06 修复（用户实测：CALL 出了对话框但没点击进战斗）：知了王/星宿/
@@ -1934,7 +1938,8 @@ __out = table.concat(out, ' ;; ')
             ("地煞星" if "地煞星" in bname else "远古")))))
         cands.append((bname, gid, bkind))
     if not cands:
-        return None
+        return []
+    kills = []          # ★2026-09-12 全量轮询：本轮每一只合规怪都打完才收工
     _now = time.time()
     # skip 名单过期清理（300s：够一轮刷新/换图）
     for g in [g for g, ts in _BONUS_SKIP_GID.items() if _now - ts > 300.0]:
@@ -2134,7 +2139,7 @@ __out = tostring(n or '-')
                 _shot = _bonus_shot("skip")
                 logger.info("稀有怪 %s 无可点选项（大概率正被其他队伍占用'请勿扰'），跳过%s"
                             % (bname, ("，截图:%s" % _shot) if _shot else ""))
-            return None
+            continue          # ★2026-09-12 跳过继续 CALL 下一只（白名单全量轮询）
         # 战斗挂机等结束（★进战即后台触发「自动」按钮判定，5s 后点击开启）
         _threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
                           daemon=True).start()
@@ -2144,8 +2149,13 @@ __out = tostring(n or '-')
         ok_end = not zhuagui_in_battle(gateway)
         logger.info("稀有怪 %s 战斗%s（耗时%.0fs）"
                     % (bname, "结束" if ok_end else "超时", time.time() - t1))
-        return bname if ok_end else None
-    return None
+        if ok_end:
+            kills.append(bname)
+        else:
+            # 战斗超时（含幻影战斗：加载结束=false 卡死）→ 尝试幻影自愈清场
+            battle_phantom_escape(gateway)
+        continue              # ★2026-09-12 打完/超时都继续 CALL 下一只
+    return kills
 
 
 # ============================================================
@@ -2384,11 +2394,9 @@ def zhuagui_do_round(gateway=DEFAULT_GATEWAY, wait_dialog=1.2, timeout=20.0,
         _t_bn = time.time()
         killed = []
         try:
-            for _ in range(max(1, _BONUS_MAX_KILLS)):
-                bname = zhuagui_bonus_battle(gateway, verbose=verbose)
-                if not bname:
-                    break
-                killed.append(bname)
+            # ★2026-09-12 用户定案：白名单全量轮询——一次调用扫完本图所有
+            #   候选（合规逐只打完、不合规取消跳过），不再用次数上限凑数。
+            killed = zhuagui_bonus_battle(gateway, verbose=verbose) or []
         except Exception as e:
             logger.warning("顺手打稀有怪异常（不影响抓鬼主流程）: %s" % e)
         if killed:
