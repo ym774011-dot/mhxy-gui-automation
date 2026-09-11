@@ -973,6 +973,31 @@ class PPApp(tk.Tk):
             for t in ts:
                 t.join(900)
 
+            # ★2026-09-11 批次空洞修补：阶段3 的成员名单是批次启动瞬间的
+            #   快照——掉线重登正好撞上批次窗口的队员（批次时旧进程刚死）
+            #   会被整批漏掉。补一轮：在线但不在队的队员再驱动一次申请
+            #   （此时批准循环还没跑，晚到的申请会被正常批准）。
+            time.sleep(8.0)   # 给重登/登录收尾留时间
+
+            def _not_in_team(m):
+                try:
+                    st = ZGUI.team_stats_topbar("file://pzxy_p%d" % m.pid)
+                except Exception:
+                    return True
+                return not (st and st[0] >= 1 and bool(st[2]))
+
+            late = [m for m in members
+                    if m.status == S_ONLINE and _not_in_team(m)]
+            if late:
+                self._log("[autoTeam] 批次补漏：%d 名队员未入队 → 再次驱动申请"
+                          % len(late))
+                ts2 = [threading.Thread(target=_apply_one, args=(m,), daemon=True)
+                       for m in late]
+                for t in ts2:
+                    t.start()
+                for t in ts2:
+                    t.join(600)
+
             # ---- 阶段4：批准 + 天覆阵 ----
             self._log("[autoTeam] 阶段4: 队长批准申请")
             mem = sat.approve_loop(leader.pid, 1 + len(members),

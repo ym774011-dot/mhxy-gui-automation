@@ -669,14 +669,17 @@ def zhuagui_take_task(gateway=DEFAULT_GATEWAY,
     if not hwnd:
         return False
     # 1. 点钟馗（从当前地图 npc 表定位）
+    # ★2026-09-11 两修：① npc 表是键值结构，#t 可能为 0 但 pairs 有内容
+    #   （同 09-03 地图单位表坑）→ 改 pairs 遍历；② npc 表按视野就近流式
+    #   加载，站桩不刷新 → 找不到钟馗时走一圈触发流加载再扫描。
     code = """
 local t = tp.地图.npc
 if type(t)~='table' then __out='' return end
 local off = tp.屏幕.xy
 local ox = off and off.x or 0
 local oy = off and off.y or 0
-for i=1,#t do
-  local v=t[i] or {}
+for _, v in pairs(t) do
+  local v = v or {}
   if tostring(v.名称 or ''):find('钟馗') then
     local wx=tonumber(tostring(v.x or '')) or 0
     local wy=tonumber(tostring(v.y or '')) or 0
@@ -687,6 +690,15 @@ end
 __out=''
 """
     r = _lua_call(gateway, code) or ""
+    # ★走动触发 npc 流加载：视野扫描依赖角色移动，站桩永远刷不出钟馗
+    if "," not in r:
+        for wx in (240, 560, 400, 470, 330, 500):
+            post_click(hwnd, wx, 300, gateway=gateway)
+            time.sleep(2.0)
+            r = _lua_call(gateway, code) or ""
+            if "," in r:
+                _sleep(0.8)          # 走到钟馗身边再点，防距离过远对话不弹
+                break
     if "," not in r:
         return False
     zx, zy = r.split(",")
