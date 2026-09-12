@@ -499,6 +499,51 @@ def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=2.0):
     return _topbar_mem()
 
 
+def disband_team(leader_pid, tries=3):
+    """队长解散队伍（队伍面板"离开队伍"=整队解散）。返回 True=已解散。
+
+    ★2026-09-12 用户定案（存仓流程前置）：组队下队员无法使用仓库存放物品，
+    存仓前必须解散队伍。实机验证（08:0x）：点"离开队伍"后队长顶栏立即 0 人，
+    全员退队。面板开关走状态配对（图标是开关，盲点会打架）。
+    """
+    lw = _gw(leader_pid)
+    lhwnd = find_hwnd_by_pid(leader_pid)
+    if not lhwnd:
+        return False
+    st = ZGUI.team_stats_topbar(lw)
+    if st and st[0] == 0:
+        _log("解散：队长顶栏已是 0 人，无需操作")
+        return True
+    for _ in range(max(1, tries)):
+        if ZGUI._team_panel_visible(lw) is True:
+            break
+        ZGUI._team_click_icon(lhwnd, lw)
+        time.sleep(1.2)
+    if ZGUI._team_panel_visible(lw) is not True:
+        _log("解散：队伍面板打不开")
+        return False
+    pos = ZGUI._lua_call(lw, r'''
+local lv = tp.主界面.界面数据[7].离开队伍
+local bb = lv and lv.包围盒
+__out = bb and string.format('%d,%d', bb.x + math.floor((bb.w or 0) / 2),
+                             bb.y + math.floor((bb.h or 0) / 2)) or ''
+''') or ""
+    x, y = 646, 134
+    if "," in pos:
+        try:
+            x, y = [int(float(s)) for s in pos.split(",")]
+        except ValueError:
+            pass
+    ZGUI.post_click(lhwnd, x, y, gateway=lw)
+    time.sleep(1.8)
+    st = ZGUI.team_stats_topbar(lw)
+    if st and st[0] == 0:
+        _log("队伍已解散（队长离开队伍 → 全员退队）")
+        return True
+    _log("解散失败：顶栏仍有 %s 人" % (st[0] if st else "?"))
+    return False
+
+
 def do_formation(leader_pid, name="天覆阵"):
     """选阵并验证。返回 True=阵法生效。"""
     lw = _gw(leader_pid)

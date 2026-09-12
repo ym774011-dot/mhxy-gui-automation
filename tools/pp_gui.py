@@ -36,6 +36,7 @@ from zhuagui_squad import (LOGGED_IN_RE, ROLE_RE, enum_game_windows,      # noqa
                            plant, process_alive_for, running_squad_cmdlines_ex)
 from library.pzxy_ipc import PzxyWorker                                    # noqa: E402
 import squad_auto_team as sat                                              # noqa: E402
+from tasks.library import warehouse_store as wh                            # noqa: E402
 import ctypes                                                              # noqa: E402
 from ctypes import wintypes                                                # noqa: E402
 
@@ -456,6 +457,7 @@ class PPApp(tk.Tk):
         # ★队伍完整性看门狗：队长侧随时判定队员数，缺员打断抓鬼→补组队→满员恢复
         self._team_watch_stop = threading.Event()
         self._watch_interrupted = False   # 当前处于"缺员已打断抓鬼"状态
+        self._store_running = False       # 存仓流程进行中（挂起巡检/补组）
         self._reteam_running = False
         self._task_dead_n = {}            # 任务脚本巡检：连续判死计数（pid→n）
         self._watch_started = False
@@ -1262,6 +1264,84 @@ class PPApp(tk.Tk):
             self._log("p%d 任务脚本启动失败: %s" % (inst.pid, e))
 
     # ---------- 队伍完整性看门狗（队长侧） ----------
+    # ---------- 背包满 → 全队存仓（2026-09-12 用户定案 4a） ----------
+    def _bag_used(self, inst):
+        """点开背包读占用格数（读不到返回 -1）。零副作用：读完即关。"""
+        gw = "file://pzxy_p%d" % inst.pid
+        hwnd = find_hwnd_by_pid(inst.pid)
+        if not hwnd:
+            return -1
+        try:
+            ZGUI._bag_ensure_open(gw, hwnd)
+            n = ZGUI._bag_used_count(gw)
+            ZGUI._bag_ensure_close(gw, hwnd)
+            if n is None:
+                return -1
+            return int(n)
+        except Exception:
+            return -1
+
+    def _bag_store_check(self):
+        """巡检在线实例背包；任一满（>=20 格）→ 触发全队存仓流程。"""
+        with self.lock:
+            online = [i for i in self.instances if i.status == S_ONLINE]
+        if len(online) < 2:
+            return
+        full = []
+        for it in online:
+            n = self._bag_used(it)
+            if n >= 20:
+                full.append((it.pid, n))
+        if not full:
+            return
+        self._log("[存仓] 巡检发现背包满: %s → 启动全队存仓流程"
+                  % ", ".join("p%d(%d格)" % (p, n) for p, n in full))
+        self._store_running = True
+        threading.Thread(target=self._bag_store_flow, daemon=True).start()
+
+    def _bag_store_flow(self):
+        """全队存仓：停脚本 → 队长解散 → 逐人存仓 → 重新组队 → 恢复任务。
+
+        ★用户定案：一个角色背包满 → 所有人都去存一次；组队下无法存仓，
+          必须先解散；存完走现成组队流程重组并拉起任务脚本。
+        """
+        try:
+            with self.lock:
+                insts = list(self.instances)
+            # 1) 停任务脚本（存仓期间不让脚本抢客户端）
+            for it in insts:
+                try:
+                    self._kill_task_for(it.pid, leader=(it.role == "leader"))
+                except Exception:
+                    pass
+            time.sleep(2.0)
+            # 2) 队长解散队伍（全员退队）
+            leader = next((i for i in insts if i.role == "leader"), None)
+            if leader is not None:
+                try:
+                    sat.disband_team(leader.pid)
+                except Exception as e:
+                    self._log("[存仓] 解散异常: %s" % e)
+            # 3) 逐人存仓
+            total = 0
+            for it in insts:
+                try:
+                    ok, n, msg = wh.zhuagui_store_all(it.pid)
+                    total += n or 0
+                    self._log("[存仓] p%d ok=%s 存入%s件（%s）"
+                              % (it.pid, ok, n, msg))
+                except Exception as e:
+                    self._log("[存仓] p%d 异常: %s" % (it.pid, e))
+            self._log("[存仓] 全队完成，共存入 %d 件 → 重新组队" % total)
+            # 4) 重新组队 + 拉起任务（复用现成流程）
+            with self.lock:
+                online = [i for i in self.instances if i.status == S_ONLINE]
+            self._teamflow_and_tasks(online)
+        except Exception as e:
+            self._log("[存仓] 流程异常: %s" % e)
+        finally:
+            self._store_running = False
+
     def _team_watchdog(self, leader_pid, expect_members):
         """每 15s 判定队伍人数：满员不动；缺员 → 打断抓鬼 → 补组队 →
         满员自动恢复抓鬼。队员掉线由 GUI 重启重登后走 _rejoin_flow 归队，
@@ -1279,6 +1359,12 @@ class PPApp(tk.Tk):
                 hb_n += 1
                 if stale_scan_n % 4 == 0:   # ~每分钟清一次残留任务脚本
                     self._kill_stale_tasks()
+                # ★2026-09-12 背包满 → 全队存仓（用户定案 4a：每 10 分钟巡检一次）
+                #   任一角色背包 20/20 满 → 解散 → 全员存仓 → 重新组队 → 恢复任务。
+                if (stale_scan_n % 40 == 0 and not self.teamflow_running
+                        and not self._reteam_running and not self._store_running
+                        and not self._rejoining):
+                    self._bag_store_check()
                 # ★2026-09-09 任务脚本死亡自动补拉：07:28 实证 leader 脚本闯关
                 #   完成后静默死亡（stderr 被 DEVNULL 吞掉），全队发呆无人管——
                 #   掉线闭环只管游戏进程，没人管任务脚本进程。每 ~1min 巡检
@@ -1288,7 +1374,7 @@ class PPApp(tk.Tk):
                 #   漏报（p4120 "已死"补拉 1s 后 "已在跑"=假死误报）；②同一
                 #   PID 连续 2 轮扫描未命中才补拉（1 轮≈1min，真死最多晚 1min）。
                 if (stale_scan_n % 4 == 2 and not self.teamflow_running
-                        and not self._reteam_running):
+                        and not self._reteam_running and not self._store_running):
                     with self.lock:
                         _online = [i for i in self.instances
                                    if i.status == S_ONLINE]
@@ -1365,6 +1451,10 @@ class PPApp(tk.Tk):
                             self._spawn_task(i)
                     continue
                 # 缺员
+                # ★2026-09-12 存仓流程进行中：队员是"故意"退队的（存仓需要
+                #   解散队伍），此处绝不能触发补组，否则与存仓抢客户端。
+                if self._store_running:
+                    continue
                 if not self._watch_interrupted:
                     self._watch_interrupted = True
                     self._log("[看门狗] 检测到缺员 %d/%d → 打断抓鬼，启动补组队"
