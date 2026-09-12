@@ -1,0 +1,16 @@
+{
+  "run_id": "20260911_235930",
+  "tag": "",
+  "role": "二号美人",
+  "gateway": "file://pzxy_p10472",
+  "timeout": 20.0,
+  "wait_dialog": 1.2,
+  "min_interval": 15.0,
+  "max_interval": 30.0,
+  "sample_interval": 1.5,
+  "start": "2026-09-11T23:59:30+08:00",
+  "info": [
+    "网关(显式): file://pzxy_p10472",
+    "窗口: 角色=二号美人 pid=10472 hwnd=0xA0298"
+  ]
+}

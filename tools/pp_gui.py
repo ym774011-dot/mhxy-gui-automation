@@ -1322,16 +1322,29 @@ class PPApp(tk.Tk):
                     sat.disband_team(leader.pid)
                 except Exception as e:
                     self._log("[存仓] 解散异常: %s" % e)
-            # 3) 逐人存仓
-            total = 0
-            for it in insts:
+            # 3) 逐人存仓（★用户 2026-09-12：可以并行——各角色独立客户端、
+            #    仓库也是角色各自独立的；并行把 5 人从 ~15min 压到 ~3-4min。
+            #    Lua 调用有全局限速锁自动串行化，每次毫秒级不影响。）
+            results = {}
+
+            def _store_one(it):
                 try:
                     ok, n, msg = wh.zhuagui_store_all(it.pid)
-                    total += n or 0
-                    self._log("[存仓] p%d ok=%s 存入%s件（%s）"
-                              % (it.pid, ok, n, msg))
+                    results[it.pid] = (ok, n, msg)
                 except Exception as e:
-                    self._log("[存仓] p%d 异常: %s" % (it.pid, e))
+                    results[it.pid] = (False, 0, "异常: %s" % e)
+
+            ts = [threading.Thread(target=_store_one, args=(it,), daemon=True)
+                  for it in insts]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(1200)
+            total = 0
+            for it in insts:
+                ok, n, msg = results.get(it.pid, (False, 0, "无结果"))
+                total += n or 0
+                self._log("[存仓] p%d ok=%s 存入%s件（%s）" % (it.pid, ok, n, msg))
             self._log("[存仓] 全队完成，共存入 %d 件 → 重新组队" % total)
             # 4) 重新组队 + 拉起任务（复用现成流程）
             with self.lock:
