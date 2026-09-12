@@ -2228,9 +2228,8 @@ end
         local sell = (cat == '武器') or (cat == '防具')
         if not sell then sell = (itype == '武器') or (itype == '装备') end
         if not sell then sell = (name:find('上古锻造图策') ~= nil) end
-        -- ★2026-09-08 用户指定：魔兽要诀/高级魔兽要诀都卖（子串"魔兽要诀"
-        --   同时命中两者）
-        if not sell then sell = (name:find('魔兽要诀') ~= nil) end
+        -- ★2026-09-12 用户定案：移除 魔兽要诀/高级魔兽要诀 的出售判据——
+        --   不再卖，改由存仓流程归档（旧：子串"魔兽要诀"同时命中两者都卖）。
         if not sell then sell = (desc:find('装备角色') ~= nil) end
     if sell then
       local sa = it.小动画
