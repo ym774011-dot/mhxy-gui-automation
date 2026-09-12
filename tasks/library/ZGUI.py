@@ -3890,11 +3890,19 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
     if not pid:
         return "idle"
     with _AUTO_LOCK:
-        if _AUTO_ONCE.get(pid):
-            return "auto_on"
+        already = _AUTO_ONCE.get(pid)
         inb, _st = zhuagui_auto_battle_state(gateway)   # 仅用其战斗判定
         if not inb:
             return "idle"
+        # ★2026-09-13 实测修正（用户反馈"没有改位置"）：游戏每场战斗都会把
+        #   面板重置回默认位——战斗外写入会被覆盖。停靠改为【每场战斗、
+        #   战斗中写入一次】（实时生效，面板随即移到左下角出屏一半）。
+        _lua_call(gateway, r'''
+local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.自动栏
+if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
+''')
+        if already:
+            return "auto_on"
         _AUTO_ONCE[pid] = True
         x0, y0, x1, y1 = _AUTO_BTN_RECT
         post_click(hwnd, random.randint(x0 + 8, x1 - 8),
