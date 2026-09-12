@@ -405,16 +405,20 @@ def post_click(hwnd, x, y, gateway=None):
 
     柔和化：先按贝塞尔轨迹滑到目标，再 DOWN/UP 点击。gateway 提供时
     先读引擎当前鼠标位作轨迹起点（更真实），否则用缓存起点。
+    ★2026-09-12 用户实测定案：点击后必须**停驻在目标上**~0.12-0.3s 再允许
+      移开——游戏在下一帧才处理点击，UP 后立刻被下一段轨迹拉走 = 点击丢失
+      （"光标点到就马上移开，点击像没生效"实锤）。DOWN→UP 间隔也放宽。
     """
     if gateway:
         _read_engine_mouse(gateway)
     _move_traj(hwnd, _last_mouse[0], _last_mouse[1], x, y)
-    time.sleep(random.uniform(0.03, 0.09))
+    time.sleep(random.uniform(0.06, 0.12))
     user32.PostMessageW(hwnd, WM_LBUTTONDOWN, 1, _lp(x, y))
-    time.sleep(random.uniform(0.04, 0.09))
+    time.sleep(random.uniform(0.07, 0.14))
     user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(x, y))
     _last_mouse[:] = [x, y]
     _last_mouse_ts[0] = time.time()
+    time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳再移开
 
 
 def post_right_click(hwnd, x, y, gateway=None):
@@ -422,16 +426,18 @@ def post_right_click(hwnd, x, y, gateway=None):
 
     ★2026-09-03 新增：供"使用天眼"等道具右键操作使用。
     柔和化：先按贝塞尔轨迹滑到目标，再 DOWN/UP 点击。
+    ★2026-09-12 同 post_click：放宽间隔 + 点击后停驻。
     """
     if gateway:
         _read_engine_mouse(gateway)
     _move_traj(hwnd, _last_mouse[0], _last_mouse[1], x, y)
-    time.sleep(random.uniform(0.03, 0.09))
+    time.sleep(random.uniform(0.06, 0.12))
     user32.PostMessageW(hwnd, WM_RBUTTONDOWN, 1, _lp(x, y))
-    time.sleep(random.uniform(0.04, 0.09))
+    time.sleep(random.uniform(0.07, 0.14))
     user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, _lp(x, y))
     _last_mouse[:] = [x, y]
     _last_mouse_ts[0] = time.time()
+    time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳再移开
 
 
 class _BMIHEADER(ctypes.Structure):
