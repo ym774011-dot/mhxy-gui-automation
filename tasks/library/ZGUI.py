@@ -1927,6 +1927,9 @@ __out = table.concat(out, ' ;; ')
     r = _lua_call(gateway, code) or ""
     # ★2026-09-08 改多候选输出：超星被取消后可顺延试下一只（旧版单候选，
     #   第一只超星就浪费整轮顺手打机会）
+    # ★2026-09-12 用户定案：战斗中不 CALL 任何目标——顺手打整体早退
+    if zhuagui_in_battle(gateway):
+        return []
     cands = []
     for seg in r.split(" ;; "):
         seg = seg.strip()
@@ -2013,6 +2016,10 @@ __out = tostring(n or '-')
         # 防重复 CALL：复用抓鬼目标的 8s 冷却
         if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
             continue
+        # ★2026-09-12 用户定案：战斗中不 CALL（扫描途中可能进战）→ 整体终止
+        if zhuagui_in_battle(gateway):
+            _log("战斗中 → 终止顺手打（不 CALL 任何目标）")
+            return kills
         if verbose:
             logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
         _sleep(random.uniform(0.15, 0.4))
