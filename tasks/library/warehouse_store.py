@@ -331,9 +331,13 @@ __out = string.format('%d,%d', b.x - 480, b.y + 40)''') or ""
 
 def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_MIN,
                       hwnd=None, verbose=True):
-    """单角色：背包物品存仓库（同物品同分页 / 满页自动换 / 可叠需攒满 stack_min）。
+    """单角色：背包物品存仓库（★2026-09-12 用户定案：边存边填页）。
 
-    ★ 组队下无法使用仓库——调用方必须先解散队伍。
+    不预扫描全部分页（省 ~60s）——直接在当前分页开存；存不进去（该页满）
+    就切下一页继续；26 页都满才放弃该件。
+    规则：可叠物品（有 数量 字段）攒满 stack_min(99) 才存；保留第一排
+    （格子id<=5）+ 名称含 天眼/合成旗/飞行旗。
+    ★组队下无法使用仓库——调用方必须先解散队伍。
     返回 (成功标志, 存放件数, 说明)。
     """
     gw = "file://pzxy_p%d" % pid
@@ -365,34 +369,27 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
         _exit_panel(hwnd, gw)
         return True, 0, "无可存"
 
-    # 同物品同分页检索：先扫已有分页，记录 名称→分页
-    home = {}
-    for page in range(1, 27):
-        if not _switch_page(hwnd, gw, page):
-            break
-        for nm, _q in _page_items(hwnd, gw):
-            home.setdefault(nm, page)
-    cur_page = 1
+    # ★用户定案：不预扫描——直接在当前分页开存；存不进去（该页满）就切下一页
+    #   继续；26 页都满才放弃该件。cur 从面板当前分页开始（延续上次进度）。
+    st = _panel(hwnd, gw)
+    cur = st.get("page") or 1
     stored = 0
     for it in todo:
-        target = home.get(it["name"])
-        page = target if target else cur_page
-        while page <= 26:
-            if not _switch_page(hwnd, gw, page):
-                break
+        for _ in range(26):
+            if not _switch_page(hwnd, gw, cur):
+                cur = cur % 26 + 1
+                continue
             before = _panel(hwnd, gw)["bag"]
             _Z.post_right_click(hwnd, it["x"], it["y"], gateway=gw)
             time.sleep(random.uniform(1.2, 1.6))
             after = _panel(hwnd, gw)["bag"]
-            if after < before:                     # 存成功
+            if after < before:                    # 存成功 → 该页继续放下一件
                 stored += 1
-                home.setdefault(it["name"], page)
-                cur_page = page
-                _log("p%d %s → 分页%d（余 %d 件）" % (pid, it["name"], page, after))
+                _log("p%d %s → 分页%d（余 %d 件）" % (pid, it["name"], cur, after))
                 break
-            _log("p%d 分页%d 存 %s 未生效（满页？）→ 换下一页"
-                 % (pid, page, it["name"]))
-            page += 1
+            _log("p%d 分页%d 存 %s 未生效（满页）→ 下一页"
+                 % (pid, cur, it["name"]))
+            cur = cur % 26 + 1
         else:
             _log("p%d %s 26 个分页都满，放弃该件" % (pid, it["name"]))
     _exit_panel(hwnd, gw)
