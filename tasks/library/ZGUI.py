@@ -2034,7 +2034,7 @@ __out = tostring(n or '-')
             continue
         # ★2026-09-12 用户定案：战斗中不 CALL（扫描途中可能进战）→ 整体终止
         if zhuagui_in_battle(gateway):
-            _log("战斗中 → 终止顺手打（不 CALL 任何目标）")
+            logger.info("战斗中 → 终止顺手打（不 CALL 任何目标）")
             return kills
         if verbose:
             logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
