@@ -3822,6 +3822,10 @@ def zhuagui_auto_battle_state(gateway=DEFAULT_GATEWAY, **kw):
 # 登录时间戳，如 "- 2026年08月25日 22:14:42"，重登/重启即刷新）。
 # 脚本重启不清零（同会话 key 不变）。
 _AUTO_ONCE = {"key": None, "done": False}
+# ★2026-09-12 并发竞态修复：队长主循环/_battle_auto_kick 线程/队员看门狗
+#   会并发调 ensure_auto_battle——两线程同时读到"未开"各点一次 = 第二次
+#   把自动点关（用户实测"它会自己取消自动"）。全函数互斥串行化。
+_AUTO_LOCK = _threading.Lock()
 
 
 def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **kw):
@@ -3850,6 +3854,15 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
     #   每秒都在变（实测 3s 内 22:16:49→22:16:52）——旧 key 含标题 →
     #   key 每秒跳动 → done 每次被重置 → 会话闸失效、每场战斗都多点。
     #   会话语义只需 PID：游戏重启=新 PID，脚本重启 PID 不变。
+    return _ensure_auto_battle_locked(hwnd, gateway, log, pid)
+
+
+def _ensure_auto_battle_locked(hwnd, gateway, log, pid):
+    with _AUTO_LOCK:
+        return _ensure_auto_battle_inner(hwnd, gateway, log, pid)
+
+
+def _ensure_auto_battle_inner(hwnd, gateway, log, pid):
     key = str(pid)
     if _AUTO_ONCE["key"] != key:
         _AUTO_ONCE["key"] = key
@@ -3864,17 +3877,37 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
         return "idle"   # 无战斗证据，不点
     if st == "取消":
         _AUTO_ONCE["done"] = True
-        (log.info if log else logger.info)("「自动」已是开启态（状态=取消），标记完成不再点")
+        (log.info if log else logger.info)("「自动」已是开启态（状态=取消），标记完成，不点")
         return "auto_on"
+    # ★2026-09-12 修复（重新登录后点击自动还是有问题）：战斗 UI 未渲染完时
+    #   状态读到 None——旧逻辑此时盲点一次并 done=True，本会话唯一的点击
+    #   机会被浪费（点早了没落在按钮上，之后永不补点）。改为：
+    #   状态 None → 不点不标记，等下一轮轮询（5s 后状态可读再点）；
+    #   状态=「自动」（确认未开）→ 点 + 1.5s 后回读校验，未变「取消」再点，
+    #   最多 3 次；点歪了（误关）回读也会发现并补点回开（旧"不补救"代价取消）。
+    if st is None:
+        return "idle"
     x0, y0, x1, y1 = _AUTO_BTN_RECT
-    post_click(hwnd, random.randint(x0 + 8, x1 - 8),
-               random.randint(y0 + 6, y1 - 6), gateway=gateway)
+    landed = False
+    for _attempt in range(3):
+        post_click(hwnd, random.randint(x0 + 8, x1 - 8),
+                   random.randint(y0 + 6, y1 - 6), gateway=gateway)
+        _BATTLE_LATCH["ts"] = time.time()
+        (log.info if log else logger.info)(
+            "首次进战斗 → 点「自动」(%d,%d)-(%d,%d) 第 %d 次"
+            % (x0, y0, x1, y1, _attempt + 1))
+        time.sleep(1.5)
+        _inb2, st2 = zhuagui_auto_battle_state(gateway)
+        if st2 == "取消":
+            landed = True
+            break
+        if st2 is None:
+            # UI 状态读不到了（战斗可能刚结束）→ 不再补点，交给下轮轮询
+            break
     _AUTO_ONCE["done"] = True
-    _BATTLE_LATCH["ts"] = time.time()
-    (log.info if log else logger.info)(
-        "首次进战斗 → 固定点一次「自动」(%d,%d)-(%d,%d)（此后本进程不再点）"
-        % (x0, y0, x1, y1))
-    return "clicked"
+    if not landed:
+        logger.warning("「自动」点击 3 次后状态仍未变「取消」（本会话不再补点）")
+    return "clicked" if landed else "clicked_unverified"
 
 
 def zhuagui_in_battle(gateway=DEFAULT_GATEWAY, **kw):
