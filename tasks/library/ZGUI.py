@@ -719,6 +719,21 @@ __out=''
     # 3. 验证任务栏出现抓鬼任务
     _sleep(1.5)
     t = zhuagui_get_task(gateway)
+    if t and t.get("name"):
+        return True
+    # ★2026-09-12 用户定案（异常处理）：接取失败 → 对话多半还开着且卡在
+    #   上次状态 → 点"我来帮你抓鬼"正下方的"取消抓鬼任务"清掉，再重新
+    #   点一次"我来帮你抓鬼"重试接取。
+    _sleep(0.6)
+    cancel_y0 = int(opt_y0) + 17
+    cancel_y1 = int(opt_y1) + 17
+    cx2 = int(opt_x0) + random.randint(3, max(1, int(opt_x1) - int(opt_x0) - 3))
+    post_click(hwnd, cx2, random.randint(cancel_y0 + 2, cancel_y1 - 2),
+               gateway=gateway)
+    _sleep(1.0)
+    post_click(hwnd, cx, cy, gateway=gateway)
+    _sleep(1.5)
+    t = zhuagui_get_task(gateway)
     return bool(t and t.get("name"))
 
 
@@ -1330,6 +1345,7 @@ def _npc_hop_map(gateway, hwnd, target_map, tries=2):
             "  local generic = (nm:find('守卫', 1, true) ~= nil)"
             " or (nm:find('驿站', 1, true) ~= nil)"
             " or (nm:find('接引人', 1, true) ~= nil)\n"
+            " or (nm:find('船夫', 1, true) ~= nil)\n"
             "  if strong or generic then\n"
             "    local sx = (tonumber(tostring(v.x or '')) or 0) + ox\n"
             "    local sy = (tonumber(tostring(v.y or '')) or 0) + oy\n"
@@ -3855,6 +3871,12 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
         if not inb:
             return "idle"
         _AUTO_ONCE[pid] = True
+        # ★2026-09-12 用户定案：自动战斗窗口停靠左下角（下缘出屏一半），
+        #   避免挡住战斗场景的对话框/点击目标。Lua 直写坐标（实测持久，精灵跟随）。
+        _lua_call(gateway, r'''
+local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.自动栏
+if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
+''')
         x0, y0, x1, y1 = _AUTO_BTN_RECT
         post_click(hwnd, random.randint(x0 + 8, x1 - 8),
                    random.randint(y0 + 6, y1 - 6), gateway=gateway)

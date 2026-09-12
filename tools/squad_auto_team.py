@@ -451,8 +451,9 @@ def approve_round(leader_pid):
         st = ZGUI._team_stats(_gw(leader_pid))
     mem = st[0] if st else -1
     if mem >= 1:
-        ZGUI.post_click(lhwnd, 162 + random.randint(-2, 2),
-                        166 + random.randint(-2, 2), gateway=lw)
+        # ★2026-09-12 用户标定更新：申请卡选中点 (162,166) → (171,175)
+        ZGUI.post_click(lhwnd, 171 + random.randint(-2, 2),
+                        175 + random.randint(-2, 2), gateway=lw)
         time.sleep(random.uniform(0.4, 0.6))
         ZGUI.post_click(lhwnd, random.randint(514, 541),
                         random.randint(370, 378), gateway=lw)
