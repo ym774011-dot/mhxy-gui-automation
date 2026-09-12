@@ -435,8 +435,8 @@ def post_click(hwnd, x, y, gateway=None):
     user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, _lp(x, y))
     _last_mouse[:] = [x, y]
     _last_mouse_ts[0] = time.time()
-    time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳再移开
-    _rest_cursor(hwnd)                       # ★移到停泊区随机位停放
+    time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳（光标留原位，
+                                             #   NPC/世界点击依赖光标停在目标上）
 
 
 def post_right_click(hwnd, x, y, gateway=None):
@@ -455,8 +455,8 @@ def post_right_click(hwnd, x, y, gateway=None):
     user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, _lp(x, y))
     _last_mouse[:] = [x, y]
     _last_mouse_ts[0] = time.time()
-    time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳再移开
-    _rest_cursor(hwnd)                       # ★移到停泊区随机位停放
+    time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳（光标留原位，
+                                             #   NPC/世界点击依赖光标停在目标上）
 
 
 class _BMIHEADER(ctypes.Structure):
@@ -3939,15 +3939,21 @@ __out = inb and 'true' or 'false'
     return r == "true"
 
 
-def _mouse_clear(hwnd, gateway=None, x=415, y=160):
+def _mouse_clear(hwnd, gateway=None, x=None, y=None):
     """把引擎鼠标（游戏内光标）移到场景空白处，避免光标常驻背包/物品上。
 
     ★2026-09-03 修复：PostMessage 点击的终点即引擎光标位置。脚本循环里最后
       右键天眼(232,354) / 合成旗(186,302) 等都在背包面板内 → 光标一直停在
       背包上、物品 tooltip 常显（遮挡后续点击，视觉上"鼠标停留在背包"）。
       在"使用道具后"和"每轮结束后"调用本函数把光标移出界面，杜绝 tooltip。
+    ★2026-09-12 用户标定：默认改停泊区 (328,47)-(729,273) 内随机位停放
+      （不传 x/y 时）；点击后不自动移泊（NPC/世界点击依赖光标停在目标上），
+      仅在流程显式调用本函数时才移泊。
     """
     try:
+        if x is None or y is None:
+            x = random.randint(_CLICK_REST_RECT[0], _CLICK_REST_RECT[2])
+            y = random.randint(_CLICK_REST_RECT[1], _CLICK_REST_RECT[3])
         _move_traj(hwnd, _last_mouse[0], _last_mouse[1], x, y)
         _last_mouse[:] = [x, y]
         _last_mouse_ts[0] = time.time()
