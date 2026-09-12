@@ -3871,15 +3871,16 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
         if not inb:
             return "idle"
         _AUTO_ONCE[pid] = True
-        # ★2026-09-12 用户定案：自动战斗窗口停靠左下角（下缘出屏一半），
-        #   避免挡住战斗场景的对话框/点击目标。Lua 直写坐标（实测持久，精灵跟随）。
+        x0, y0, x1, y1 = _AUTO_BTN_RECT
+        post_click(hwnd, random.randint(x0 + 8, x1 - 8),
+                   random.randint(y0 + 6, y1 - 6), gateway=gateway)
+        # ★2026-09-12 用户定案（顺序修正）：点「自动」之后，再把自动战斗
+        #   窗口移动到左下角（下缘出屏一半）一次——与点击绑定在同一会话闸，
+        #   只在首次登录/重新登录后生效一次。Lua 直写坐标（实测持久）。
         _lua_call(gateway, r'''
 local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.自动栏
 if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
 ''')
-        x0, y0, x1, y1 = _AUTO_BTN_RECT
-        post_click(hwnd, random.randint(x0 + 8, x1 - 8),
-                   random.randint(y0 + 6, y1 - 6), gateway=gateway)
         (log.info if log else logger.info)(
             "首次进战斗 → 固定点一次「自动」(%d,%d)-(%d,%d)（本会话不再点）"
             % (x0, y0, x1, y1))
