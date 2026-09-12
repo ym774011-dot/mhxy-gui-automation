@@ -29,6 +29,7 @@ _TP_WAREHOUSE = (194, 410)             # 传送对话框-仓库（免费）
 _WH_QUIT = (646, 408)                  # 仓库面板-退出
 _WH_BTN_X0, _WH_BTN_Y1, _WH_BTN_Y2 = 215, 395, 423   # 分页按钮起始/两排 y
 _WH_BTN_DX, _WH_BTN_W, _WH_BTN_H = 25, 22, 23
+_NPC_FALLBACK = (298, 305)             # 落点[355,33]时仓库管理员固定屏幕位（实测）
 
 _STORE_STACK_MIN = 99                  # 可叠物品攒满 99 才存（用户定案）
 _STORE_KEEP_NAMES = ("天眼", "合成旗", "飞行旗")   # 名称子串保护
@@ -153,33 +154,30 @@ __out = table.concat(out, ' ;; ')
     return res
 
 
-def _go_warehouse(hwnd, gw):
-    """快捷菜单 → 快捷传送 → 仓库（免费）。返回 True=已到长安仓库点。"""
-    # 菜单状态像素校验（红底标签）
-    def _menu_open():
-        try:
-            img = _Z.grab_client(hwnd)
-            pil = img[0] if isinstance(img, tuple) else img
-            r, g, b = pil.convert("RGB").getpixel((295, 51))
-            return r > 140 and g < 110
-        except Exception:
-            return False
-
-    for _ in range(3):
-        if _menu_open():
-            break
-        _click_box(hwnd, gw, _MENU_TOGGLE, "菜单开关")
-        time.sleep(1.0)
-    if not _menu_open():
-        _log("快捷菜单打不开")
-        return False
-    _click_box(hwnd, gw, _TP_BTN, "快捷传送")
-    time.sleep(1.6)
-    ok = _Z._lua_call(gw, r'''
+def _dialog_open(gw):
+    """NPC 对话框是否打开（界面[8].本类开关）——功能性校验，不用像素。"""
+    return _Z._lua_call(gw, r'''
 local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
 __out = tostring(d and d.本类开关)''') == "true"
-    if not ok:
-        _log("快捷传送对话框未开")
+
+
+def _go_warehouse(hwnd, gw):
+    """快捷菜单 → 快捷传送 → 仓库（免费）。返回 True=已到长安仓库点。
+
+    ★2026-09-12 改功能性校验：菜单开关是切换式且像素会被队友名条干扰，
+      改为"点开关→点快捷传送→读界面8开关"配对重试（最多 4 轮），不再看图。
+    """
+    opened = False
+    for _ in range(4):
+        _click_box(hwnd, gw, _MENU_TOGGLE, "菜单开关")
+        time.sleep(0.9)
+        _click_box(hwnd, gw, _TP_BTN, "快捷传送")
+        time.sleep(1.5)
+        if _dialog_open(gw):
+            opened = True
+            break
+    if not opened:
+        _log("快捷传送对话框打不开（4 轮）")
         return False
     _Z.post_click(hwnd, _TP_WAREHOUSE[0] + random.randint(-6, 6),
                   _TP_WAREHOUSE[1] + random.randint(-1, 3), gateway=gw)
@@ -190,43 +188,145 @@ __out = tostring(tp and tp.地图 and tp.地图.地图名称) .. ','
      .. tostring(me and math.floor((me.x or 0) / 20)) .. ','
      .. tostring(me and math.floor((me.y or 0) / 20))''') or ""
     _log("落点: %s" % pos)
-    return pos.startswith("长安城,355,33") or pos.startswith("长安城,354,33")
+    # ★落地后关掉快捷传送对话框（对话框开着角色不能移动，会挡住后续点 NPC）
+    _close_dialogs(hwnd, gw)
+    return pos.startswith("长安城,35")
+
+
+def _close_dialogs(hwnd, gw, tries=3):
+    """关闭挡住世界点击的对话框（界面8：快捷传送/NPC 对话）。
+
+    ★2026-09-12 用户实测：对话框开着时角色不能移动（世界点击被忽略）——
+      传送落地后必须先把快捷传送对话框关掉，否则点 NPC 全部无效。
+    优先点对话框自带的 关闭按钮（Lua 包围盒），再兜底 ESC。
+    """
+    for _ in range(max(1, tries)):
+        pos = _Z._lua_call(gw, r'''
+local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
+local b = d and d.关闭 and d.关闭.包围盒
+if not (d and d.本类开关 == true) or not b then __out = '' return end
+__out = string.format('%d,%d', b.x + 8, b.y + 8)''') or ""
+        if "," in pos:
+            try:
+                x, y = [int(float(s)) for s in pos.split(",")]
+            except ValueError:
+                break
+            _Z.post_click(hwnd, x, y, gateway=gw)
+            time.sleep(0.8)
+            continue
+        break
+    if _Z._lua_call(gw, r'''
+local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
+__out = tostring(d and d.本类开关)''') == "true":
+        import ctypes as _c
+        u = _c.windll.user32
+        u.PostMessageW(hwnd, 0x0100, 0x1B, 0)
+        u.PostMessageW(hwnd, 0x0101, 0x1B, 0xC0000001)
+        time.sleep(0.6)
+    return _Z._lua_call(gw, r'''
+local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
+__out = tostring(d and d.本类开关)''') != "true"
 
 
 def _call_warehouse_npc(hwnd, gw):
-    """CALL 仓库管理员 → 点"打开仓库"红字行 → 校验面板打开。"""
-    pos = _Z._lua_call(gw, r'''
+    """CALL 仓库管理员 → 点"打开仓库"（对话最顶选项）→ 校验面板打开。
+
+    ★NPC 定位：先轮询 npc 表（传送落地后表可能还没加载），表里没有再用
+      实测固定屏幕位（落点[355,33] 时 NPC 恒在角色左前方 (298,305)）。
+    ★选项定位：用对话框 关闭按钮 的 Lua 包围盒做锚点推算第一行
+      （实测 关闭=(608,254) ↔ 打开仓库行 (110-175, 288-300)，dx≈-480 dy≈+40）；
+      失败再退回红字行检测（取最顶行）。
+    """
+    def _npc_pos():
+        return _Z._lua_call(gw, r'''
 local t = tp and tp.地图 and tp.地图.npc
 local off = tp and tp.屏幕 and tp.屏幕.xy
 local ox, oy = (off and off.x) or 0, (off and off.y) or 0
 if type(t) ~= 'table' then __out = '' return end
 for _, v in pairs(t) do
   if type(v) == 'table' and tostring(v.名称 or ''):find('仓') then
-    __out = string.format('%.0f,%.0f', (tonumber(v.x) or 0) + ox, (tonumber(v.y) or 0) + oy)
+    __out = string.format('%d,%d', (tonumber(v.x) or 0) + ox, (tonumber(v.y) or 0) + oy)
     return
   end
 end
 __out = ''
 ''') or ""
-    if "," not in pos:
-        _log("npc 表里找不到仓库管理员")
-        return False
-    x, y = [int(float(s)) for s in pos.split(",")]
-    _Z.post_click(hwnd, x, y, gateway=gw)
-    time.sleep(1.8)
-    rows = _Z._bonus_dialog_rows(hwnd)
-    if not rows:
-        _log("仓库管理员对话未弹出")
-        return False
-    b = rows[0]
-    _Z.post_click(hwnd, random.randint(b["x0"] + 3, max(b["x0"] + 4, b["x1"] - 3)),
-                  random.randint(b["y0"], b["y1"]), gateway=gw)
-    time.sleep(2.0)
+
+    def _click_npc():
+        pos = ""
+        t0 = time.time()
+        while time.time() - t0 < 12.0:
+            pos = _npc_pos()
+            if "," in pos:
+                break
+            time.sleep(1.0)
+        if "," in pos:
+            x, y = [int(float(s)) for s in pos.split(",")]
+        else:
+            x, y = _NPC_FALLBACK          # 落点固定位（实测）
+        _Z.post_click(hwnd, x + random.randint(-4, 4),
+                      y + random.randint(-4, 4), gateway=gw)
+        time.sleep(1.8)
+        return "," in pos
+
+    # ★2026-09-12 实测坑：背包面板开着会盖住 NPC（点击落在背包格上出物品提示），
+    #   点 NPC 前先无条件关背包。
+    try:
+        _Z._bag_ensure_close(gw, hwnd)
+    except Exception:
+        pass
+    _close_dialogs(hwnd, gw)
+    # 实测：落点与 NPC 相距约 5 格（99 世界像素）——单击只是"开始走过去"，
+    #   没到交互距离不弹对话。改为"走近→点→校验"循环（每轮按表重算屏幕位）。
+    for _ in range(5):
+        if _panel(hwnd, gw)["open"]:
+            return True
+        pos = ""
+        t0 = time.time()
+        while time.time() - t0 < 6.0:
+            pos = _npc_pos()
+            if "," in pos:
+                break
+            time.sleep(1.0)
+        if "," in pos:
+            x, y = [int(float(s)) for s in pos.split(",")]
+        else:
+            x, y = _NPC_FALLBACK
+        _Z.post_click(hwnd, x + random.randint(-4, 4),
+                      y + random.randint(-4, 4), gateway=gw)
+        time.sleep(1.6)
+        if _panel(hwnd, gw)["open"]:
+            return True
+        # 对话已弹 → 点"打开仓库"：
+        # ★2026-09-12 用户标定坐标 (117,322)-(169,332) 优先（实测最稳），
+        #   失败再用 关闭按钮锚点推算 / 红字行检测兜底。
+        _Z.post_click(hwnd, random.randint(120, 166), random.randint(323, 331),
+                      gateway=gw)
+        time.sleep(1.6)
+        if _panel(hwnd, gw)["open"]:
+            return True
+        anchor = _Z._lua_call(gw, r'''
+local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
+local b = d and d.关闭 and d.关闭.包围盒
+if not (d and d.本类开关 == true) or not b then __out = '' return end
+__out = string.format('%d,%d', b.x - 480, b.y + 40)''') or ""
+        if "," in anchor:
+            ax, ay = [int(float(s)) for s in anchor.split(",")]
+            _Z.post_click(hwnd, ax + random.randint(0, 50),
+                          ay + random.randint(-2, 8), gateway=gw)
+            time.sleep(1.6)
+            continue
+        rows = _Z._bonus_dialog_rows(hwnd)
+        if rows:
+            b = rows[0]
+            _Z.post_click(hwnd, random.randint(b["x0"] + 3,
+                                               max(b["x0"] + 4, b["x1"] - 3)),
+                          random.randint(b["y0"], b["y1"]), gateway=gw)
+            time.sleep(1.6)
     st = _panel(hwnd, gw)
     if not st["open"]:
-        _log("点'打开仓库'后面板未开")
-        return False
-    return True
+        _log("打开仓库面板失败（5 轮）")
+    return st["open"]
 
 
 def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_MIN,
