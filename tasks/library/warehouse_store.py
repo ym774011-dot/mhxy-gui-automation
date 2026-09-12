@@ -32,6 +32,8 @@ _WH_BTN_DX, _WH_BTN_W, _WH_BTN_H = 25, 22, 23
 _NPC_FALLBACK = (298, 305)             # 落点[355,33]时仓库管理员固定屏幕位（实测）
 
 _STORE_STACK_MIN = 99                  # 可叠物品攒满 99 才存（用户定案）
+_STORE_NO_STACK_MIN = ("魔兽要诀",)    # ★2026-09-12 用户更正：魔兽要诀不可叠加
+                                       # （每本占一格）→ 不限 99，有多少存多少
 _STORE_KEEP_NAMES = ("天眼", "合成旗", "飞行旗")   # 名称子串保护
 _STORE_KEEP_SLOTS = 5                  # 第一排（格子id<=5）保留
 
@@ -361,8 +363,9 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
             continue
         if gid is not None and gid <= _STORE_KEEP_SLOTS:      # 第一排保留
             continue
-        if qty.isdigit() and int(qty) < stack_min:            # 可叠未攒满 → 留
-            continue
+        if (qty.isdigit() and int(qty) < stack_min
+                and not any(k in nm for k in _STORE_NO_STACK_MIN)):
+            continue                                            # 可叠未攒满 → 留
         todo.append(it)
     if not todo:
         _log("p%d 无可存物品（保留规则过滤后）" % pid)
