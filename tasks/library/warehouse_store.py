@@ -348,10 +348,18 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
         hwnd = find_hwnd_by_pid(pid)
     if not hwnd:
         return False, 0, "找不到窗口"
-    if not _go_warehouse(hwnd, gw):
-        return False, 0, "到仓库失败"
-    if not _call_warehouse_npc(hwnd, gw):
-        return False, 0, "开仓库面板失败"
+    # ★2026-09-12 用户要求"完美实现"：到仓库/开面板失败自动重试（2 次尝试）
+    opened = False
+    last_err = ""
+    for attempt in range(2):
+        if _go_warehouse(hwnd, gw) and _call_warehouse_npc(hwnd, gw):
+            opened = True
+            break
+        last_err = "到仓库/开面板失败"
+        _log("p%d 第 %d 次尝试未成功 → 5s 后重试" % (pid, attempt + 1))
+        time.sleep(5.0)
+    if not opened:
+        return False, 0, last_err
 
     bag = _bag_items(hwnd, gw)
     todo = []
