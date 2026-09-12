@@ -2077,6 +2077,7 @@ __out = tostring(n or '-')
                     logger.warning("%s对话未收掉（右键+ESC 均无效），截图留证" % bkind)
                     _bonus_shot("dizha_dismiss_fail")
                 _BONUS_SKIP_GID[gid] = time.time()
+                _mouse_clear(hwnd, gateway)      # ★取消后光标移泊，防遮挡下个对话
                 continue
             logger.info("%s %s 难度%d星≤%d → 开打" % (bkind, bname, star, _DIZHA_MAX_STAR))
         # ★CALL 后等对话弹出 → 点"进入战斗"选项 → 等进战
@@ -2148,6 +2149,10 @@ __out = tostring(n or '-')
                                 % (b["x0"], b["x1"], b["y0"], b["y1"]))
                 break
             _sleep(random.uniform(0.4, 0.6))
+        # ★2026-09-12 用户定案：点完"进入战斗"后光标移到停泊区随机位——
+        #   否则光标悬停在对话上，下一个怪弹窗的红字被遮挡检不到。
+        if clicked:
+            _mouse_clear(hwnd, gateway)
         # 等进战（点了对话给足进战加载时间；没对话则维持原 8s 放弃逻辑）
         t0 = time.time()
         battle_wait = 12.0 if clicked else 8.0
@@ -3893,13 +3898,10 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
         x0, y0, x1, y1 = _AUTO_BTN_RECT
         post_click(hwnd, random.randint(x0 + 8, x1 - 8),
                    random.randint(y0 + 6, y1 - 6), gateway=gateway)
-        # ★2026-09-12 用户定案（顺序修正）：点「自动」之后，再把自动战斗
-        #   窗口移动到左下角（下缘出屏一半）一次——与点击绑定在同一会话闸，
-        #   只在首次登录/重新登录后生效一次。Lua 直写坐标（实测持久）。
-        _lua_call(gateway, r'''
-local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.自动栏
-if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
-''')
+        # ★2026-09-13 撤销"停靠左下角"Lua 直写：用户实测首战掉线，注入通道
+        #   改游戏实时对象与"不要动内存会掉线"同类风险（用户铁律）。
+        #   窗口位置改为人工拖一次（游戏按角色记忆布局）；若实测不持久，
+        #   再用 PostMessage 拖拽（纯输入模拟）实现，绝不再写对象。
         (log.info if log else logger.info)(
             "首次进战斗 → 固定点一次「自动」(%d,%d)-(%d,%d)（本会话不再点）"
             % (x0, y0, x1, y1))
