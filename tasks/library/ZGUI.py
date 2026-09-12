@@ -400,6 +400,23 @@ def _move_traj(hwnd, x0, y0, x1, y1):
     time.sleep(random.uniform(0.02, 0.06))
 
 
+# ★2026-09-12 用户标定：点击后光标停泊区（中性区域，随机点停放）
+_CLICK_REST_RECT = (328, 47, 729, 273)   # (x0,y0,x1,y1) 宽401 高226
+
+
+def _rest_cursor(hwnd):
+    """点击完成后把光标平滑移到停泊区随机位置停放（只移动不按键）。
+
+    下一段点击轨迹从停泊点出发（_last_mouse 已更新），行为更自然，
+    也避免光标停在 UI 元素上产生悬停效果干扰下一次检测。
+    """
+    rx0, ry0, rx1, ry1 = _CLICK_REST_RECT
+    rx = random.randint(rx0, rx1)
+    ry = random.randint(ry0, ry1)
+    _move_traj(hwnd, _last_mouse[0], _last_mouse[1], rx, ry)
+    _last_mouse[:] = [rx, ry]
+
+
 def post_click(hwnd, x, y, gateway=None):
     """后台点击（客户区坐标），PostMessage 不抢真实鼠标。
 
@@ -419,6 +436,7 @@ def post_click(hwnd, x, y, gateway=None):
     _last_mouse[:] = [x, y]
     _last_mouse_ts[0] = time.time()
     time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳再移开
+    _rest_cursor(hwnd)                       # ★移到停泊区随机位停放
 
 
 def post_right_click(hwnd, x, y, gateway=None):
@@ -438,6 +456,7 @@ def post_right_click(hwnd, x, y, gateway=None):
     _last_mouse[:] = [x, y]
     _last_mouse_ts[0] = time.time()
     time.sleep(random.uniform(0.12, 0.28))   # ★停驻：点击落稳再移开
+    _rest_cursor(hwnd)                       # ★移到停泊区随机位停放
 
 
 class _BMIHEADER(ctypes.Structure):
