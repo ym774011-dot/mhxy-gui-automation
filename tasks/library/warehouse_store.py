@@ -230,105 +230,42 @@ local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界
 __out = tostring(d and d.本类开关)''') != "true"
 
 
-def _call_warehouse_npc(hwnd, gw):
-    """CALL 仓库管理员 → 点"打开仓库"（对话最顶选项）→ 校验面板打开。
+def _call_warehouse_npc(hwnd, gw, rounds=3):
+    """CALL 物品仓库管理员开面板。
 
-    ★NPC 定位：先轮询 npc 表（传送落地后表可能还没加载），表里没有再用
-      实测固定屏幕位（落点[355,33] 时 NPC 恒在角色左前方 (298,305)）。
-    ★选项定位：用对话框 关闭按钮 的 Lua 包围盒做锚点推算第一行
-      （实测 关闭=(608,254) ↔ 打开仓库行 (110-175, 288-300)，dx≈-480 dy≈+40）；
-      失败再退回红字行检测（取最顶行）。
+    ★2026-09-12 用户定案：点击不准确 → 不成功就重新传送一次仓库洗牌再试
+      （该 NPC 无 标识，不能走 send-data CALL；点击受队友遮挡影响）。
+    点击位：落点[355,33] 时 NPC 恒在 (298,305)/(312,345) 两个实测位。
+    对话弹出后点 用户标定 打开仓库 (117,322)-(169,332)。
     """
-    def _npc_pos():
-        return _Z._lua_call(gw, r'''
-local t = tp and tp.地图 and tp.地图.npc
-local off = tp and tp.屏幕 and tp.屏幕.xy
-local ox, oy = (off and off.x) or 0, (off and off.y) or 0
-if type(t) ~= 'table' then __out = '' return end
-for _, v in pairs(t) do
-  if type(v) == 'table' and tostring(v.名称 or ''):find('仓') then
-    __out = string.format('%d,%d', (tonumber(v.x) or 0) + ox, (tonumber(v.y) or 0) + oy)
-    return
-  end
-end
-__out = ''
-''') or ""
-
-    def _click_npc():
-        pos = ""
-        t0 = time.time()
-        while time.time() - t0 < 12.0:
-            pos = _npc_pos()
-            if "," in pos:
+    for rnd in range(max(1, rounds)):
+        if rnd > 0:
+            _log("第 %d 轮未开面板 → 重新传送仓库洗牌" % rnd)
+            if not _go_warehouse(hwnd, gw):
+                continue
+        _close_dialogs(hwnd, gw)
+        try:
+            _Z._bag_ensure_close(gw, hwnd)
+        except Exception:
+            pass
+        # 点 NPC 两个实测位
+        for (cx, cy) in ((298, 305), (312, 345)):
+            _Z.post_click(hwnd, cx + random.randint(-3, 3),
+                          cy + random.randint(-3, 3), gateway=gw)
+            time.sleep(1.8)
+            if _panel(hwnd, gw)["open"]:
+                return True
+            if _dialog_open(gw):
                 break
-            time.sleep(1.0)
-        if "," in pos:
-            x, y = [int(float(s)) for s in pos.split(",")]
-        else:
-            x, y = _NPC_FALLBACK          # 落点固定位（实测）
-        _Z.post_click(hwnd, x + random.randint(-4, 4),
-                      y + random.randint(-4, 4), gateway=gw)
-        time.sleep(1.8)
-        return "," in pos
-
-    # ★2026-09-12 实测坑：背包面板开着会盖住 NPC（点击落在背包格上出物品提示），
-    #   点 NPC 前先无条件关背包。
-    try:
-        _Z._bag_ensure_close(gw, hwnd)
-    except Exception:
-        pass
-    _close_dialogs(hwnd, gw)
-    # 实测：落点与 NPC 相距约 5 格（99 世界像素）——单击只是"开始走过去"，
-    #   没到交互距离不弹对话。改为"走近→点→校验"循环（每轮按表重算屏幕位）。
-    for _ in range(5):
-        if _panel(hwnd, gw)["open"]:
-            return True
-        pos = ""
-        t0 = time.time()
-        while time.time() - t0 < 6.0:
-            pos = _npc_pos()
-            if "," in pos:
-                break
-            time.sleep(1.0)
-        if "," in pos:
-            x, y = [int(float(s)) for s in pos.split(",")]
-        else:
-            x, y = _NPC_FALLBACK
-        _Z.post_click(hwnd, x + random.randint(-4, 4),
-                      y + random.randint(-4, 4), gateway=gw)
-        time.sleep(1.6)
-        if _panel(hwnd, gw)["open"]:
-            return True
-        # 对话已弹 → 点"打开仓库"：
-        # ★2026-09-12 用户标定坐标 (117,322)-(169,332) 优先（实测最稳），
-        #   失败再用 关闭按钮锚点推算 / 红字行检测兜底。
-        _Z.post_click(hwnd, random.randint(120, 166), random.randint(323, 331),
-                      gateway=gw)
-        time.sleep(1.6)
-        if _panel(hwnd, gw)["open"]:
-            return True
-        anchor = _Z._lua_call(gw, r'''
-local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
-local b = d and d.关闭 and d.关闭.包围盒
-if not (d and d.本类开关 == true) or not b then __out = '' return end
-__out = string.format('%d,%d', b.x - 480, b.y + 40)''') or ""
-        if "," in anchor:
-            ax, ay = [int(float(s)) for s in anchor.split(",")]
-            _Z.post_click(hwnd, ax + random.randint(0, 50),
-                          ay + random.randint(-2, 8), gateway=gw)
-            time.sleep(1.6)
-            continue
-        rows = _Z._bonus_dialog_rows(hwnd)
-        if rows:
-            b = rows[0]
-            _Z.post_click(hwnd, random.randint(b["x0"] + 3,
-                                               max(b["x0"] + 4, b["x1"] - 3)),
-                          random.randint(b["y0"], b["y1"]), gateway=gw)
-            time.sleep(1.6)
-    st = _panel(hwnd, gw)
-    if not st["open"]:
-        _log("打开仓库面板失败（5 轮）")
-    return st["open"]
+        # 对话开了 → 点打开仓库（用户标定坐标）
+        if _dialog_open(gw):
+            _Z.post_click(hwnd, random.randint(120, 166),
+                          random.randint(323, 331), gateway=gw)
+            time.sleep(1.8)
+            if _panel(hwnd, gw)["open"]:
+                return True
+    _log("打开仓库面板失败（%d 轮，含重传）" % rounds)
+    return False
 
 
 def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_MIN,
