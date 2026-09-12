@@ -2377,6 +2377,7 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
             continue
         scx = random.randint(sx0 + 3, max(sx0 + 4, sx1 - 3))
         scy = random.randint(sy0 + 2, max(sy0 + 3, sy1 - 2))
+        # ★2026-09-13 用户确认交互无误：点装备拿起 → 移动 → 点出售（两段点击）
         post_click(hwnd, scx, scy, gateway=gateway)
         _sleep(random.uniform(0.35, 0.6))
         # 手未空 = 卖出未生效 → 放回并中止
