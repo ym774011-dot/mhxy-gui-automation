@@ -1329,8 +1329,10 @@ class PPApp(tk.Tk):
 
             def _store_one(it):
                 try:
-                    ok, n, msg = wh.zhuagui_store_all(it.pid)
-                    results[it.pid] = (ok, n, msg)
+                    # ★2026-09-17 用户定案：先卖后存（zhuagui_bag_full_handle 内部
+                    #   先 zhuagui_sell_junk 出售垃圾腾空间，再 zhuagui_store_all 存仓）。
+                    sell, ok, n, msg = wh.zhuagui_bag_full_handle(it.pid)
+                    results[it.pid] = (ok, n, "售出%d件; " % sell + msg)
                 except Exception as e:
                     results[it.pid] = (False, 0, "异常: %s" % e)
 

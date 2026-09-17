@@ -6,10 +6,16 @@
   2) 传送对话框 → 仓库（免费）(194,410) → 精确落地 长安 [355,33]
   3) tp.地图.npc 找 仓库管理员 → 点它 → 红字行首行（打开仓库）→ 面板开
   4) 逐件存：可叠物品（有 数量）需 >= _STORE_STACK_MIN(99) 才存；
+     ★2026-09-17 修复：上古锻造图策 只看等级不看种类——**仅等级≥145 才存**
+       （<145 或等级读不到均不存，低等级由出售链路卖）；
      保留：第一排（格子id<=5）+ 天眼/合成旗（名称子串）；
      同物品同分页：先在仓库里找同名物品所在分页，找不到用第一个未满分页
   5) 仓库满判定=功能判定：右键后行囊件数下降=成功；没降=满 → 换下一分页重试
   6) 退出 (646,408) 收面板
+
+满包「先卖后存」（★2026-09-17 用户定案，zhuagui_bag_full_handle）：
+  背包满时先遍历背包出售所有可售垃圾（含 内丹/百炼精铁 等白名单，保留内丹除外），
+  出售结束后再存其余可存物；出售优先=既变现又腾空间，避免存仓因空间不足中断/误存垃圾。
 
 Lua 依据（全部实测）：
   界面[14] 仓库面板：本类开关/当前仓库/仓库数量(容量恒26)/仓库按钮(26个带包围盒)
@@ -36,6 +42,11 @@ _STORE_NO_STACK_MIN = ("魔兽要诀",)    # ★2026-09-12 用户更正：魔兽
                                        # （每本占一格）→ 不限 99，有多少存多少
 _STORE_KEEP_NAMES = ("天眼", "合成旗", "飞行旗")   # 名称子串保护
 _STORE_KEEP_SLOTS = 5                  # 第一排（格子id<=5）保留
+
+# ★2026-09-17 用户定案：「满包先卖后存」的出售白名单/保留名单，取自 ZGUI 单一真源
+#   （与全地图刷怪共用，不漂移）。先卖再存——见 zhuagui_bag_full_handle。
+_BAG_FULL_EXTRA_SELL = _Z.SELL_EXTRA_JUNK      # 百炼精铁/制造指南书/钨金/内丹
+_BAG_FULL_EXTRA_EXCLUDE = _Z.SELL_EXTRA_KEEP   # 内丹保留：矫健/迅敏/玉砥柱…
 
 _PANEL_LUA = r'''
 local w = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[14]
@@ -128,7 +139,7 @@ __out = table.concat(out, ',')
 
 
 def _bag_items(hwnd, gw):
-    """行囊侧物品：[{'id','name','qty','x','y'}]（小动画=点击坐标）。"""
+    """行囊侧物品：[{'id','name','qty','x','y','lv'}]（小动画=点击坐标）。"""
     r = _Z._lua_call(gw, r'''
 local w = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[14]
 local d = w and w.物品数据
@@ -139,9 +150,11 @@ for _, v in pairs(d) do
     local sa = v.小动画
     local x = type(sa) == 'table' and tonumber(sa.x) or 0
     local y = type(sa) == 'table' and tonumber(sa.y) or 0
-    out[#out+1] = string.format('%s|%s|%s|%d|%d|%s',
+    local lv = tonumber(v.等级)
+    if not lv and type(v.数据) == 'table' then lv = tonumber(v.数据.等级) end
+    out[#out+1] = string.format('%s|%s|%s|%d|%d|%s|%s',
       tostring(v.格子id or 0), tostring(v.名称 or ''), tostring(v.数量 or ''),
-      x, y, tostring(v.类型 or ''))
+      x, y, tostring(v.类型 or ''), tostring(lv or ''))
   end
 end
 __out = table.concat(out, ' ;; ')
@@ -150,9 +163,15 @@ __out = table.concat(out, ' ;; ')
     for seg in r.split(" ;; "):
         p = seg.split("|")
         if len(p) >= 5:
-            res.append({"id": _Z._coord_int(p[0]), "name": p[1], "qty": p[2],
-                        "x": _Z._coord_int(p[3]), "y": _Z._coord_int(p[4]),
-                        "type": p[5]})
+            it = {"id": _Z._coord_int(p[0]), "name": p[1], "qty": p[2],
+                  "x": _Z._coord_int(p[3]), "y": _Z._coord_int(p[4]),
+                  "type": p[5]}
+            if len(p) >= 7:
+                try:
+                    it["lv"] = int(p[6])
+                except ValueError:
+                    it["lv"] = None
+            res.append(it)
     return res
 
 
@@ -311,6 +330,13 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
         if (qty.isdigit() and int(qty) < stack_min
                 and not any(k in nm for k in _STORE_NO_STACK_MIN)):
             continue                                            # 可叠未攒满 → 留
+        # ★2026-09-17 用户定案修复：上古锻造图策 只看等级不看种类，仅等级≥145 才存仓；
+        #   <145 或等级读不到均不存（保守保留——不误存低等级，低等级由出售链路卖）。
+        #   与 ZGUI._sellable_items 的「<145 出售 / ≥145 保留」两半规则互补。
+        if '上古锻造图策' in nm:
+            lv = it.get('lv')
+            if lv is None or lv < 145:
+                continue                                        # 不满足等级门槛 → 不存仓
         todo.append(it)
     if not todo:
         _log("p%d 无可存物品（保留规则过滤后）" % pid)
@@ -342,6 +368,54 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
             _log("p%d %s 26 个分页都满，放弃该件" % (pid, it["name"]))
     _exit_panel(hwnd, gw)
     return True, stored, "存入 %d 件" % stored
+
+
+def zhuagui_bag_full_handle(pid, gw=None, hwnd=None,
+                            extra_sell=_BAG_FULL_EXTRA_SELL,
+                            extra_exclude=_BAG_FULL_EXTRA_EXCLUDE,
+                            full_threshold=18, verbose=True):
+    """背包满统一处理：先卖（腾空间+变现）后存（其余可存物入仓）。
+
+    ★2026-09-17 用户定案：前往仓库存放道具前，必须先遍历背包、识别并出售所有
+      可售垃圾，出售结束后再存仓。顺序约束与防丢失：
+      1) 先卖：用 zhuagui_sell_junk 遍历背包、标记并出售所有可售物品（含 extra
+         白名单与 <145 上古锻造图策）。出售优先于存放——既变现又腾出背包空间，
+         避免「背包已满」状态下存仓交互异常、或把本该卖的垃圾存进仓库；
+      2) 再存：出售结束后再用 zhuagui_store_all 存放其余可存物品（按仓库保留规则），
+         此时背包已腾出空间、且垃圾已清，存仓不会因空间不足中断，也不会误存垃圾。
+      ★组队下无法用仓库——调用方需先解散队伍（pp_gui 存仓流程已负责解散+重组）。
+      ★满包触发：仅当背包占用≥full_threshold(默认18/20) 才执行，避免半满背包
+         频繁跑存仓；由调用方（pp_gui「某角色背包满」判定）决定何时调用亦可。
+
+    返回 (sell_count, store_ok, store_count, note)。
+    """
+    if gw is None:
+        gw = "file://pzxy_p%d" % pid
+    if hwnd is None:
+        from tools.squad_auto_team import find_hwnd_by_pid
+        hwnd = find_hwnd_by_pid(pid)
+    if not hwnd:
+        return 0, False, 0, "找不到窗口"
+
+    n_used = _Z._bag_used_count(gw)
+    if isinstance(n_used, int) and n_used >= 0 and n_used < full_threshold:
+        _log("p%d 背包占用 %d 格（<阈值%d）→ 不触发存仓" % (pid, n_used, full_threshold))
+        return 0, True, 0, "背包未满"
+
+    # —— 1) 先卖（腾空间 + 变现）——
+    _log("p%d 背包占用 %s 格 → 先出售可售垃圾" % (pid, n_used))
+    sell = 0
+    try:
+        sell = _Z.zhuagui_sell_junk(gw, hwnd=hwnd, verbose=verbose,
+                                    extra_sell=extra_sell,
+                                    extra_exclude=extra_exclude) or 0
+    except Exception as e:
+        _log("p%d 出售异常（不阻断后续存仓）: %s" % (pid, e))
+    _log("p%d 本次出售 %d 件" % (pid, sell))
+
+    # —— 2) 再存（其余可存物入仓）——
+    ok, n, msg = zhuagui_store_all(pid, hwnd=hwnd, verbose=verbose)
+    return sell, ok, n, msg
 
 
 def _exit_panel(hwnd, gw):
