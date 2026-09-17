@@ -2522,12 +2522,15 @@ end
         --   百炼精铁/制造指南书/钨金/内丹 等 打造/功能/召唤兽材料不在 武器/防具
         --   判据内，需显式白名单才出售（仅由传入 extra_sell 的脚本启用，不污染抓鬼）。
         --   extra_exclude：白名单命中后若含这些子串则不卖（如内丹中特定类型保留）。
+        --   ★修正：具体内丹子类型在 说明（desc，"所带内丹技能：xxx"），名称仅为泛化
+        --   类别名（召唤兽内丹/高级召唤兽内丹）。排除匹配须扫 name+desc，否则永不命中。
         if not sell then
           for _,k in ipairs(_EXTRA_SELL) do
             if name:find(k) then
               local blocked = false
+              local hay = name .. ' ' .. desc
               for _,e in ipairs(_EXTRA_EXCLUDE) do
-                if name:find(e) then blocked = true break end
+                if hay:find(e) then blocked = true break end
               end
               if not blocked then sell = true end
               break
