@@ -2495,6 +2495,9 @@ end
         local itype = tostring(it.类型 or '')
         local cat = tostring(it.分类 or '')
         local desc = deep_concat(it.说明, 0)
+        -- ★2026-09-17 用户截图+Lua 实读定位：具体内丹子类型在 it.技能
+        --   （高级召唤兽内丹/召唤兽内丹 的 名称 是泛化类别名，技能 才是"玉砥柱"/"矫健"/"神机步"等）。
+        local skill = tostring(it.技能 or (type(it.数据) == 'table' and it.数据.技能) or '')
         -- ★2026-09-06 队长满包20格0可售实锤修正：装备的 类型=具体部位
         --   （头盔/衣服/鞋子/腰带/项链/武器...），'武器'/'装备'一个都匹配不上；
         --   装备的 **分类** 字段才是 '武器'/'防具'。主判据改分类，类型作兼容。
@@ -2522,13 +2525,13 @@ end
         --   百炼精铁/制造指南书/钨金/内丹 等 打造/功能/召唤兽材料不在 武器/防具
         --   判据内，需显式白名单才出售（仅由传入 extra_sell 的脚本启用，不污染抓鬼）。
         --   extra_exclude：白名单命中后若含这些子串则不卖（如内丹中特定类型保留）。
-        --   ★修正：具体内丹子类型在 说明（desc，"所带内丹技能：xxx"），名称仅为泛化
-        --   类别名（召唤兽内丹/高级召唤兽内丹）。排除匹配须扫 name+desc，否则永不命中。
+        --   ★修正：具体内丹子类型在 it.技能（"玉砥柱"/"矫健"/"神机步"…），名称仅为泛化
+        --   类别名（召唤兽内丹/高级召唤兽内丹）。排除匹配须扫 name+desc+skill，否则永不命中。
         if not sell then
           for _,k in ipairs(_EXTRA_SELL) do
             if name:find(k) then
               local blocked = false
-              local hay = name .. ' ' .. desc
+              local hay = name .. ' ' .. desc .. ' ' .. skill
               for _,e in ipairs(_EXTRA_EXCLUDE) do
                 if hay:find(e) then blocked = true break end
               end
