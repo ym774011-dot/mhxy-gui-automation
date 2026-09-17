@@ -441,7 +441,7 @@ def _auto_guard(gw, hwnd):
 
     ★白名单打怪（zhuagui_bonus_battle）进战已内置点自动；但跑图途中遭遇的
       普通野怪战斗不在其内。守护线程轮询战斗态：一旦进战就后台拉起
-      _battle_auto_kick（幂等：会话闸 _AUTO_ONCE 每 pid 只点一次「自动」），
+      _battle_auto_kick（幂等：进战斗按 Lua 自动态补点，已开不点），
       覆盖所有战斗场景。
     """
     last_in = False

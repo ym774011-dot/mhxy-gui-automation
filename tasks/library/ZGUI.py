@@ -4223,11 +4223,11 @@ def _auto_button_visible(hwnd, thresh=_AUTO_BTN_THRESH):
 
 
 def _battle_auto_kick(hwnd, gateway, delay=5.0, tries=6, gap=3.0):
-    """进战 delay 秒后确保自动战斗已开启。
+    """进战 delay 秒后确保自动战斗已开启（纯 Lua 状态驱动）。
 
-    ★2026-09-08 深夜用户定案（大幅简化）：「自动」开启一次后跨战斗常开，
-    登录游戏后/重启游戏后的第一次进战斗点一次（会话闸见 _AUTO_ONCE），
-    其余时间一律不点——不再做状态判定/盲点防抖那一套。
+    ★2026-09-18 用户定案（纯状态驱动）：进战斗读 Lua「战斗类.窗口.自动栏.状态」，
+    已开('取消')不点、未开('自动')点一次；无会话闸，重登后服务端常开态自然
+    归零 → 下轮这里自然补点。
     """
     try:
         time.sleep(float(delay))
@@ -4276,65 +4276,40 @@ def zhuagui_auto_battle_state(gateway=DEFAULT_GATEWAY, **kw):
     return f == "1", (s if s != "-" else None)
 
 
-# ★2026-09-08 深夜用户定案：「自动」开启一次后跨战斗常开，且常开态跟着
-# **游戏登录会话**走——登录游戏后与重启游戏后各点一次（=每次进入游戏的
-# 第一次进战斗），其余一律不点。闸 key = 游戏 PID + 窗口标题（标题尾部含
-# 登录时间戳，如 "- 2026年08月25日 22:14:42"，重登/重启即刷新）。
-# 脚本重启不清零（同会话 key 不变）。
-_AUTO_ONCE = {}            # pid -> True：本会话已点过（★每窗口独立，不混用）
+# ★2026-09-18 用户定案：自动战斗改「纯 Lua 状态判定」，移除每进程只点一次的
+# 「会话闸」。_AUTO_LOCK 仍保留——职责改为把「读状态 → 判定 → 点击」串行化，
+# 防多线程（_auto_guard 守护线程 / 各调用点）同时读到未开态而重复点。
 _AUTO_LOCK = _threading.Lock()
 
 
 def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **kw):
-    """★2026-09-12 用户定案（极简写死）：每个游戏窗口独立——
+    """★2026-09-18 用户定案（纯 Lua 状态驱动；移除每进程只点一次的「会话闸」）：
 
-    本会话（=本进程 pid）第一次检测到进战斗就点一次「自动」(677,328)-(739,358)，
-    以后永不点。不读服务器状态、不回读校验；游戏重启=新 pid=闸自然重置；
-    脚本重启不清零（pid 不变）。返回 'clicked'/'auto_on'/'idle'。
+    进战斗后读 Lua「战斗类.窗口.自动栏.状态」——已开('取消')不点；未开('自动')点一次。
+    无会话闸：重登后服务端常开态自然归零 → 这里自然补点；也不再有"每进程只点一次"
+    的跨会话残留。返回 'clicked'/'auto_on'/'idle'。
     """
     if hwnd is None:
         hwnd = get_hwnd()
     if not hwnd:
         return "idle"
-    import re as _re
-    m = _re.search(r"pzxy_p(\d+)", str(gateway or ""))
-    pid = int(m.group(1)) if m else 0
-    if not pid:
-        return "idle"
     with _AUTO_LOCK:
-        already = _AUTO_ONCE.get(pid)
-        inb, _st = zhuagui_auto_battle_state(gateway)   # 仅用其战斗判定
+        inb, st = zhuagui_auto_battle_state(gateway)
         if not inb:
             return "idle"
-        # ★2026-09-13 实测修正（用户反馈"没有改位置"）：游戏每场战斗都会把
-        #   面板重置回默认位——战斗外写入会被覆盖。停靠改为【每场战斗、
-        #   战斗中写入一次】（实时生效，面板随即移到左下角出屏一半）。
+        # 每场战斗把「自动栏」停靠左下角（原逻辑一字不改）
         _lua_call(gateway, r'''
 local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.自动栏
 if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
 ''')
-        if already:
-            # ★2026-09-18 修复「重登后自动不开」：同 pid 重登会把服务端常开态归零，
-            #   但 _AUTO_ONCE 还记着"本会话已点过"。用已在读的 Lua 自动态纠偏：
-            #   显式读到"自动"（未开）→ 清闸补点一次；读到"取消"（已开）或读不到
-            #   → 一律不点（防过点，避免把开关点关）。
-            if _st != "自动":
-                return "auto_on"
-            _AUTO_ONCE.pop(pid, None)
-            (log.info if log else logger.info)(
-                "自动态=未开（疑似重登）→ 清闸补点一次「自动」")
-            # 落到下面既有点击逻辑（设 _AUTO_ONCE[pid]=True + 点 _AUTO_BTN_RECT）
-        _AUTO_ONCE[pid] = True
+        if st == "取消":          # 已开启 → 不点
+            return "auto_on"
         x0, y0, x1, y1 = _AUTO_BTN_RECT
         post_click(hwnd, random.randint(x0 + 8, x1 - 8),
                    random.randint(y0 + 6, y1 - 6), gateway=gateway)
-        # ★2026-09-13 撤销"停靠左下角"Lua 直写：用户实测首战掉线，注入通道
-        #   改游戏实时对象与"不要动内存会掉线"同类风险（用户铁律）。
-        #   窗口位置改为人工拖一次（游戏按角色记忆布局）；若实测不持久，
-        #   再用 PostMessage 拖拽（纯输入模拟）实现，绝不再写对象。
         (log.info if log else logger.info)(
-            "首次进战斗 → 固定点一次「自动」(%d,%d)-(%d,%d)（本会话不再点）"
-            % (x0, y0, x1, y1))
+            "进战斗：自动态=%s（未开）→ 点一次「自动」(%d,%d)-(%d,%d)"
+            % (st, x0, y0, x1, y1))
         return "clicked"
 
 
