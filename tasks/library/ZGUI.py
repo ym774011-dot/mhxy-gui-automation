@@ -1695,8 +1695,15 @@ def zhuagui_ensure_task_ready(gateway=DEFAULT_GATEWAY, member_mode=False, **kw):
             _zhongkui_close_dialog(gateway)
             time.sleep(random.uniform(0.5, 0.9))
             if attempt >= 1:
-                logger.warning("确保任务：长安城接任务失败（第%d次）→ 按用户规则重用飞行旗再飞"
+                # ★2026-09-13 用户定案：队员身上挂着抓鬼任务时队长接不了任务，
+                #   点钟馗弹窗'取消抓鬼任务'（第2行）清掉队伍残留任务即可重接。
+                #   此处失败重试先尝试取消一次（对话框未开由 cancel 自行 CALL 钟馗）。
+                logger.warning("确保任务：长安城接任务失败（第%d次）→ 先点'取消抓鬼任务'清理残留再重试"
                                % (attempt + 1))
+                _zhongkui_close_dialog(gateway)
+                zhuagui_cancel_task(gateway)
+                _zhongkui_close_dialog(gateway)
+                time.sleep(random.uniform(0.5, 0.9))
                 if not zhuagui_go_back_changan(gateway, force=True):
                     logger.warning("确保任务：重飞失败")
                     return False
@@ -1836,7 +1843,25 @@ _BONUS_MAX_KILLS = 5                        # ★已废弃（2026-09-12）：白
 #   识别链路：CALL 弹对话 → tp.主界面.界面数据[8].超级文本.已加文本
 #   → match '难度：(%d+)星'（2026-09-08 实测地猛星返回 5）。
 _DIZHA_MAX_STAR = 2
-_BONUS_SKIP_GID = {}                        # 标识 -> ts：超星/读不到难度被取消的怪，300s 内不再 CALL
+_BONUS_SKIP_GID = {}
+# ★2026-09-15 用户定案：被其他玩家占用的怪（CALL 弹“我正在战斗中，请勿扰”）
+#   一律直接放弃：不再 CALL 它，也不再计入本图白名单候选。
+#   ★2026-09-15 实测：同一张图 6 只知了王的「标识」是 17/18/20/21/22/25
+#   （逐只唯一、重扫稳定），但标识是服务端模板编号，怪被打死重刷
+#   后会复用同一批（p28592 与 p27492 标识集合完全一致，实锤）。
+#   ★2026-09-15 用户定案（最终）：名单**按地图持有**——
+#     · 离开这张地图时清空名单；
+#     · 下次再转回来重新 LUA 一次（扫到仍被占才再次加入）。
+#     效果：每张图每轮只扫一次，同时避开了标识被重刷复用导致的永久失明。
+_BUSY_MAP = ""                            # 名单当前所属地图（编号|名称）
+_BUSY_GID = {}                             # 本图被占用的「标识」 -> ts
+_BUSY_GID_TTL = 180.0                      # 同图内单项兜底寿命
+# ★2026-09-15 用户定案：罡煞超星 skip 名单同样**按地图持有**——
+#   离开这张图就清空，下次转回来重新读一次难度
+#   （读到仍超星才再次加入）。避开「标识被重刷复用」
+#   导致同款超星怪永久不再被判难度。
+_SKIP_MAP = ""                            # skip 名单当前所属地图（编号|名称）
+_SKIP_GID_TTL = 180.0                      # 同图内单项兜底寿命
 # ★2026-09-06 用户实测标定的"进入战斗"选项矩形（客户区坐标 x0,y0,x1,y1）：
 #   星宿对话（名上带"星宿"称谓）→ (118,308)-(175,318)；知了王对话 → (121,322)-(219,333)。
 #   远古无标定范围，退回红字首行检测。CALL 出对话后按矩形随机取点直点，
@@ -1916,11 +1941,18 @@ def _bonus_dialog_rows(hwnd):
 
 def zhuagui_bonus_battle(gateway=DEFAULT_GATEWAY, verbose=False,
                          max_battle_wait=180.0, hwnd=None, **kw):
-    """扫本图稀有怪并顺手打——★2026-09-12 用户定案：白名单全量轮询。
+    """扫本图稀有怪并顺手打——★2026-09-14 用户定案：本图白名单"全量轮询"。
 
-    地图里每一只白名单怪都 CALL 一次出难度：符合要求（≤上限星）的逐只打完
-    再继续下一只；不符合（超星/读不到）的取消并进 300s skip 名单后跳过。
-    整轮扫完所有候选才收工。返回本轮打掉的怪名列表 []。
+    地图里每一只白名单怪（知了王/星宿/远古/恶作剧大王/地煞星/天罡星）都
+    CALL 一次出难度：符合要求（≤上限星）的逐只打完再继续下一只；不符合
+    （超星/读不到）的取消并进 300s skip 名单后跳过。一个 PASS 处理完若还
+    有新候选（轮询途中新刷出/移动），重扫补 CALL，直到本轮无新候选才收工。
+
+    ★2026-09-14 修复（用户实测：一张图只打一只就收工）：
+      旧实现在候选循环内遇到战斗态就 `return kills` 整体终止——打完第一只后
+      战斗/加载态闪烁为 true，本图其余白名单怪全被漏掉。现改为：循环中遇战斗
+      先等它打完（max_battle_wait 超时才收尾），处理完继续 CALL 下一只；
+      并用 _called 记账，保证每只怪每次调用只 CALL 一次、不重复对同一只重试。
 
     复用抓鬼 CALL 通道 `客户端:发送数据(0,3,6,标识,1)` 与 _call_guard 防重冷却。
     ★2026-09-06 修复（用户实测：CALL 出了对话框但没点击进战斗）：知了王/星宿/
@@ -1959,34 +1991,82 @@ for _, v in pairs(t) do
 end
 __out = table.concat(out, ' ;; ')
 """
-    r = _lua_call(gateway, code) or ""
-    # ★2026-09-08 改多候选输出：超星被取消后可顺延试下一只（旧版单候选，
-    #   第一只超星就浪费整轮顺手打机会）
+
+    def _current_map_name(_gw):
+        """读当前地图标识（"地图编号|地图名称"），用于判定
+        “是否已离开本图”。失败返回 '' → 视为“地图未知”，
+        不清空名单（宁漏不误扫，靠 TTL 兜底）。
+        ★2026-09-15 实测：tp 常被服务端重载清掉（tp_exists=no），
+        必须走 引擎.场景 回退；场景对象字段为 地图编号/地图名称。
+        """
+        _r = _lua_call(_gw, r"""
+local tp2 = tp or ((_G.引擎) and (_G.引擎.场景))
+local m = tp2 and tp2.地图
+if type(m) ~= 'table' then __out = '' return end
+__out = tostring(m.地图编号 or '') .. '|' .. tostring(m.地图名称 or '')
+""") or ""
+        return _r.strip()
+
+    def _scan():
+        """扫本图白名单怪 → [(名称, 标识, 类型), ...]（可反复重扫）。
+
+        ★2026-09-14：一张图上的白名单怪要"全部 CALL 一次"，因此把扫描抽成
+          闭包，多轮轮询期间可重扫（覆盖新刷出/移动后的怪）。
+        """
+        _r = _lua_call(gateway, code) or ""
+        _c = []
+        for seg in _r.split(" ;; "):
+            seg = seg.strip()
+            if "|" not in seg:
+                continue
+            parts = seg.split("|")
+            if len(parts) < 2 or not parts[1].strip().isdigit():
+                continue
+            bname, gid = parts[0], parts[1].strip()
+            # 星宿/恶作剧大王/地煞星按称谓判定；旧格式无第三段按名称兜底
+            bkind = parts[2] if len(parts) >= 3 else (
+                "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else
+                ("恶作剧大王" if "恶作剧大王" in bname else
+                ("天罡星" if "天罡星" in bname else
+                ("地煞星" if "地煞星" in bname else "远古")))))
+            # ★2026-09-15 用户定案：被占用的怪直接放弃 → 扫描即排除，
+            #   不计入白名单候选（等价"下轮 LUA 直接放弃它"）。
+            if gid in _BUSY_GID:
+                continue
+            _c.append((bname, gid, bkind))
+        return _c
+
     # ★2026-09-12 用户定案：战斗中不 CALL 任何目标——顺手打整体早退
+    #   （本次调用入口即战斗中：交给上层下一轮再来，不当场 CALL）
     if zhuagui_in_battle(gateway):
         return []
-    cands = []
-    for seg in r.split(" ;; "):
-        seg = seg.strip()
-        if "|" not in seg:
-            continue
-        parts = seg.split("|")
-        if len(parts) < 2 or not parts[1].strip().isdigit():
-            continue
-        bname, gid = parts[0], parts[1].strip()
-        # 星宿/恶作剧大王/地煞星按称谓判定；旧格式无第三段按名称兜底
-        bkind = parts[2] if len(parts) >= 3 else (
-            "知了王" if "知了王" in bname else ("星宿" if "星宿" in bname else
-            ("恶作剧大王" if "恶作剧大王" in bname else
-            ("天罡星" if "天罡星" in bname else
-            ("地煞星" if "地煞星" in bname else "远古")))))
-        cands.append((bname, gid, bkind))
-    if not cands:
-        return []
-    kills = []          # ★2026-09-12 全量轮询：本轮每一只合规怪都打完才收工
+    kills = []          # 本轮每一只合规怪打完/超时都记账，全部处理完才收工
     _now = time.time()
-    # skip 名单过期清理（300s：够一轮刷新/换图）
-    for g in [g for g, ts in _BONUS_SKIP_GID.items() if _now - ts > 300.0]:
+    # ★2026-09-15 用户定案：名单随地图走——离开这张地图就清空，
+    #   下次再转回来重新 LUA 一次（扫到仍被占才再加入）。
+    #   同图内则持有：同一轮重扫不会反复去 CALL 同一只被占的怪。
+    global _BUSY_MAP, _SKIP_MAP
+    _cur_map = _current_map_name(gateway)
+    if _cur_map != _BUSY_MAP:
+        logger.info("白名单轮询：地图切换 %s -> %s → 清空占用名单（%d 项）"
+                    % (_BUSY_MAP or "(未知)", _cur_map or "(未知)", len(_BUSY_GID)))
+        _BUSY_GID.clear()
+        _BUSY_MAP = _cur_map
+    # 同图内超时兜底（防地图名读不到时命单一直累积）
+    for _k in [_k for _k, ts in _BUSY_GID.items() if _now - ts > _BUSY_GID_TTL]:
+        _BUSY_GID.pop(_k, None)
+    # ★2026-09-15 用户定案：skip 名单同样随地图走——离开本图就清空，
+    #   下次转回来重新读一次难度（读到仍超星才再加入）。
+    #   与占用名单共用同一个地图判据（上方 _cur_map）。
+    if _cur_map != _SKIP_MAP:
+        if _BONUS_SKIP_GID:
+            logger.info("白名单轮询：地图切换 %s -> %s → 清空超星 skip 名单（%d 项）"
+                        % (_SKIP_MAP or "(未知)", _cur_map or "(未知)",
+                           len(_BONUS_SKIP_GID)))
+        _BONUS_SKIP_GID.clear()
+        _SKIP_MAP = _cur_map
+    # 同图内超时兜底（防地图名读不到时名单一直累积）
+    for g in [g for g, ts in _BONUS_SKIP_GID.items() if _now - ts > _SKIP_GID_TTL]:
         _BONUS_SKIP_GID.pop(g, None)
     # ★2026-09-07 进战闩锁：战斗中/战斗刚结束的滞后窗口内，绝不再发 CALL
     #   （含稀有怪——打鬼战斗期间顺手 CALL 稀有怪=同款"战斗中弹框"）
@@ -2045,19 +2125,58 @@ __out = tostring(n or '-')
         _sleep(random.uniform(0.8, 1.0))
         return not _zhongkui_detect_rows(gateway)
 
-    for bname, gid, bkind in cands:
-        if gid in _BONUS_SKIP_GID:
-            continue
-        # 防重复 CALL：复用抓鬼目标的 8s 冷却
-        if gid == _call_guard["gid"] and _now - _call_guard["ts"] < 8.0:
-            continue
-        # ★2026-09-12 用户定案：战斗中不 CALL（扫描途中可能进战）→ 整体终止
-        if zhuagui_in_battle(gateway):
-            logger.info("战斗中 → 终止顺手打（不 CALL 任何目标）")
-            return kills
-        if verbose:
-            logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
+    def _dialog_busy_text():
+        """★2026-09-15 读 CALL 弹窗文本是否「我正在战斗中，请勿扰。」
+        （怪被其他玩家队伍占用，无进战选项）。True=被占用。"""
+        _r = _lua_call(gateway, r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local d = j and j[8]
+local s = d and d.超级文本 and d.超级文本.已加文本
+__out = (type(s) == 'string' and s:find('请勿扰', 1, true) ~= nil) and '1' or '0'
+""") or "0"
+        return _r.strip() == "1"
+
+    def _process_one(bname, gid, bkind):
+        """CALL 单只白名单怪 → 判定难度 → 点进战斗 → 打完。
+
+        返回 'kill'（打完）/ 'skip'（超星取消或未进战跳过）/ 'cancelled' /
+        'busy'（被占用，已入本图黑名单）/ 'gone'（★2026-09-16 rrvl 预防：
+        CALL 前核验发现单位已从地图消失，直接跳过且不重试）。
+        只负责这一只，不终止整轮；调用方据此继续下一只。
+        """
+        _now = time.time()
         _sleep(random.uniform(0.15, 0.4))
+        # ★2026-09-14 用户硬要求：战斗中绝不 CALL。
+        #   这里做「发 CALL 前一刹那」的双重确认（下沉守卫，堵住调用方
+        #   判完战斗到此处之间的 ~0.4s 竞态窗口）：
+        #     ① 实时战斗信号 zhuagui_in_battle；
+        #     ② _BATTLE_LATCH 闩锁（刚打完/战斗残留的保护期）。
+        #   任一为真 → 不发 CALL，返回 'skip'（不写 300s skip，留给上层重扫再挑）。
+        if (zhuagui_in_battle(gateway)
+                or time.time() - _BATTLE_LATCH["ts"] < _BATTLE_LATCH_S):
+            logger.info("战斗中 → 不对 %s(%s) 发 CALL，跳过本轮（稍后重扫再试）"
+                        % (bname, gid))
+            return "skip"
+        # ★2026-09-16 用户定案（rrvl 规避）：CALL 前最后一刻实时核验该单位
+        #   仍在 地图.地图单位 表里。扫描快照与 CALL 之间可能隔着一整场战斗
+        #   （等前一场打完，最长 max_battle_wait），期间怪被别的玩家打死/
+        #   消失，按旧标识 CALL 就会弹「该单位当前不存在，错误代号rrvl」。
+        #   地图单位表读不到 → 不判定（防 tp 重载误杀，保持原行为）；
+        #   确认已不在 → 返回 "gone"（保留记账，本次调用内不再重试）。
+        _st = _lua_call(gateway, r"""
+__out = ''
+local t = tp and tp.地图 and tp.地图.地图单位
+if type(t) ~= 'table' then return end
+local __gid = '__GID__'
+for _, v in pairs(t) do
+  if type(v) == 'table' and tostring(v.标识 or '') == __gid then __out = '1' return end
+end
+__out = '0'
+""".replace("__GID__", gid))
+        if (_st or "").strip() == "0":
+            logger.info("单位核验：%s（标识%s）已不在地图上 → 不发 CALL（rrvl 预防）"
+                        % (bname, gid))
+            return "gone"
         _lua_call(gateway, "客户端:发送数据(0,3,6," + gid + ",1)")
         _call_guard["gid"] = gid
         _call_guard["ts"] = _now
@@ -2076,9 +2195,11 @@ __out = tostring(n or '-')
                 if not gone:
                     logger.warning("%s对话未收掉（右键+ESC 均无效），截图留证" % bkind)
                     _bonus_shot("dizha_dismiss_fail")
+                global _SKIP_MAP
+                _SKIP_MAP = _current_map_name(gateway) or _SKIP_MAP
                 _BONUS_SKIP_GID[gid] = time.time()
                 _mouse_clear(hwnd, gateway)      # ★取消后光标移泊，防遮挡下个对话
-                continue
+                return "skip"
             logger.info("%s %s 难度%d星≤%d → 开打" % (bkind, bname, star, _DIZHA_MAX_STAR))
         # ★CALL 后等对话弹出 → 点"进入战斗"选项 → 等进战
         # ★2026-09-06 用户实测标定：星宿/知了王的进战斗选项位置固定，直接按
@@ -2086,12 +2207,31 @@ __out = tostring(n or '-')
         #   是此前"CALL 出对话却没进战被跳过"的根因之一）。远古/地煞星无标定
         #   范围，退回红字首行检测。另有一种"我正在战斗中，请勿扰。"对话（怪被
         #   别的队伍占用，无可点选项）——点矩形无效果，等进战超时跳过即可。
+        # ★2026-09-15 用户截图定案：怪被占用时 CALL 弹「我正在战斗中，
+        #   请勿扰。」（无可点选项）——原逻辑会盲点矩形+等满进战超时，且
+        #   因"skip 未写名单"被调用方撤销记账 → 无限重试同一只。这里前置
+        #   识别：收掉对话 → 写 300s skip → 返回 "busy"（不撤销记账）。
+        if _dialog_busy_text():
+            logger.info("稀有怪 %s（%s）被其他玩家占用（请勿扰）→ 直接放弃，"
+                        "写入本图黑名单（后续扫描不再计入白名单）" % (bname, bkind))
+            _dismiss_bonus_dialog()
+            _BUSY_GID[gid] = time.time()
+            _mouse_clear(hwnd, gateway)
+            return "busy"
         rect = _BONUS_CLICK_RECT.get(bkind)
         clicked = False
         t_dlg = time.time()
         while time.time() - t_dlg < 5.0:
             if zhuagui_in_battle(gateway):
                 break
+            # 对话弹出后文本晚到也接得住：请勿扰 → 立即跳过（不再盲点）
+            if _dialog_busy_text():
+                logger.info("稀有怪 %s 对话=请勿扰（被占用）→ 直接放弃，"
+                            "写入本图黑名单" % bname)
+                _dismiss_bonus_dialog()
+                _BUSY_GID[gid] = time.time()
+                _mouse_clear(hwnd, gateway)
+                return "busy"
             if rect:
                 # 有标定矩形：等对话渲染一小会再点，截图留证
                 if time.time() - t_dlg < random.uniform(0.7, 1.0):
@@ -2186,13 +2326,20 @@ __out = tostring(n or '-')
                                 % (b["x0"], b["x1"], b["y0"], b["y1"]))
             _sleep(random.uniform(0.5, 0.8))
         if not zhuagui_in_battle(gateway):
+            if _dialog_busy_text():
+                logger.info("稀有怪 %s 等进战超时且对话=请勿扰（被占用）→ "
+                            "直接放弃，写入本图黑名单" % bname)
+                _dismiss_bonus_dialog()
+                _BUSY_GID[gid] = time.time()
+                _mouse_clear(hwnd, gateway)
+                return "busy"
             if clicked:
                 logger.info("稀有怪 %s 已点进战斗选项仍未进战（选项可能点错/距离远/被占用），跳过" % bname)
             else:
                 _shot = _bonus_shot("skip")
                 logger.info("稀有怪 %s 无可点选项（大概率正被其他队伍占用'请勿扰'），跳过%s"
                             % (bname, ("，截图:%s" % _shot) if _shot else ""))
-            continue          # ★2026-09-12 跳过继续 CALL 下一只（白名单全量轮询）
+            return "skip"
         # 战斗挂机等结束（★进战即后台触发「自动」按钮判定，5s 后点击开启）
         _threading.Thread(target=_battle_auto_kick, args=(hwnd, gateway),
                           daemon=True).start()
@@ -2204,10 +2351,74 @@ __out = tostring(n or '-')
                     % (bname, "结束" if ok_end else "超时", time.time() - t1))
         if ok_end:
             kills.append(bname)
-        else:
-            # 战斗超时（含幻影战斗：加载结束=false 卡死）→ 尝试幻影自愈清场
-            battle_phantom_escape(gateway)
-        continue              # ★2026-09-12 打完/超时都继续 CALL 下一只
+            return "kill"
+        # 战斗超时（含幻影战斗：加载结束=false 卡死）→ 尝试幻影自愈清场
+        battle_phantom_escape(gateway)
+        return "kill"
+
+    # ---- 本图白名单：全量轮询（打完一只就重扫，扫不到白名单才换图） ----
+    # ★2026-09-14 用户定案：地图上每一只白名单怪都要 CALL 一次逐个判定，
+    #   符合的逐只打完，不符合的取消跳过；并且**打完一只就重新 LUA 扫描**，
+    #   只要还能扫到白名单就继续 CALL/继续打，直到本图扫不出白名单才收工。
+    _called = set()          # 本次调用内已 CALL 过的「标识」——每只只 CALL 一次
+    _IDLE_LIMIT = 2          # 连续「重扫无新候选」轮数上限（★09-15 6→2：收尾空转 ~6s→~2s）
+    _MAX_TOTAL_SEC = 600.0   # 本图总时长兜底上限（避免永不换图）
+    _t0 = time.time()
+    _idle = 0
+    _round = 0
+    while True:
+        _cands = _scan()                       # ★每轮都重新 LUA 扫描本图
+        if not _cands:
+            logger.info("白名单轮询：本图已扫不到白名单 → 收工换地图")
+            break
+        _fresh = [(n, g, k) for (n, g, k) in _cands
+                  if g not in _called and g not in _BONUS_SKIP_GID]
+        if not _fresh:
+            # 扫到的都处理过了 → 累计空转；超限才收工（给新刷出的怪一点时间）
+            _idle += 1
+            if _idle >= _IDLE_LIMIT:
+                logger.info("白名单轮询：连续 %d 轮无新候选 → 本图收工" % _idle)
+                break
+            _sleep(random.uniform(0.8, 1.2))
+            continue
+        _idle = 0
+        _round += 1
+        logger.info("白名单轮询 第%d轮：本图白名单 %d 只，本次新候选 %d 只"
+                    % (_round, len(_cands), len(_fresh)))
+        for bname, gid, bkind in _fresh:
+            if gid in _called or gid in _BONUS_SKIP_GID:
+                continue
+            if time.time() - _t0 > _MAX_TOTAL_SEC:
+                logger.info("白名单轮询：本图累计 %.0fs 超上限 → 收工"
+                            % (time.time() - _t0))
+                return kills
+            # ★战斗中不 CALL：先等当前战斗结束（不再整体早退，避免漏打其余白名单）
+            if zhuagui_in_battle(gateway):
+                _tb = time.time()
+                logger.info("白名单轮询：当前战斗未结束，等它打完再继续 CALL 其余白名单")
+                while (zhuagui_in_battle(gateway)
+                       and time.time() - _tb < float(max_battle_wait)):
+                    _sleep(random.uniform(0.8, 1.2))
+                if zhuagui_in_battle(gateway):
+                    logger.info("白名单轮询：战斗超时未结束（%.0fs）→ 收尾"
+                                % (time.time() - _tb))
+                    return kills
+            _called.add(gid)
+            if verbose:
+                logger.info("发现稀有怪 %s（%s），顺手 CALL 开打..." % (bname, bkind))
+            _ret = _process_one(bname, gid, bkind)
+            # ★2026-09-14：若因「战斗中」被 _process_one 拒发 CALL（返回 skip
+            #   且未写 300s skip 名单），撤销本次记账，留给后续重扫再处理。
+            # ★2026-09-15："busy"=怪被占用（请勿扰）→ 已写入本图黑名单，
+            #   _scan() 会直接过滤掉它，因此保留记账即可（双保险）。
+            if _ret == "skip" and gid not in _BONUS_SKIP_GID:
+                _called.discard(gid)
+            # ★打完一只立即重扫本图：新出现的白名单并入本批继续处理
+            _new = _scan()
+            for _c in _new:
+                if _c[1] not in _called and _c[1] not in _BONUS_SKIP_GID:
+                    _fresh.append(_c)
+        # 本批处理完 → 回到 while，重扫确认是否还有白名单
     return kills
 
 
@@ -2253,8 +2464,12 @@ __out = tostring(n)
         return -1
 
 
-def _sellable_items(gateway):
-    """列出可出售物品：[(格子id, x, y, 名称), ...]（最多 _SELL_MAX_ITEMS 件）。"""
+def _sellable_items(gateway, extra_sell=()):
+    """列出可出售物品：[(格子id, x, y, 名称), ...]（最多 _SELL_MAX_ITEMS 件）。
+
+    extra_sell: 额外白名单物品名元组（子串匹配）。仅由显式传入的脚本启用，
+      不污染共享出售链路（如抓鬼）。例：全地图刷怪追加 百炼精铁/制造指南书/钨金。
+    """
     code = r"""
 local j = tp.主界面 and tp.主界面.界面数据
 local pd = type(j) == 'table' and type(j[3]) == 'table' and j[3].物品数据
@@ -2269,6 +2484,7 @@ local function deep_concat(v, depth)
   return table.concat(acc, '')
 end
     local parts = {}
+    local _EXTRA_SELL = __EXTRA_SELL__
     for i = 1, 100 do
       local it = pd[i]
       if type(it) == 'table' then
@@ -2284,6 +2500,29 @@ end
         -- ★2026-09-12 用户定案：移除 魔兽要诀/高级魔兽要诀 的出售判据——
         --   不再卖，改由存仓流程归档（旧：子串"魔兽要诀"同时命中两者都卖）。
         if not sell then sell = (desc:find('装备角色') ~= nil) end
+        -- ★2026-09-14 上古锻造图策等级分流（用户定案）：等级在读物品字段
+        --   it.等级（实测 115 在该字段，数据.等级 同值；说明里没有等级数字）。
+        --   <145 出售；≥145 或读不到 → 保留（存仓归档，保守防误卖高等级）。
+        if name:find('上古锻造图策') then
+          local lv = tonumber(it.等级)
+          if not lv then
+            local dd = it.数据
+            lv = tonumber(type(dd) == 'table' and dd.等级)
+          end
+          if lv and lv < 145 then
+            sell = true
+          else
+            sell = false
+          end
+        end
+        -- ★2026-09-17 用户定案：全地图刷怪脚本白名单追加（extra_sell 传入才生效）
+        --   百炼精铁/制造指南书/钨金 等 打造/功能 材料不在 武器/防具 判据内，
+        --   需显式白名单才出售（仅由传入 extra_sell 的脚本启用，不污染抓鬼链路）。
+        if not sell then
+          for _,k in ipairs(_EXTRA_SELL) do
+            if name:find(k) then sell = true break end
+          end
+        end
     if sell then
       local sa = it.小动画
       local x = type(sa) == 'table' and tonumber(sa.x) or 0
@@ -2299,6 +2538,8 @@ end
 end
 __out = table.concat(parts, ' ;; ')
 """
+    names_lua = "{" + ",".join("'%s'" % n for n in extra_sell) + "}"
+    code = code.replace("__EXTRA_SELL__", names_lua)
     r = _lua_call(gateway, code) or ""
     items = []
     for part in r.split(" ;; "):
@@ -2337,7 +2578,91 @@ def _bag_cell_click_pos(x, y):
             int(y) + 25 + random.randint(-3, 3))
 
 
-def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
+def _panel_pin_defaults(gateway):
+    """把可拖拽面板钉回默认位（★2026-09-13 用户定案：跑久点不准主因=面板
+    被拖拽后，出售/购买/仓库分页等固定标定按钮整体偏移）。
+
+    面板 x/y 是类实例字段，可直接 Lua 赋值；赋值后下一帧按新位置渲染，
+    所有固定坐标点击恢复有效。背包[3]→(0,0)、商城[45]→(100,80)、
+    仓库[14]→(200,395)（各自初始化默认，2026-09-13 源码核实）。
+    """
+    _lua_call(gateway, r"""
+local tp = tp or ((_G.引擎) and (_G.引擎.场景)) or nil
+local j = tp and tp.主界面 and tp.主界面.界面数据
+local function pin(idx, x, y)
+  local v = type(j) == 'table' and j[idx]
+  if type(v) == 'table' then v.x = x; v.y = y end
+end
+pin(3, 0, 0)
+pin(45, 100, 80)
+pin(14, 200, 395)
+__out = 'ok'
+""", timeout=6.0)
+
+
+# ★2026-09-15 用户定案（修正）：不是"过一阵钉一次"，而是
+#   —— 只要背包面板位置漂了，就立刻钉回默认位；没漂则一次读就结束。
+#
+# ★2026-09-15 22:55 真机 40 轮 x5 开采样（开包/关包两态）订正语义：
+#   x/y 不是逐帧渲染抖动（同窗口 40 轮读数**完全恒定**），而是
+#   每个角色自己的**静态基线偏移**：p6512=0,0  p7760=0,0  p12928=0,0
+#   p17712=-2,1  p20076=-1,2。同一台机上不同号的差异来自各自面板缓存的
+#   默认位不同 —— 属于"本来就长这样"，不是漂移。
+#   实推实验（pid17712）：归零后推 (5,7)->读到(5,7)；推 (2,2)->读到(2,2)；
+#   推 (3,1)->读到(3,1)。可见真实拖拽是**叠加**在基线之上，且 1px 即如实上报。
+#   → 容差必须 > 最大静态基线(实测 2px)；取 4 留 1px 余量。
+_BAG_PIN_XY = (0, 0)              # 背包面板目标误差位（单一定义，勿散落）
+_BAG_PIN_TOL = 4                  # > 实测最大静态基线 2px，留余量防误判（真漂移 ≥1px 可检出）
+
+_LUA_BAG_XY = r"""
+local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[3]
+if type(d) ~= 'table' then __out = 'NOBAG' return end
+__out = tostring(d.x) .. ',' .. tostring(d.y)
+"""
+
+
+def _bag_pin_pos(gateway):
+    """读背包面板当前 x/y。返回 (x, y) 或 None（通道失败/无面板）。"""
+    try:
+        r = _lua_call(gateway, _LUA_BAG_XY, timeout=6.0)
+    except Exception:
+        return None
+    if not r or r == "NOBAG":
+        return None
+    try:
+        x, y = r.split(",")[:2]
+        return (int(float(x)), int(float(y)))
+    except Exception:
+        return None
+
+
+def _pin_once(gateway):
+    """背包面板漂了（超出 _BAG_PIN_TOL）就立刻钉回默认位。
+
+    返回 (钉了没, 读到/钉前的位)。任何异常都吞掉——钉位是稳妥性加固，
+    绝不能让开包/传送链路因它失败。
+    """
+    try:
+        pos = _bag_pin_pos(gateway)
+        if pos is None:
+            # 读不到（通道失败/面板对象未就绪）→ 保守钉一次。
+            # 钉位是幂等赋值，最坏结果=白写一次，不会把包弄坏。
+            _panel_pin_defaults(gateway)
+            return True, None
+        dx = abs(pos[0] - _BAG_PIN_XY[0])
+        dy = abs(pos[1] - _BAG_PIN_XY[1])
+        if dx > _BAG_PIN_TOL or dy > _BAG_PIN_TOL:
+            _panel_pin_defaults(gateway)
+            logger.info("背包面板漂移 %s（超 ±%dpx）→ 已钉回 %s"
+                        % (pos, _BAG_PIN_TOL, _BAG_PIN_XY))
+            return True, pos
+        return False, pos
+    except Exception:
+        return False, None
+
+
+def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
+                    extra_sell=(), **kw):
     """出售背包垃圾装备。返回出售件数；背包未开/无可卖/关闭开关返回 0。
 
     交互（用户实测）：左键点装备（拿起）→ 左键点"出售"（卖出）。
@@ -2354,6 +2679,10 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
         hwnd = get_hwnd()
     if not hwnd:
         return 0
+    # ★2026-09-13 面板钉位：背包面板被拖拽会让"出售"固定标定失准 → 复位
+    # ★2026-09-15 改为条件钉：位置没漂就不动它
+    _pin_once(gateway)
+    _sleep(random.uniform(0.3, 0.5))
     if not _bag_ensure_open(gateway, hwnd):
         logger.warning("出售装备：背包无法打开")
         return 0
@@ -2361,28 +2690,44 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
     sold = 0
     tried = set()
     for _ in range(_SELL_MAX_ITEMS):
-        items = [it for it in _sellable_items(gateway)
+        items = [it for it in _sellable_items(gateway, extra_sell)
                  if (it[0], it[3]) not in tried]
         if not items:
             break
         gid, ix, iy, iname = items[0]
         tried.add((gid, iname))
         same_before = sum(1 for it in items if it[3] == iname)
-        bcx, bcy = _bag_cell_click_pos(ix, iy)
-        post_click(hwnd, bcx, bcy, gateway=gateway)
-        _sleep(random.uniform(0.25, 0.45))
-        pick = _bag_pick_state(gateway)
-        if pick in ("0", "", "nil"):
-            logger.info("出售装备：点选 %s(格子%s) 未拿起，跳过" % (iname, gid))
+        # ★2026-09-13 拿起重试：首次点击未拿起常因瞬时节面重叠/提示框拦截
+        #   （界面重叠1() 为真时拿不起）或灵饰图标偏移 —— 同格重试 3 次（带
+        #   随机抖动偏移），仍失败才跳过，修复"点了装备却没点出售"。
+        picked = False
+        for _pk in range(3):
+            bcx, bcy = _bag_cell_click_pos(ix, iy)
+            post_click(hwnd, bcx, bcy, gateway=gateway)
+            _sleep(random.uniform(0.5, 0.8))
+            pick = _bag_pick_state(gateway)
+            if pick not in ("0", "", "nil"):
+                picked = True
+                break
+        if not picked:
+            logger.info("出售装备：点选 %s(格子%s) 重试3次未拿起，跳过（下轮再试）"
+                        % (iname, gid))
             continue
         scx = random.randint(sx0 + 3, max(sx0 + 4, sx1 - 3))
         scy = random.randint(sy0 + 2, max(sy0 + 3, sy1 - 2))
-        # ★2026-09-13 用户确认交互无误：点装备拿起 → 移动 → 点出售（两段点击）
-        post_click(hwnd, scx, scy, gateway=gateway)
-        _sleep(random.uniform(0.35, 0.6))
-        # 手未空 = 卖出未生效 → 放回并中止
-        if _bag_pick_state(gateway) not in ("0", "", "nil"):
-            logger.warning("出售装备：%s(格子%s) 点出售未生效，放回并中止" % (iname, gid))
+        # ★2026-09-13 用户确认交互无误：点装备拿起 → 移动 → 点出售（两段点击）。
+        #   出售点击最多 2 次：一次点击后手仍非空=未生效，补点一次再判，
+        #   避免单次误点击就让整批中止（旧逻辑一次失败即 放回+break）。
+        sold_clicked = False
+        for _sk in range(2):
+            post_click(hwnd, scx, scy, gateway=gateway)
+            _sleep(random.uniform(0.5, 0.75))
+            if _bag_pick_state(gateway) in ("0", "", "nil"):
+                sold_clicked = True
+                break
+        if not sold_clicked:
+            logger.warning("出售装备：%s(格子%s) 点出售 2 次未生效，放回并中止"
+                           % (iname, gid))
             pbx, pby = _bag_cell_click_pos(ix, iy)
             post_click(hwnd, pbx, pby, gateway=gateway)
             _sleep(random.uniform(0.25, 0.45))
@@ -2392,7 +2737,7 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False, **kw):
             logger.warning("出售装备：卖出后刷新背包失败，按已卖出计并中止")
             sold += 1
             break
-        now_items = _sellable_items(gateway)
+        now_items = _sellable_items(gateway, extra_sell)
         same_after = sum(1 for it in now_items if it[3] == iname)
         if same_after < same_before:
             sold += 1
@@ -2522,6 +2867,7 @@ def _bag_ensure_open(gateway, hwnd, tries=5) -> bool:
     v = _bag_visible(gateway)
     if v is True:
         _BAG_FAIL_TS.pop(gateway, None)
+        _pin_once(gateway)     # ★2026-09-15 已开也校验：不在 (0,0) 就钉回
         return True
     if time.time() - _BAG_FAIL_TS.get(gateway, 0.0) < _BAG_RETRY_COOLDOWN:
         return False   # 冷却期内：状态未知/刚失败过，不点按钮
@@ -2532,6 +2878,7 @@ def _bag_ensure_open(gateway, hwnd, tries=5) -> bool:
             v = _bag_visible(gateway)
             if v is True:
                 _BAG_FAIL_TS.pop(gateway, None)
+                _pin_once(gateway)   # ★2026-09-15 通道重读成功 → 校验钉位
                 return True
             continue
         bx, by = _bag_button_pos(hwnd)
@@ -2541,6 +2888,7 @@ def _bag_ensure_open(gateway, hwnd, tries=5) -> bool:
             nv = _bag_visible(gateway)
             if nv is True:
                 _BAG_FAIL_TS.pop(gateway, None)
+                _pin_once(gateway)   # ★2026-09-15 点开后校验：不在 (0,0) 立刻钉
                 return True
             if nv is False:
                 break   # 确认还关着 → 下一轮再点
@@ -2548,6 +2896,7 @@ def _bag_ensure_open(gateway, hwnd, tries=5) -> bool:
     ok = _bag_visible(gateway) is True
     if ok:
         _BAG_FAIL_TS.pop(gateway, None)
+        _pin_once(gateway)     # ★2026-09-15 兜底最终确认开 → 校验钉位
     else:
         _BAG_FAIL_TS[gateway] = time.time()
     return ok
@@ -3007,6 +3356,15 @@ def zhuagui_teleport(gateway=DEFAULT_GATEWAY, hwnd=None, dest="大唐官府",
     post_click(hwnd, random.randint(rect[0], rect[2]),
                random.randint(rect[1], rect[3]), gateway=gateway)
     _sleep(random.uniform(1.0, 1.4))
+    # ★2026-09-15 用户定案：点完"传送"立即关背包——列车对话框右下区域与
+    #   背包面板重叠，包开着点目的地文字链接可能被背包挡住（同 _go_warehouse
+    #   里快捷菜单被背包盖住的同族事故）。关不掉只告警不中止：目的地矩形
+    #   (114,290)-(461,349) 在包外，仍能点中。
+    try:
+        if not _bag_ensure_close(gateway, hwnd):
+            logger.info("传送：背包未确认关闭（%s），继续点目的地" % dest)
+    except Exception:
+        pass
     rect = _TP_DEST_RECTS[dest]
     post_click(hwnd, random.randint(rect[0], rect[2]),
                random.randint(rect[1], rect[3]), gateway=gateway)
@@ -3110,7 +3468,7 @@ def zhuagui_use_tianyan(gateway=DEFAULT_GATEWAY, **kw):
     # 因此不再调用 _bag_ensure_close，保持背包打开状态。
     # ★2026-09-03 追加：把引擎光标移出背包（离开物品格），否则光标悬停在
     #   天眼符上 tooltip 常显，会遮挡/干扰后续点击（"鼠标一直停留在背包上"）。
-    _mouse_clear(hwnd, gateway)
+    # ★2026-09-13 用户要求取消：非打场景(道具/回城)不再 _mouse_clear（取消随机停留），打怪链路保留。
     return True
 
 
@@ -3218,13 +3576,13 @@ def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
     post_right_click(hwnd, fgx, fgy, gateway=gateway)
     _sleep(random.uniform(1.0, 1.5))  # ★2026-09-05 提速 1.5~2.2 → 1.0~1.5（等大地图弹出）
     # ★2026-09-03 追加：右键旗子后移开光标（旗子在背包内，悬停会弹 tooltip）
-    _mouse_clear(hwnd, gateway)
+    # ★2026-09-13 用户要求取消：非打场景(回城旗子)不再 _mouse_clear（取消随机停留）。
     # 2) 点击"殷"字旁红点 → 钟馗身边
     jx = red_x + random.randint(-3, 3)
     jy = red_y + random.randint(-3, 3)
     post_click(hwnd, jx, jy, gateway=gateway)
     _sleep(random.uniform(1.2, 1.8))  # ★2026-09-05 提速 1.8~2.5 → 1.2~1.8（飞行落地图弹出）
-    _mouse_clear(hwnd, gateway)
+    # ★2026-09-13 用户要求取消：非打场景(飞行落地)不再 _mouse_clear（取消随机停留）。
     mm = _lua_call(gateway, r'''local m=tp.地图; __out=tostring(m and m.地图名称 or "")''')
     if mm == "长安城":
         return True
@@ -3378,10 +3736,13 @@ def _mall_buy_item(gateway, hwnd, name, bag_verify=None):
     """商城按名购买一个物品（全 Lua 定位 + 闭环验证，2026-09-08 定案）。
 
     流程：确保商店开（没开才点商店按钮，防点关）→ 商品表找名点图标中心
-    → 验 选择==编号 且 单价>0 → srk 右推购买按钮点击 → 关店。
+    → 验 选中序号==编号 且 单价>0 且 选中物品名称匹配 → srk 右推购买按钮点击 → 关店。
     bag_verify 给出时：关店后开包按名复核已入手（以背包为准返回）。
     Returns: bool。任何一步失败只告警返回 False（由调用方决定是否阻断）。
     """
+    # ★2026-09-13 面板钉位：商城面板被拖拽会让购买按钮/坐标失准 → 复位
+    _panel_pin_defaults(gateway)
+    _sleep(random.uniform(0.2, 0.35))
     on, wx, wy = _mall_state(gateway)
     if not on:
         logger.info("商城：打开商店（买 %s）..." % name)
@@ -3408,25 +3769,47 @@ def _mall_buy_item(gateway, hwnd, name, bag_verify=None):
         logger.warning("商城：商品表找不到 %s" % name)
         _mall_close(gateway, hwnd, wx, wy)
         return False
-    post_click(hwnd, ix + random.randint(-4, 4), iy + random.randint(-3, 3),
-               gateway=gateway)
-    _sleep(random.uniform(0.6, 0.9))
-    r = _lua_call(gateway, r"""
+    # ★2026-09-13 事故修复（用户实测买了一背包飞行棋）：选中未确认绝不能买！
+    #   旧逻辑"仍尝试购买"把商店当时选中的别的商品买了回去（飞行棋刷屏）。
+    #   新逻辑：点商品 → 验 选中序号==编号 且 单价>0 且 名称匹配 → 不确认就重点 2 次，
+    #   3 次都不确认 → 放弃购买（返回 False），宁可不买不误买。
+    bought = False
+    for _sel_try in range(3):
+        post_click(hwnd, ix + random.randint(-4, 4), iy + random.randint(-3, 3),
+                   gateway=gateway)
+        _sleep(random.uniform(0.6, 0.9))
+        # ★2026-09-13 修正：界面_商城.lua 中 self.选择 是神兽商城翻页字段
+        # （±16 翻页），道具商城恒为 0，用它判"选没选中"永远不通过。
+        # 真正记录选中状态的是 self.上一次(选中序号)+self.道具(选中对象.名称)+self.单价。
+        r = _lua_call(gateway, r"""
 local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[45]
-__out = tostring(v and v.选择 or 0) .. ',' .. tostring(v and v.单价 or 0)
-""") or "0,0"
-    sel_ok = False
-    try:
-        sel, price = [int(float(v)) for v in r.split(",")]
-        sel_ok = (sel == gid and price > 0)
-    except Exception:
-        pass
-    if not sel_ok:
-        logger.warning("商城：%s 选中未确认(选择/单价=%s)，仍尝试购买" % (name, r))
-    rect = _mall_buy_rect(gateway) or _MALL_BUY_FALLBACK
-    post_click(hwnd, random.randint(rect[0], rect[2]),
-               random.randint(rect[1], rect[3]), gateway=gateway)
-    _sleep(random.uniform(0.8, 1.2))
+local d = v and v.道具
+__out = tostring(v and (v.上一次 or 0) or 0) .. ','
+        .. tostring(v and tonumber(v.单价) or 0) .. ','
+        .. tostring((type(d) == 'table' and tostring(d.名称 or '') or ''):find('NAME', 1, true) and 1 or 0)
+""".replace("NAME", name)) or "0,0,0"
+        sel_ok = False
+        try:
+            parts = [int(float(x)) for x in r.split(",")]
+            # 选中确认：选中序号==目标编号 且 单价>0 且 选中物品名称含目标名
+            sel_ok = (len(parts) >= 3 and parts[0] == gid
+                      and parts[1] > 0 and parts[2] == 1)
+        except Exception:
+            sel_ok = False
+        if sel_ok:
+            rect = _mall_buy_rect(gateway) or _MALL_BUY_FALLBACK
+            post_click(hwnd, random.randint(rect[0], rect[2]),
+                       random.randint(rect[1], rect[3]), gateway=gateway)
+            bought = True
+            break
+        logger.warning("商城：%s 选中未确认(选中序号/单价=%s)，第 %d 次重点商品"
+                       % (name, r, _sel_try + 1))
+        _sleep(random.uniform(0.4, 0.6))
+    if not bought:
+        logger.warning("商城：%s 3 次选中校验失败 → 放弃购买（防误买别物）" % name)
+        _mall_close(gateway, hwnd, wx, wy)
+        return False
+    _sleep(random.uniform(0.8, 1.2))  # 购买已在选中确认分支点击一次（防止重复购入）
     _mall_close(gateway, hwnd, wx, wy)
     if bag_verify:
         if not _bag_ensure_open(gateway, hwnd):
@@ -3926,7 +4309,8 @@ def zhuagui_in_battle(gateway=DEFAULT_GATEWAY, **kw):
       但『敌方数量』脱战也残留 7，不能单用）——以下任一即判战斗中：
       a) 参战单位非空 且 敌方数量>0（原判据）
       b) 回合进程 ~= '等待回合'（战斗中在 等待/命令/执行 回合间轮转）
-      c) 战斗窗口"自动栏".可视 == true（战斗 UI 专属按钮）
+      c) 战斗窗口"自动栏".可视/可视化 == true（战斗 UI 专属；
+         ★2026-09-15 用户截图：该窗口即「自动战斗」面板）
     命中即刷新进战闩锁 _BATTLE_LATCH（战斗结束前禁止再 CALL）。
     """
     r = _lua_call(gateway, r"""
@@ -3942,7 +4326,9 @@ end
 local rp = tostring(b.回合进程 or '')
 if rp ~= '' and rp ~= '等待回合' and rp ~= 'nil' then inb = true end
 local a = b.窗口 and b.窗口.自动栏
-if type(a) == 'table' and a.可视 == true then inb = true end
+-- ★2026-09-15 用户截图定案：「自动战斗」面板=自动栏窗口，作为第4信号；
+--   可视 / 可视化 任一为真即面板在屏（脱战实测两者均 false）
+if type(a) == 'table' and (a.可视 == true or a.可视化 == true) then inb = true end
 __out = inb and 'true' or 'false'
 """)
     if r == "true":
