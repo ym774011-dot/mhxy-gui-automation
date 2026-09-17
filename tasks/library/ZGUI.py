@@ -4314,7 +4314,16 @@ local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.�
 if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
 ''')
         if already:
-            return "auto_on"
+            # ★2026-09-18 修复「重登后自动不开」：同 pid 重登会把服务端常开态归零，
+            #   但 _AUTO_ONCE 还记着"本会话已点过"。用已在读的 Lua 自动态纠偏：
+            #   显式读到"自动"（未开）→ 清闸补点一次；读到"取消"（已开）或读不到
+            #   → 一律不点（防过点，避免把开关点关）。
+            if _st != "自动":
+                return "auto_on"
+            _AUTO_ONCE.pop(pid, None)
+            (log.info if log else logger.info)(
+                "自动态=未开（疑似重登）→ 清闸补点一次「自动」")
+            # 落到下面既有点击逻辑（设 _AUTO_ONCE[pid]=True + 点 _AUTO_BTN_RECT）
         _AUTO_ONCE[pid] = True
         x0, y0, x1, y1 = _AUTO_BTN_RECT
         post_click(hwnd, random.randint(x0 + 8, x1 - 8),
