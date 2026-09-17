@@ -84,9 +84,14 @@ _SKIP_TEAM = False
 
 _SELL_MIN_BAG = 12                     # 背包占用≥该格数才出售
 # ★2026-09-17 用户定案：全地图刷怪追加出售白名单（仅本脚本启用，不污染抓鬼）。
-#   百炼精铁/制造指南书/钨金 等 打造/功能 材料不在 武器/防具 判据内，
+#   百炼精铁/制造指南书/钨金/内丹 等 打造/功能/召唤兽材料不在 武器/防具 判据内，
 #   需显式白名单才出售；背包里有即由出售流程自动卖。
-_SELL_EXTRA = ("百炼精铁", "制造指南书", "钨金")
+_SELL_EXTRA = ("百炼精铁", "制造指南书", "钨金", "内丹")
+# ★2026-09-17 用户定案：内丹排除名单（白名单命中后含这些子串则不卖）。
+#   召唤兽内丹/高级召唤兽内丹 中保留：矫健/迅敏/圣洁/狂怒/玉砥柱/生死决/双星爆/灵身/静岳；
+#   其余内丹类型一律出售。
+_SELL_EXTRA_EXCLUDE = ("矫健", "迅敏", "圣洁", "狂怒", "玉砥柱",
+                      "生死决", "双星爆", "灵身", "静岳")
 # ★2026-09-14 用户定案：摄妖香每 299 分钟用一次（组队完成后使用，无则商城购买）
 _XIANG_NAME = "摄妖香"          # 道具名
 _XIANG_INTERVAL = 299 * 60                  # 使用间隔（秒）
@@ -421,7 +426,9 @@ def _sell_if_needed(gw, hwnd):
         n = ZGUI._bag_used_count(gw)
         if n is not None and n >= _SELL_MIN_BAG:
             _t0 = time.time()
-            s = ZGUI.zhuagui_sell_junk(gw, hwnd=hwnd, extra_sell=_SELL_EXTRA)
+            s = ZGUI.zhuagui_sell_junk(gw, hwnd=hwnd,
+                                     extra_sell=_SELL_EXTRA,
+                                     extra_exclude=_SELL_EXTRA_EXCLUDE)
             _LAST_ROUND["sell_s"] = round(time.time() - _t0, 1)
             if s:
                 _LOG.info("刷怪：出售 %d 件（占用 %d 格）" % (s, n))

@@ -2464,11 +2464,13 @@ __out = tostring(n)
         return -1
 
 
-def _sellable_items(gateway, extra_sell=()):
+def _sellable_items(gateway, extra_sell=(), extra_exclude=()):
     """列出可出售物品：[(格子id, x, y, 名称), ...]（最多 _SELL_MAX_ITEMS 件）。
 
     extra_sell: 额外白名单物品名元组（子串匹配）。仅由显式传入的脚本启用，
-      不污染共享出售链路（如抓鬼）。例：全地图刷怪追加 百炼精铁/制造指南书/钨金。
+      不污染共享出售链路（如抓鬼）。例：全地图刷怪追加 百炼精铁/制造指南书/钨金/内丹。
+    extra_exclude: 白名单命中后的排除子串元组（子串匹配）。白名单命中且含任一
+      排除子串则不卖。例：内丹中保留 矫健/迅敏/...等特定类型。
     """
     code = r"""
 local j = tp.主界面 and tp.主界面.界面数据
@@ -2485,6 +2487,7 @@ local function deep_concat(v, depth)
 end
     local parts = {}
     local _EXTRA_SELL = __EXTRA_SELL__
+    local _EXTRA_EXCLUDE = __EXTRA_EXCLUDE__
     for i = 1, 100 do
       local it = pd[i]
       if type(it) == 'table' then
@@ -2516,11 +2519,19 @@ end
           end
         end
         -- ★2026-09-17 用户定案：全地图刷怪脚本白名单追加（extra_sell 传入才生效）
-        --   百炼精铁/制造指南书/钨金 等 打造/功能 材料不在 武器/防具 判据内，
-        --   需显式白名单才出售（仅由传入 extra_sell 的脚本启用，不污染抓鬼链路）。
+        --   百炼精铁/制造指南书/钨金/内丹 等 打造/功能/召唤兽材料不在 武器/防具
+        --   判据内，需显式白名单才出售（仅由传入 extra_sell 的脚本启用，不污染抓鬼）。
+        --   extra_exclude：白名单命中后若含这些子串则不卖（如内丹中特定类型保留）。
         if not sell then
           for _,k in ipairs(_EXTRA_SELL) do
-            if name:find(k) then sell = true break end
+            if name:find(k) then
+              local blocked = false
+              for _,e in ipairs(_EXTRA_EXCLUDE) do
+                if name:find(e) then blocked = true break end
+              end
+              if not blocked then sell = true end
+              break
+            end
           end
         end
     if sell then
@@ -2540,6 +2551,8 @@ __out = table.concat(parts, ' ;; ')
 """
     names_lua = "{" + ",".join("'%s'" % n for n in extra_sell) + "}"
     code = code.replace("__EXTRA_SELL__", names_lua)
+    exc_lua = "{" + ",".join("'%s'" % n for n in extra_exclude) + "}"
+    code = code.replace("__EXTRA_EXCLUDE__", exc_lua)
     r = _lua_call(gateway, code) or ""
     items = []
     for part in r.split(" ;; "):
@@ -2662,7 +2675,7 @@ def _pin_once(gateway):
 
 
 def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
-                    extra_sell=(), **kw):
+                    extra_sell=(), extra_exclude=(), **kw):
     """出售背包垃圾装备。返回出售件数；背包未开/无可卖/关闭开关返回 0。
 
     交互（用户实测）：左键点装备（拿起）→ 左键点"出售"（卖出）。
@@ -2690,7 +2703,7 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
     sold = 0
     tried = set()
     for _ in range(_SELL_MAX_ITEMS):
-        items = [it for it in _sellable_items(gateway, extra_sell)
+        items = [it for it in _sellable_items(gateway, extra_sell, extra_exclude)
                  if (it[0], it[3]) not in tried]
         if not items:
             break
@@ -2737,7 +2750,7 @@ def zhuagui_sell_junk(gateway=DEFAULT_GATEWAY, hwnd=None, verbose=False,
             logger.warning("出售装备：卖出后刷新背包失败，按已卖出计并中止")
             sold += 1
             break
-        now_items = _sellable_items(gateway, extra_sell)
+        now_items = _sellable_items(gateway, extra_sell, extra_exclude)
         same_after = sum(1 for it in now_items if it[3] == iname)
         if same_after < same_before:
             sold += 1
