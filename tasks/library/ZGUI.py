@@ -4302,7 +4302,7 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
 local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.自动栏
 if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
 ''')
-        if st == "取消":          # 已开启 → 不点
+        if st != "自动":          # 只有明确读到未开('自动')才点；已开/读不到一律不点
             return "auto_on"
         x0, y0, x1, y1 = _AUTO_BTN_RECT
         post_click(hwnd, random.randint(x0 + 8, x1 - 8),
