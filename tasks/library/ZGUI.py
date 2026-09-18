@@ -3538,6 +3538,103 @@ __out = tostring(b and b.加载结束)''')
     return False
 
 
+def battle_probe(gateway=DEFAULT_GATEWAY, **kw):
+    """登录/重绑后的一次性「战斗体检」（只读、零点击）。
+
+    → (in_battle: bool, kind: str, detail: dict)
+      kind: 'idle'    脱战（可正常组队/传送/接任务）
+            'normal'  正常战斗中（加载结束=true）→ 不要点 UI/传送/接任务
+            'loading' 在战斗但 加载结束=false —— 可能刚开战，也可能幻影卡死
+                      （要确认幻影请交给 battle_phantom_escape，它会持续观察再决定杀进程）
+            'unknown' 通道读不到（worker 没挂/掉线）→ 应先 rebind，别在死通道上点击
+
+    ★2026-09-18 真机实测（10v10 加载回合，pid15068）选定判据：
+      · **主判据只能用 `回合进程`**：战斗中为 加载/命令/执行回合，脱战为 等待回合；
+      · `tp.战斗中` 战斗中**仍为 false**、`参战单位` 战斗中**键数=0** → 都不可用；
+      · `敌方数量`/`背景显示` 脱战会**残留** → 不作主判据，仅作辅证（两值都>0）。
+      · 区分卡死：`战斗类.加载结束 == false`（正常战斗为 'true'）。
+    """
+    raw = _lua_call(gateway, r"""
+local b = tp and tp.战斗类
+if type(b) ~= 'table' then __out = '|' return end
+local function g(v) if v == nil then return '' end return tostring(v) end
+__out = g(b.回合进程) .. '|' .. g(b.加载结束) .. '|'
+     .. g(b.我方数量) .. '|' .. g(b.敌方数量)
+""")
+    if raw is None or str(raw).strip() == "":
+        return False, "unknown", {"回合进程": "", "加载结束": "",
+                                  "我方数量": 0, "敌方数量": 0}
+    p = str(raw).split("|")
+    rp = p[0] if len(p) > 0 else ""
+    le = p[1] if len(p) > 1 else ""
+    mine_s = p[2] if len(p) > 2 else ""
+    foe_s = p[3] if len(p) > 3 else ""
+
+    def _n(s):
+        try:
+            return int(float(s))
+        except (TypeError, ValueError):
+            return 0
+    mine_n, foe_n = _n(mine_s), _n(foe_s)
+    # ★判据与既有 zhuagui_in_battle 的第 (b) 条保持一致：只用 回合进程。
+    #   不用 我方/敌方数量 参与判定 —— 它们**脱战会残留**（实测敌方=7 残留），
+    #   拿它们当判据会在脱战时误判"在战斗"，把脚本永久卡在 battle_wait。
+    inb = (rp != "" and rp != "等待回合" and rp != "nil")
+    if not inb:
+        kind = "idle"
+    elif le == "false":
+        kind = "loading"
+    else:
+        kind = "normal"
+    return inb, kind, {"回合进程": rp, "加载结束": le,
+                       "我方数量": mine_n, "敌方数量": foe_n}
+
+
+def battle_login_gate(gateway=DEFAULT_GATEWAY, hwnd=None, log=None,
+                      kill_phantom=True, confirm_s=75.0, **kw):
+    """登录/重绑后的「战斗闸」（★2026-09-18 用户定案）：先体检，再按结果处置。
+
+    → 'idle' | 'battle_wait' | 'phantom_killed' | 'phantom_pending' | 'channel_down'
+
+      · idle           脱战 → 调用方可正常组队/传送/接任务；
+      · battle_wait    正常战斗中 → **不要点任何 UI/传送/接任务**，等战斗结束；
+      · phantom_killed 确认为幻影/卡死 → 已杀游戏进程，交掉线闭环重启清场；
+      · phantom_pending 在战斗但未确认幻影（加载结束=false 但未满 confirm_s）→ 继续观察；
+      · channel_down   通道读不到（worker 掉/未挂载）→ 应先 rebind，**别点击**。
+
+    调用方（pp_gui 重登归队 / 任务脚本启动）应在**任何点击之前**先调它；
+    掉线卡在战斗里（卡住不动/UI 不关/快捷传送打不开）时，它把"能不能动"先判清楚。
+    """
+    _log = (log.info if log else logger.info)
+    try:
+        inb, kind, d = battle_probe(gateway)
+    except Exception as e:
+        _log("战斗体检异常（按 idle 处理）: %s" % e)
+        return "idle"
+    _log("战斗体检: in_battle=%s kind=%s（回合进程=%s 加载结束=%s 我方=%s 敌方=%s）"
+         % (inb, kind, d["回合进程"], d["加载结束"], d["我方数量"], d["敌方数量"]))
+    if kind == "unknown":
+        _log("战斗体检: 通道读不到（worker 掉/未挂载）→ 应先 rebind，不在死通道上点击")
+        return "channel_down"
+    if kind == "idle":
+        return "idle"
+    if kind == "normal":
+        _log("战斗中（正常）→ 不点 UI/不传送/不接任务，等战斗结束")
+        return "battle_wait"
+    # loading：可能刚开战，也可能幻影 —— 交给既有自愈器持续确认
+    if not kill_phantom:
+        _log("战斗中且 加载结束=false → 仅观察（kill_phantom=False）")
+        return "phantom_pending"
+    try:
+        if battle_phantom_escape(gateway, max_wait=confirm_s):
+            _log("幻影战斗确认 → 已杀游戏进程，交由掉线闭环重启清场")
+            return "phantom_killed"
+    except Exception as e:
+        _log("幻影自愈异常: %s" % e)
+    _log("战斗中（加载结束=false，未确认为幻影）→ 继续观察")
+    return "phantom_pending"
+
+
 def zhuagui_go_back_changan(gateway=DEFAULT_GATEWAY, red_x=312, red_y=229,
                             force=False, **kw):
     """从任意地图回长安城钟馗身边（合成旗地图红点）。

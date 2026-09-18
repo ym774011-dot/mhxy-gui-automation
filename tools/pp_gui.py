@@ -957,6 +957,7 @@ class PPApp(tk.Tk):
         return True, _lp
 
     def _rejoin_flow(self, inst):
+        _gate = "idle"          # ★2026-09-18 登录后战斗闸结果（try 末尾赋值 / finally 使用）
         try:
             if self.paused:
                 self._log("p%d 暂停中，跳过自动归队" % inst.pid)
@@ -999,6 +1000,14 @@ class PPApp(tk.Tk):
                           % inst.pid)
                 sat.member_tp_and_apply(inst.pid, link["cap_world"], tries=3,
                                         tp_first=True, leader_pid=_lp)
+            # ★2026-09-18 登录后战斗闸（用户定案）：掉线后若卡在战斗里（卡住不动/
+            #   UI 不关/快捷传送打不开），先体检再决定要不要拉起任务 ——
+            #   正常战斗中 / 幻影 / 通道未通 一律先不拉任务，避免在战斗或死通道上乱点。
+            try:
+                _gate = ZGUI.battle_login_gate(
+                    "file://pzxy_p%d" % inst.pid, log=ZGUI.logger)
+            except Exception as _ge:
+                self._log("p%d 登录后战斗闸异常（按通过处理）: %s" % (inst.pid, _ge))
         except Exception as e:
             self._log("p%d 归队异常: %s" % (inst.pid, e))
         finally:
@@ -1006,7 +1015,11 @@ class PPApp(tk.Tk):
             inst.status, inst.note = S_ONLINE, "重登完成"
             if not self.paused:
                 time.sleep(2.0)
-                self._spawn_task(inst, skip_team=True)
+                if _gate in ("battle_wait", "phantom_killed", "channel_down"):
+                    self._log("p%d 登录后战斗闸=%s → 本轮不拉起任务"
+                              "（战斗中/幻影/死通道，先别动）" % (inst.pid, _gate))
+                else:
+                    self._spawn_task(inst, skip_team=True)
 
     def _start_all_tasks(self):
         """【启动脚本】= 组队（传送/走位/申请/批准/天覆阵）→ 按角色拉任务。"""
