@@ -40,3 +40,16 @@ Thumbs.db
 *.jpg
 *.jpeg
 !assets/game_data/图片数据/*.bmp
+
+# ---- 运行产物（★2026-09-18 清理：这些早先被误提交进仓库，现移出版本控制）----
+# 日志：pp_gui.log / test_after_*.log / test_data/member_p*.log …… 全是运行时输出
+*.log
+# 跑批记录（每次运行一个文件）+ 同名 .meta.json 副产物
+**/test_data/*.jsonl
+**/test_data/*.meta.json
+# 根目录临时运行日志
+_run_log*.txt
+# 运行时状态/配置（每次运行都变，且含本机 PID/窗口标题等机器相关信息）
+test_data/team_link.json
+test_data/pp_gui_config.json
+data/pzxy_map_ids.json
