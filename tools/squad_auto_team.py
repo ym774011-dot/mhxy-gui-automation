@@ -461,7 +461,7 @@ def approve_round(leader_pid):
     return mem
 
 
-def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=2.0):
+def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=2.0, on_stall=None):
     """队长循环批准申请直到满员/超时。返回最终成员数。
 
     流程与 22:20 实测一致：点图标开面板一次 → 循环 请求列表→首卡(162,166)→
@@ -496,16 +496,26 @@ def approve_loop(leader_pid, expect_members, timeout_s=1800.0, poll_s=2.0):
                 rise = True
                 break
         if not rise:
-            time.sleep(poll_s)      # 队列空，正常轮询节奏
+            # 队列空：正常轮询节奏；on_stall 供调用方自动叫队友再来申请，
+            # 缺员时不干等空队列（2026-09-13 用户需求）。
+            if on_stall is not None:
+                try:
+                    on_stall()
+                except Exception:
+                    pass
+            time.sleep(poll_s)
     return _topbar_mem()
 
 
-def disband_team(leader_pid, tries=3):
+def disband_team(leader_pid, tries=5):
     """队长解散队伍（队伍面板"离开队伍"=整队解散）。返回 True=已解散。
 
     ★2026-09-12 用户定案（存仓流程前置）：组队下队员无法使用仓库存放物品，
     存仓前必须解散队伍。实机验证（08:0x）：点"离开队伍"后队长顶栏立即 0 人，
     全员退队。面板开关走状态配对（图标是开关，盲点会打架）。
+    ★2026-09-13 加固（存仓实测"队伍面板打不开"）：开面板前先等战斗结束
+    （战斗中图标/面板点击无效）；图标最多点 5 次；面板开后"离开队伍"
+    点击最多 3 次，直到顶栏归零才认定解散成功。
     """
     lw = _gw(leader_pid)
     lhwnd = find_hwnd_by_pid(leader_pid)
@@ -515,11 +525,20 @@ def disband_team(leader_pid, tries=3):
     if st and st[0] == 0:
         _log("解散：队长顶栏已是 0 人，无需操作")
         return True
+    # 等出战斗（战斗中开面板/点按钮全部无效）
+    for _ in range(20):
+        try:
+            if not ZGUI.zhuagui_in_battle(lw):
+                break
+        except Exception:
+            break
+        _log("解散：战斗中，等待脱战...")
+        time.sleep(2.0)
     for _ in range(max(1, tries)):
         if ZGUI._team_panel_visible(lw) is True:
             break
         ZGUI._team_click_icon(lhwnd, lw)
-        time.sleep(1.2)
+        time.sleep(1.5)
     if ZGUI._team_panel_visible(lw) is not True:
         _log("解散：队伍面板打不开")
         return False
@@ -535,12 +554,13 @@ __out = bb and string.format('%d,%d', bb.x + math.floor((bb.w or 0) / 2),
             x, y = [int(float(s)) for s in pos.split(",")]
         except ValueError:
             pass
-    ZGUI.post_click(lhwnd, x, y, gateway=lw)
-    time.sleep(1.8)
-    st = ZGUI.team_stats_topbar(lw)
-    if st and st[0] == 0:
-        _log("队伍已解散（队长离开队伍 → 全员退队）")
-        return True
+    for _ in range(3):
+        ZGUI.post_click(lhwnd, x, y, gateway=lw)
+        time.sleep(1.8)
+        st = ZGUI.team_stats_topbar(lw)
+        if st and st[0] == 0:
+            _log("队伍已解散（队长离开队伍 → 全员退队）")
+            return True
     _log("解散失败：顶栏仍有 %s 人" % (st[0] if st else "?"))
     return False
 
@@ -564,11 +584,12 @@ __out = tostring(p7 and p7.当前阵法) .. '/' .. tostring(p7 and p7.当前阵�
     global _WIDGET_CLEAN_PID
     if lhwnd and _WIDGET_CLEAN_PID != leader_pid:
         _WIDGET_CLEAN_PID = leader_pid
-        for (x, y) in ((677, 584), (24, 566), (20, 57)):
+        for (x, y) in ((677, 584), (24, 566), (20, 57), (158, 26)):
             ZGUI.post_click(lhwnd, x + random.randint(-2, 2),
                             y + random.randint(-2, 2), gateway=lw)
             time.sleep(0.45)
-        _log("已点挂件位 (677,584)/(24,566)/(20,57) 清理可能遮挡的 UI（队长会话首次）")
+        _log("已点挂件位 (677,584)/(24,566)/(20,57)/(158,26)"
+             "清理遮挡，并开「快捷传送」对话框（队长会话首次）")
     return name in r
 
 

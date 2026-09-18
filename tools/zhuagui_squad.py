@@ -129,6 +129,13 @@ def plant(pid, name, port):
     return r.returncode == 0, reason
 
 
+# ★2026-09-14 方案脚本进程匹配正则：PP GUI SCRIPT_PROFILES 每新增队长脚本
+#   （run_chuangguan 等）必须同步加到这里，否则 running_squad_cmdlines_ex
+#   查不到该进程 → 看门狗防重守卫恒判"没在跑"→ 连环双跑
+#   （run_chuangguan 5 开、摄妖香连用 3 次 事故实锤）。
+_TASK_PROC_RE = r"run_unlimited_|run_chuangguan|member_sell_loop"
+
+
 def running_squad_cmdlines_ex():
     """(可信, 命令行列表)。★2026-09-07：
 
@@ -138,8 +145,8 @@ def running_squad_cmdlines_ex():
     （01:21 实证：防重守卫误判，五个实例全部跳过拉起）。
     """
     ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
-          "Where-Object { $_.CommandLine -match 'run_unlimited_test|member_sell_loop' } | "
-          "ForEach-Object { $_.CommandLine }")
+          "Where-Object { $_.CommandLine -match '%s' } | "
+          "ForEach-Object { $_.CommandLine }" % _TASK_PROC_RE)
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
                            capture_output=True, text=True,
@@ -157,11 +164,14 @@ def running_squad_cmdlines():
     return lst
 
 
-def process_alive_for(cmdlines, pid, leader):
-    """该实例的跑批/出售进程是否真的在跑（续用前必查，防 state 残留守活）。"""
+def process_alive_for(cmdlines, pid, leader, names=None):
+    """该实例的跑批/出售进程是否真的在跑（续用前必查，防 state 残留守活）。
+    names: 脚本名集合（去 .py）；None 时回落默认 抓鬼/出售 检测。"""
     token = "pzxy_p%d" % pid
-    key = "run_unlimited_test" if leader else "member_sell_loop"
-    return any(key in cl and token in cl for cl in cmdlines)
+    if not names:
+        key = "run_unlimited_test" if leader else "member_sell_loop"
+        return any(key in cl and token in cl for cl in cmdlines)
+    return any(nm in cl and token in cl for cl in cmdlines for nm in names)
 
 
 def main():
@@ -175,9 +185,9 @@ def main():
 
     if args.stop:
         ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match "
-              "'zhuagui_squad|member_sell_loop|run_unlimited_test' -and "
+              "'%s|zhuagui_squad' -and "
               "$_.ProcessId -ne %d } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force; "
-              "Write-Output $_.ProcessId }" % os.getpid())
+              "Write-Output $_.ProcessId }" % (_TASK_PROC_RE, os.getpid()))
         r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
                            capture_output=True, text=True)
         killed = [x for x in (r.stdout or "").split() if x.isdigit()]
