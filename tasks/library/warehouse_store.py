@@ -161,7 +161,12 @@ __out = table.concat(out, ',')
 
 
 def _bag_items(hwnd, gw):
-    """行囊侧物品：[{'id','name','qty','x','y','lv'}]（小动画=点击坐标）。"""
+    """行囊侧物品：[{'id','name','qty','x','y','type','lv','skill'}]（小动画=点击坐标）。
+
+    ★2026-09-18 增读 `skill`（= 物品的 `技能` 字段）：内丹的**具体子类型**在
+      `技能`（"玉砥柱"/"矫健"/"神机步"…），名称只是泛化类别名（召唤兽内丹/
+      高级召唤兽内丹）—— 存仓兜底闸要靠它判"这件是不是该卖的"。
+    """
     r = _Z._lua_call(gw, r'''
 local w = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[14]
 local d = w and w.物品数据
@@ -174,9 +179,11 @@ for _, v in pairs(d) do
     local y = type(sa) == 'table' and tonumber(sa.y) or 0
     local lv = tonumber(v.等级)
     if not lv and type(v.数据) == 'table' then lv = tonumber(v.数据.等级) end
-    out[#out+1] = string.format('%s|%s|%s|%d|%d|%s|%s',
+    local skill = tostring(v.技能 or (type(v.数据) == 'table' and v.数据.技能) or '')
+    skill = string.gsub(skill, '|', '/')      -- 防分隔符污染
+    out[#out+1] = string.format('%s|%s|%s|%d|%d|%s|%s|%s',
       tostring(v.格子id or 0), tostring(v.名称 or ''), tostring(v.数量 or ''),
-      x, y, tostring(v.类型 or ''), tostring(lv or ''))
+      x, y, tostring(v.类型 or ''), tostring(lv or ''), skill)
   end
 end
 __out = table.concat(out, ' ;; ')
@@ -187,14 +194,43 @@ __out = table.concat(out, ' ;; ')
         if len(p) >= 5:
             it = {"id": _Z._coord_int(p[0]), "name": p[1], "qty": p[2],
                   "x": _Z._coord_int(p[3]), "y": _Z._coord_int(p[4]),
-                  "type": p[5]}
+                  "type": p[5], "lv": None, "skill": ""}
             if len(p) >= 7:
                 try:
                     it["lv"] = int(p[6])
                 except ValueError:
                     it["lv"] = None
+            if len(p) >= 8:
+                it["skill"] = p[7]
             res.append(it)
     return res
+
+
+def _is_to_sell(name, skill="", whitelist=_BAG_FULL_EXTRA_SELL, keep=_BAG_FULL_EXTRA_EXCLUDE):
+    """这件是不是"该卖的"？（与出售链路 `ZGUI._sellable_items` 同一套判据）
+
+    = 名称命中 `whitelist`（百炼精铁/制造指南书/钨金/内丹…）
+      且 name+skill **不含**任何 `keep`（内丹保留子类型：矫健/迅敏/玉砥柱…）。
+    存仓侧用它做兜底闸：**该卖的一律不入库**（KEEP 的内丹照常存）。
+    """
+    nm = name or ""
+    if not any(k in nm for k in whitelist):
+        return False
+    hay = nm + " " + (skill or "")
+    return not any(e in hay for e in keep)
+
+
+def _bag_data_readable(gw):
+    """背包面板（界面数据[3]）的物品数据是否已可读 —— 出售链路依赖它。
+
+    ★2026-09-18：`ZGUI._bag_ensure_open` 只用**面板可见标志**确认"包开了"，
+      并不保证 `物品数据` 已刷出；此时 `_sellable_items` 会得到空列表、
+      一件不卖且零日志（22:30 那次 4 秒/0 件即此）。故存仓前先验它。
+    """
+    return _Z._lua_call(gw, r'''
+local j = tp and tp.主界面 and tp.主界面.界面数据
+local pd = type(j) == 'table' and type(j[3]) == 'table' and j[3].物品数据
+__out = tostring(type(pd) == 'table')''') == "true"
 
 
 def _dialog_open(gw):
@@ -315,7 +351,9 @@ def _call_warehouse_npc(hwnd, gw, rounds=3):
 
 
 def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_MIN,
-                      hwnd=None, verbose=True):
+                      hwnd=None, verbose=True,
+                      sell_whitelist=_BAG_FULL_EXTRA_SELL,
+                      sell_keep=_BAG_FULL_EXTRA_EXCLUDE):
     """单角色：背包物品存仓库（★2026-09-12 用户定案：边存边填页）。
 
     不预扫描全部分页（省 ~60s）——直接在当前分页开存；存不进去（该页满）
@@ -350,6 +388,7 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
 
     bag = _bag_items(hwnd, gw)
     todo = []
+    _skipped_sellable = []          # ★该卖的（按出售链路同一判据）——记录后不存
     for it in bag:
         nm, qty, gid = it["name"], it["qty"], it["id"]
         if not nm or not it["x"] or not it["y"]:
@@ -368,7 +407,21 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
             lv = it.get('lv')
             if lv is None or lv < 145:
                 continue                                        # 不满足等级门槛 → 不存仓
+        # ★2026-09-18 用户定案修复【兜底闸：该卖的绝不入库】。
+        #   背景：出售链路可能漏卖（① 单次上限 10 件、② 背包数据未就绪导致静默空转），
+        #   于是"该卖的内丹"被存进了仓库（日志实证 p5016/p12460/p21108/p4160
+        #   召唤兽内丹 → 分页N）。这里用**与出售链路完全相同的判据**再拦一道：
+        #   名称命中 sell_whitelist（百炼精铁/制造指南书/钨金/内丹…）
+        #   且 name+skill 不含 sell_keep（矫健/迅敏/玉砥柱…）→ 判定为"该卖的" → 不存。
+        #   KEEP 的内丹照常存（符合"保留"语义）。
+        if _is_to_sell(nm, it.get("skill"), sell_whitelist, sell_keep):
+            _skipped_sellable.append("%s(格子%s)" % (nm, gid))
+            continue
         todo.append(it)
+    if _skipped_sellable:
+        _log("p%d 该卖未卖 → 不入库 %d 件：%s%s"
+             % (pid, len(_skipped_sellable), ",".join(_skipped_sellable[:6]),
+                " …" if len(_skipped_sellable) > 6 else ""))
     if not todo:
         _log("p%d 无可存物品（保留规则过滤后）" % pid)
         _exit_panel(hwnd, gw)
@@ -443,17 +496,65 @@ def zhuagui_bag_full_handle(pid, gw=None, hwnd=None,
 
     # —— 1) 先卖（腾空间 + 变现）——
     _log("p%d 背包占用 %s 格 → 先出售可售垃圾" % (pid, n_used))
+    # ★2026-09-18 修复②（可读性闸）：卖出链路读的是"背包面板 物品数据"（界面数据[3]），
+    #   而 `ZGUI._bag_ensure_open` 只用**面板可见标志**确认"包开了"，并不保证数据已刷出
+    #   → 此时 `_sellable_items` 得到空列表：一件不卖、**且零日志**
+    #   （22:30:25 先出售 → 22:30:29 计 0 件、仅 4 秒，正是这个签名）。
+    #   故卖出前：先开包 → 读不到就关包重开一次 → 仍读不到就**跳过本轮存仓**
+    #   （宁可不存，也不能把该卖的存进仓库）。
+    try:
+        _Z._bag_ensure_open(gw, hwnd)
+    except Exception:
+        pass
+    if not _bag_data_readable(gw):
+        _log("p%d 背包数据不可读 → 关包重开一次" % pid)
+        try:
+            _Z._bag_ensure_close(gw, hwnd)
+        except Exception:
+            pass
+        time.sleep(0.4)
+        try:
+            _Z._bag_ensure_open(gw, hwnd)
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if not _bag_data_readable(gw):
+        _log("p%d ⚠ 背包数据始终不可读 → 本轮跳过存仓（避免把该卖的存进仓库）" % pid)
+        return 0, False, 0, "背包数据不可读，跳过存仓"
+
+    # ★2026-09-18 修复①（卖出循环）：单次卖出有上限（`ZGUI._SELL_MAX_ITEMS = 10`），
+    #   原先只调用一次 → 可售物 >10 件时"第 11 件起"原地不动，随即被存仓收走
+    #   （内丹常在这个"剩下的"里）。改为**循环卖到清空**：最多 5 轮，某轮 0 件即停。
     sell = 0
     try:
-        sell = _Z.zhuagui_sell_junk(gw, hwnd=hwnd, verbose=verbose,
-                                    extra_sell=extra_sell,
-                                    extra_exclude=extra_exclude) or 0
+        for _round in range(5):
+            got = _Z.zhuagui_sell_junk(gw, hwnd=hwnd, verbose=verbose,
+                                       extra_sell=extra_sell,
+                                       extra_exclude=extra_exclude) or 0
+            sell += got
+            if got <= 0:
+                break
+            _log("p%d 第 %d 轮卖出 %d 件，继续清剩余可售物" % (pid, _round + 1, got))
     except Exception as e:
         _log("p%d 出售异常（不阻断后续存仓）: %s" % (pid, e))
     _log("p%d 本次出售 %d 件" % (pid, sell))
+    # ★2026-09-18 修复④：卖了 0 件但背包里确有"该卖的" → 升级 WARNING（便于当场发现）
+    try:
+        _pend = _Z._sellable_items(gw, extra_sell, extra_exclude)
+    except Exception:
+        _pend = []
+    if not sell and _pend:
+        _log("p%d ⚠ 有 %d 件该卖的却一件没卖掉（如 %s）→ 请检查出售链路"
+             % (pid, len(_pend), _pend[0][3]))
+    if _pend:
+        _log("p%d 售出后仍有 %d 件可售（本轮不入库）" % (pid, len(_pend)))
 
     # —— 2) 再存（其余可存物入仓）——
-    ok, n, msg = zhuagui_store_all(pid, hwnd=hwnd, verbose=verbose)
+    #   ★把同一套出售白名单/保留名单传进去，让存仓侧的「该卖不入库」兜底闸
+    #     与这里用的判据完全一致（防两处副本漂移）。
+    ok, n, msg = zhuagui_store_all(pid, hwnd=hwnd, verbose=verbose,
+                                   sell_whitelist=extra_sell,
+                                   sell_keep=extra_exclude)
     return sell, ok, n, msg
 
 
