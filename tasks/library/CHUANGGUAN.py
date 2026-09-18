@@ -40,7 +40,7 @@ from tasks.library.ZGUI import (
     zhuagui_go_back_changan, zhuagui_teleport, zhuagui_in_battle,
     self_world_xy, get_hwnd, _zhongkui_detect_rows, _battle_auto_kick,
     _mouse_clear, user32, _bag_ensure_open, _bag_cell_click_pos,
-    _bag_ensure_close, _auto_button_visible,
+    _bag_ensure_close, _auto_button_visible, _panel_pin_defaults,
 )
 import ctypes
 import ctypes.wintypes as wt
@@ -485,6 +485,12 @@ def run(gateway=ZGUI.DEFAULT_GATEWAY, hwnd=None, verbose=True, **kw):
         return False
     won = 0
     try:
+        # ★2026-09-14 面板钉位：本链路依赖背包"传送"按钮固定标定坐标
+        #   （ZGUI._TP_BAG_BTN_RECT）与摄妖香图标坐标，背包面板被拖拽会全部
+        #   漂移 → 入口整体钉回默认位（背包[3]/商城[45]/仓库[14]），与
+        #   全地图刷怪 _travel_sect 同款先例。
+        _panel_pin_defaults(gateway)
+        _sleep(random.uniform(0.2, 0.35))
         # ---- 0) 已有进行中的闯关任务 → 直接续跑（跳过报名段）----
         existing = read_tracker_sect(gateway)
         if existing:
@@ -568,6 +574,10 @@ __out=tostring(o and o.x or 0)..','..tostring(o and o.y or 0)""") or "0,0"
             # 3a 前置：清残留对话（上一场"未进战中止"可能留下放马过来弹窗，
             #     弹窗开着会挡背包传送——22:07:36 传送失败实证）
             _dismiss_dialog(gateway, hwnd)
+            # ★2026-09-14 钉位：传送按钮（_TP_BAG_BTN_RECT）是固定标定坐标，
+            #   背包被拖拽会点偏 → 传送前钉回默认位（全地图刷怪同款先例）
+            _panel_pin_defaults(gateway)
+            _sleep(random.uniform(0.2, 0.35))
             # 3a) 背包传送按钮直传该门派
             if not zhuagui_teleport(gateway=gateway, hwnd=hwnd, dest=sect, verbose=verbose):
                 logger.warning("闯关：传送 %s 失败，中止" % sect)
