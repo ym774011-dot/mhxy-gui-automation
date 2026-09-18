@@ -1611,6 +1611,102 @@ def _peek_mission_target(gateway, pid=None):
         pass
     return tgt
 
+# ---- 摄妖香（2026-09-13 移植自 CHUANGGUAN，防跨图走路遇敌）----
+#   规则：接闯关后用一次；包有→直接用；没有→商城买（ZGUI._mall_buy_item）→用；
+#   25 分钟内已用则跳过（时间闸，防重入连环消费，香持续 25-30 分钟）。
+_INCENSE_GUARD_S = 1500.0
+_INCENSE_TS = 0.0
+
+
+def _sheaoxiang_pos(gateway):
+    """背包中摄妖香的物品坐标 (x,y)；无/包未开返回 (0,0)。同天眼读小动画。"""
+    code = r"""
+local j = tp.主界面 and tp.主界面.界面数据
+local pd = type(j) == 'table' and type(j[3]) == 'table' and j[3].物品数据
+if type(pd) ~= 'table' then __out = '0,0' return end
+for i = 1, 40 do
+  local it = pd[i]
+  if type(it) == 'table' and tostring(it.名称 or ''):find('摄妖香') then
+    local sa = it.小动画
+    if type(sa) == 'table' then
+      local x = tonumber(sa.x)
+      local y = tonumber(sa.y)
+      if x and y and x > 0 and y > 0 then
+        __out = string.format('%d,%d', x, y)
+        return
+      end
+    end
+  end
+end
+__out = '0,0'
+"""
+    r = _lua_read(gateway, code)
+    try:
+        x, y = [int(round(float(v))) for v in r.split(",")]
+        return (x, y)
+    except Exception:
+        return (0, 0)
+
+
+def MPCG_ensure_incense(gateway: str, hwnd=None, pid=None, verbose: bool = False):
+    """确保摄妖香已使用（★2026-09-13 移植自 CHUANGGUAN：报名与续跑通用，
+    跨图走路遇敌防护）。包有→右键直接用；没有→商城买→用；25 分钟护栏防连环消费。
+    任何一步失败仅提示、不阻断闯关主链路。"""
+    global _INCENSE_TS
+    if time.time() - _INCENSE_TS < _INCENSE_GUARD_S:
+        if verbose:
+            print("[香] %d 分钟内已使用，跳过" % int((time.time() - _INCENSE_TS) / 60), flush=True)
+        return True
+    if hwnd is None and pid is not None:
+        hwnd = _bind_hwnd(gateway, pid)
+    if hwnd is None:
+        return False
+    try:
+        from tasks.library import ZGUI as _ZGUI  # 复用商城购买（全 Lua 定位+闭环验证）
+
+        def _use_from_bag():
+            """背包中找摄妖香并右键使用；返回是否成功。"""
+            x, y = 0, 0
+            for _ in range(6):
+                x, y = _sheaoxiang_pos(gateway)
+                if x > 0 and y > 0:
+                    break
+                time.sleep(random.uniform(0.5, 0.8))
+            if x <= 0 or y <= 0:
+                return False
+            cx, cy = _ZGUI._bag_cell_click_pos(x, y)
+            _click(hwnd, cx, cy, rbutton=True)
+            time.sleep(random.uniform(0.6, 1.0))
+            return True
+
+        if not _open_bag(gateway, hwnd):
+            return False
+        if _use_from_bag():
+            _INCENSE_TS = time.time()
+            if verbose:
+                print("[香] 摄妖香已使用（背包现有）", flush=True)
+            return True
+        # 没有 → 买个再用
+        if verbose:
+            print("[香] 背包无摄妖香，购买...", flush=True)
+        if not _ZGUI._mall_buy_item(gateway, hwnd, "摄妖香", bag_verify="摄妖香"):
+            print("[香][warn] 摄妖香购买失败，跳过使用（不阻断）", flush=True)
+            return False
+        if not _open_bag(gateway, hwnd):
+            return False
+        if _use_from_bag():
+            _INCENSE_TS = time.time()
+            if verbose:
+                print("[香] 摄妖香已购买并使用", flush=True)
+            return True
+        print("[香][warn] 背包未找到摄妖香（购买可能未生效），跳过", flush=True)
+        return False
+    except Exception as e:
+        print("[香][warn] 摄妖香流程异常（不阻断）: %s" % e, flush=True)
+        return False
+
+
+
 
 def MPCG_auto_round(
     timeout: int = 5400,
@@ -1668,6 +1764,11 @@ def MPCG_auto_round(
         try:
             ar = MPCG_accept_round(gateway=gateway, pid=pid, do_goto=False, verbose=verbose)
             print(f"  接下一轮: {ar.get('message')}", flush=True)
+            # ★2026-09-13 下一轮开场前确保摄妖香（跨图走路防遇敌；护栏防重复消费）
+            try:
+                MPCG_ensure_incense(gateway, pid=pid, verbose=verbose)
+            except Exception as _e:
+                print(f"[香][warn] 下一轮确保异常: {_e}", flush=True)
         except Exception as e:
             print(f"  接下一轮[ERR] {e}", flush=True)
         steps = 0            # 下一轮重新统计（仅进度展示用）
@@ -1677,6 +1778,11 @@ def MPCG_auto_round(
         return False
 
     print("=== MPCG_auto_round 整轮自动开始（终止条件：闯关完成 / rounds 跑满 / 超时）===", flush=True)
+    # ★2026-09-13 摄妖香：进场先确保（首轮/续跑通用，护栏防重复消费），防跨图走路遇敌
+    try:
+        MPCG_ensure_incense(gateway, pid=pid, verbose=verbose)
+    except Exception as _e:
+        print(f"[香][warn] 进场确保异常: {_e}", flush=True)
     while time.time() - t0 < timeout:
         step_t0 = time.time()
         # ★验证码优先 V7 直解（2026-08-26：MPCG 死循环期间引擎无法介入，必须自足处理）：
