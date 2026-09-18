@@ -307,51 +307,16 @@ __out = tostring(v and v.本类开关)""") == "true"
 
 
 def _open_quick_dialog(gw, hwnd):
-    """确认「快捷传送」对话框（[8]）已打开。
+    """确认「快捷传送」对话框（[8]）已打开（★2026-09-18 改为委托 ZGUI 公共件）。
 
-    ★2026-09-17 用户定案（最新）：常规流程下**不需要再点快捷传送开关**——
-      组队阶段已经把它打开了，之后一直开着。**只有游戏掉线重新登录后
-      跳过组队**（--skip-team）时，才需要点开关把它重新打开。
-
-    因此本函数分两条路：
-      • 常规（_SKIP_TEAM=False）：只读 [8] 开关确认即可；意外未开 →
-        只告警**不点任何开关**，交给上层/下一轮重试。
-      • 跳过组队（_SKIP_TEAM=True，掉线重登）：点「快捷传送」按钮 _TP_BTN
-        重开；再失败退化为点一次 (158,26) 重新展开菜单。
+    策略不变（★2026-09-17 用户定案）：常规流程下**不点开关**（组队阶段已把它
+    开好、之后一直开着）；**只有掉线重登跳过组队**（--skip-team）时才允许点
+    「快捷传送」按钮重开。实现统一走 `ZGUI.ensure_quick_dialog()`：
+      先收背包 → 读 [8]（已开就直接返回，不动它，防点关）→ 未开才点 →
+      每次回读确认 → 仍不开退化点一次 (158,26) 展开菜单再点。
     """
-    try:
-        ZGUI._bag_ensure_close(gw, hwnd)
-        ZGUI._sleep(random.uniform(0.2, 0.35))
-    except Exception:
-        pass
-    if sw8(gw):
-        return True
-    # [8] 未开。★常规流程组队已开好，这里不再点开关（用户定案）。
-    if not _SKIP_TEAM:
-        _LOG.warning("刷怪：快捷传送对话框未开（常规流程本应由组队打开，"
-                     "不点开关）")
-        return False
-    # 跳过组队（掉线重登后）→ 允许点开关重开
-    _LOG.info("刷怪：跳过组队模式 → 快捷传送对话框未开，点开关重开")
-    # [8] 未开：点「快捷传送」菜单按钮（不碰 158,26）
-    for _try in range(2):
-        ZGUI.post_click(hwnd, random.randint(_TP_BTN[0], _TP_BTN[2]),
-                        random.randint(_TP_BTN[1], _TP_BTN[3]), gateway=gw)
-        ZGUI._sleep(random.uniform(0.6, 0.85))
-        if sw8(gw):
-            _LOG.info("刷怪：快捷传送对话框未开，已点「快捷传送」按钮重开")
-            return True
-    # 兜底：菜单被收起时才点一次 (158,26) 重新展开
-    _LOG.warning("刷怪：快捷传送对话框未开，退化点 (158,26) 重新展开菜单")
-    ZGUI.post_click(hwnd, 158, 26, gateway=gw)
-    ZGUI._sleep(random.uniform(0.4, 0.6))
-    ZGUI.post_click(hwnd, random.randint(_TP_BTN[0], _TP_BTN[2]),
-                    random.randint(_TP_BTN[1], _TP_BTN[3]), gateway=gw)
-    ZGUI._sleep(random.uniform(0.6, 0.85))
-    if sw8(gw):
-        return True
-    _LOG.warning("刷怪：快捷传送对话框未开（可能游戏重启）")
-    return False
+    return ZGUI.ensure_quick_dialog(hwnd, gw, allow_click=_SKIP_TEAM,
+                                    tp_btn=_TP_BTN, log=_LOG)
 
 
 def _travel_quick(gw, hwnd, mapname):

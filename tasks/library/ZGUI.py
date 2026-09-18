@@ -3538,6 +3538,113 @@ __out = tostring(b and b.加载结束)''')
     return False
 
 
+def reset_battle_latch():
+    """清进战闩锁（★2026-09-18 用户定案）。
+
+    登录 / 重绑网关后，旧闩锁（`_BATTLE_LATCH` 命中即武装 `_BATTLE_LATCH_S` 秒）
+    已经失效 —— 不清会白拦接下来的 CALL。凡"登录完成 / 换绑网关成功"处都应调它。
+    """
+    _BATTLE_LATCH["ts"] = 0.0
+
+
+# ---- 「快捷传送」对话框（界面数据[8]）公共操作（★2026-09-18 用户定案提公共件）----
+_QUICK_DIALOG_INDEX = 8
+_QUICK_TP_BTN = (269, 45, 322, 58)      # 「快捷传送」按钮（客户区，与刷怪/仓库存一致）
+_QUICK_MENU_TOGGLE = (158, 26)          # 快捷菜单展开位（兜底用）
+
+
+def quick_dialog_on(gateway=DEFAULT_GATEWAY, **kw):
+    """→ 快捷传送/快捷副本对话框（界面数据[8]）是否打开；读不到返回 None。"""
+    r = _lua_call(gateway, r"""
+local v = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
+__out = tostring(v and v.本类开关)""")
+    if r is None or r == "":
+        return None
+    return r == "true"
+
+
+def close_quick_dialog(hwnd, gateway=DEFAULT_GATEWAY, tries=3, log=None):
+    """关掉卡住的 [8] 对话框（★2026-09-18）。
+
+    掉线/卡死后 [8] 可能残留开着并挡住世界点击（"快捷传送界面打不开"的常见原因）。
+    做法：优先点它**自带的关闭按钮**（Lua 给包围盒，点 x+8,y+8），每轮回读确认；
+    仍关不掉则兜底 ESC（PostMessage VK_ESCAPE）。返回 True = 已关闭。
+    """
+    _warn = (log.warning if log else logger.warning)
+    for _ in range(max(1, int(tries))):
+        if quick_dialog_on(gateway) is not True:
+            return True
+        pos = _lua_call(gateway, r'''
+local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
+local b = d and d.关闭 and d.关闭.包围盒
+if not (d and d.本类开关 == true) or not b then __out = '' return end
+__out = string.format('%d,%d', b.x + 8, b.y + 8)''') or ""
+        if "," not in pos:
+            break
+        try:
+            x, y = [int(float(s)) for s in pos.split(",")]
+        except ValueError:
+            break
+        post_click(hwnd, x, y, gateway=gateway)
+        _sleep(0.8)
+    if quick_dialog_on(gateway) is True:
+        _warn("关闭按钮无效 → 兜底 ESC")
+        try:
+            user32.PostMessageW(hwnd, 0x0100, 0x1B, 0)
+            user32.PostMessageW(hwnd, 0x0101, 0x1B, 0xC0000001)
+        except Exception:
+            pass
+        _sleep(0.6)
+    return quick_dialog_on(gateway) is not True
+
+
+def ensure_quick_dialog(hwnd, gateway=DEFAULT_GATEWAY, allow_click=True,
+                        tp_btn=None, log=None, close_bag=True):
+    """确保「快捷传送」[8] 对话框是开着的（★2026-09-18 公共件）。
+
+    幂等、**先读后点、点后回读**（[8] 是切换式开关，盲点会把"开"点成"关"）。流程：
+      1) 先收背包（背包面板会盖住左上角快捷菜单）；
+      2) 读 [8]：已开 → 直接返回 True（**不动它**，防点关）；
+      3) 未开且 allow_click=False → 只告警不点（常规流程本应由组队阶段开好）；
+      4) 未开且允许点 → 点「快捷传送」按钮（≤2 次，每次回读）；仍不开 →
+         点一次菜单展开位 (158,26) 再点按钮；回读确认。
+    返回 True = [8] 已开。
+    """
+    _log = (log.info if log else logger.info)
+    _warn = (log.warning if log else logger.warning)
+    if close_bag:
+        try:
+            _bag_ensure_close(gateway, hwnd)
+            _sleep(0.3)
+        except Exception:
+            pass
+    st = quick_dialog_on(gateway)
+    if st is True:
+        return True
+    if not allow_click:
+        _warn("快捷传送对话框未开（常规流程本应由组队打开，不点开关）")
+        return False
+    btn = tp_btn or _QUICK_TP_BTN
+    _log("快捷传送对话框未开 → 点「快捷传送」按钮重开")
+    for _try in range(2):
+        post_click(hwnd, random.randint(btn[0], btn[2]),
+                   random.randint(btn[1], btn[3]), gateway=gateway)
+        _sleep(random.uniform(0.6, 0.85))
+        if quick_dialog_on(gateway) is True:
+            _log("快捷传送对话框已重开")
+            return True
+    _warn("仍未开 → 退化点一次菜单展开位 (%d,%d) 再点按钮" % _QUICK_MENU_TOGGLE)
+    post_click(hwnd, _QUICK_MENU_TOGGLE[0], _QUICK_MENU_TOGGLE[1], gateway=gateway)
+    _sleep(random.uniform(0.4, 0.6))
+    post_click(hwnd, random.randint(btn[0], btn[2]),
+               random.randint(btn[1], btn[3]), gateway=gateway)
+    _sleep(random.uniform(0.6, 0.85))
+    ok = quick_dialog_on(gateway) is True
+    if not ok:
+        _warn("快捷传送对话框仍打不开（可能游戏重启/通道未通）")
+    return ok
+
+
 def battle_probe(gateway=DEFAULT_GATEWAY, **kw):
     """登录/重绑后的一次性「战斗体检」（只读、零点击）。
 
@@ -3606,6 +3713,8 @@ def battle_login_gate(gateway=DEFAULT_GATEWAY, hwnd=None, log=None,
     掉线卡在战斗里（卡住不动/UI 不关/快捷传送打不开）时，它把"能不能动"先判清楚。
     """
     _log = (log.info if log else logger.info)
+    # ★登录/重绑后旧闩锁已失效：先清，防它白拦接下来 _BATTLE_LATCH_S 秒的 CALL。
+    reset_battle_latch()
     try:
         inb, kind, d = battle_probe(gateway)
     except Exception as e:
@@ -4780,6 +4889,8 @@ def zhuagui_loop(gateway=None, roles=None, rounds=1, member_mode=False,
                 _os.environ.pop("MHXY_GROUP", None)
             else:
                 _os.environ["MHXY_GROUP"] = _old
+        if ok:
+            reset_battle_latch()      # ★2026-09-18 换绑成功 → 旧进战闩锁已失效，清掉
         r_entry["网关"] = bool(ok)
         if not ok:
             r_entry["说明"] = "网关换绑失败: %s" % (info,)
