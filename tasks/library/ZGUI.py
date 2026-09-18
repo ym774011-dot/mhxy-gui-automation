@@ -4257,7 +4257,15 @@ if rp ~= '' and rp ~= '等待回合' and rp ~= 'nil' then inb = true end
 local a = b.窗口 and b.窗口.自动栏
 local vis = (type(a) == 'table' and a.可视 == true)
 if vis then inb = true end
-__out = (inb and '1' or '0') .. '|' .. (vis and tostring(a.状态 or '') or '-')
+-- ★2026-09-18 修正（pid1844 实测）：状态 与 可视 无关 —— 脱战时 可视=false，
+--   但 状态='取消'（已开）。旧版写 `vis and tostring(a.状态) or '-'`，状态被 vis
+--   挡死 → 永远读成 '-'→None（这才是"状态判定看着不可用"的真因，不是字段不存在）。
+local st = ''
+if type(a) == 'table' then
+  local ok, s = pcall(function() return a.状态 end)
+  if ok and s ~= nil then st = tostring(s) end
+end
+__out = (inb and '1' or '0') .. '|' .. (st ~= '' and st or '-')
 """
 
 
@@ -4275,23 +4283,21 @@ def zhuagui_auto_battle_state(gateway=DEFAULT_GATEWAY, **kw):
     return f == "1", (s if s != "-" else None)
 
 
-# ★2026-09-18 **真机实测修正**（pid4160）：本服**没有**「自动栏.状态」字段 ——
-#   `tp.战斗类.窗口.自动栏.状态` = nil，且 可视/可视化 均为 false（即便 命令回合/敌方7）。
-#   所以「用 Lua 状态判定自动是否已开」在本服**不可行**：任何"只在读到未开才点"的条件
-#   都会恒不点（自动战斗永远不开，见 e82002f 回归）。
-#   回到保守且已知可用的模型：**本会话每 pid 只点一次**。依据是「自动」是**开关**——
-#   开一次后跨战斗常开，重复点会把已开的点关；因此既不能读不到就点，也不能每场都点。
-#   ★已知未解项：重登（同进程同 pid）后闸不重置 → 新会话不再补点；需 pp_gui 侧在
-#     重登/归队时发出信号（或重启脚本）来清闸。
-_AUTO_ONCE = {}              # pid -> True：本会话（本进程）已点过「自动」
+# ★2026-09-18 **真机实测**（pid1844；用户提示"自动面板上有 回合/取消/重置/暂离"后挖到）：
+#   状态字段**确实存在** —— `tp.战斗类.窗口.自动栏.状态`：**'取消' = 自动已开；'自动' = 未开**。
+#   之前"本服没有该字段"是**误判**，真因在 `_AUTO_STATE_LUA`：状态 被挂在 `可视` 之后
+#   （`vis and tostring(a.状态) or '-'`），而实测 `可视=false` 时 状态 依然有值
+#   （脱战残留 = '取消'）→ 永远读成 None。
+#   → 现在**直读 状态**；策略：'取消'→不点；'自动'→点；读不到 → 退回"本会话每 pid 点一次"闸兜底。
+_AUTO_ONCE = {}              # pid -> True：状态读不到时的兜底闸（每会话只点一次）
 _AUTO_LOCK = _threading.Lock()
 
 
 def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **kw):
-    """进战斗时确保「自动」开启（★2026-09-18 真机修正版）。
+    """进战斗时确保「自动」开启（★2026-09-18：状态优先 + 会话闸兜底）。
 
-    本服读不到自动开关状态（`自动栏.状态` 恒 nil）→ **不能靠状态判定**；
-    改用「本会话每 pid 只点一次」：自动是开关、开一次后跨战斗常开，重复点会把它点关。
+    读 `自动栏.状态`：'取消'=已开→不点（防点关）；'自动'=未开→点一次。
+    状态读不到（None/''）→ 退回 `_AUTO_ONCE`：本会话每 pid 只点一次。
     返回 'clicked'/'auto_on'/'idle'。
     """
     if hwnd is None:
@@ -4304,7 +4310,7 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
     if not pid:
         return "idle"
     with _AUTO_LOCK:
-        inb, _st = zhuagui_auto_battle_state(gateway)   # 仅用其战斗判定（st 本服恒 None）
+        inb, st = zhuagui_auto_battle_state(gateway)
         if not inb:
             return "idle"
         # 每场战斗把「自动栏」停靠左下角（原逻辑一字不改）
@@ -4312,8 +4318,10 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
 local a = tp and tp.战斗类 and tp.战斗类.窗口 and tp.战斗类.窗口.自动栏
 if type(a) == 'table' then a.x = 30 a.y = 525 end __out = '1'
 ''')
-        if _AUTO_ONCE.get(pid):
+        if st == "取消":                 # 明确已开 → 不点（防把开关点关）
             return "auto_on"
+        if st != "自动" and _AUTO_ONCE.get(pid):
+            return "auto_on"             # 状态读不到 → 退回会话闸（本会话已点过就不再点）
         _AUTO_ONCE[pid] = True
         x0, y0, x1, y1 = _AUTO_BTN_RECT
         post_click(hwnd, random.randint(x0 + 8, x1 - 8),
