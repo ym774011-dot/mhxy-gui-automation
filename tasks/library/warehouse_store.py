@@ -6,9 +6,10 @@
   2) 传送对话框 → 仓库（免费）(194,410) → 精确落地 长安 [355,33]
   3) tp.地图.npc 找 仓库管理员 → 点它 → 红字行首行（打开仓库）→ 面板开
   4) 逐件存：可叠物品（有 数量）需 >= _STORE_STACK_MIN(99) 才存；
+     豁免 99（有多少存多少）：魔兽要诀/上古锻造图策/元宵；
      ★2026-09-17 修复：上古锻造图策 只看等级不看种类——**仅等级≥145 才存**
        （<145 或等级读不到均不存，低等级由出售链路卖）；
-     保留：第一排（格子id<=5）+ 天眼/合成旗（名称子串）；
+     保留（永不存）：第一排（格子id<=5）+ 天眼/合成旗/飞行旗/飞行符；
      同物品同分页：先在仓库里找同名物品所在分页，找不到用第一个未满分页
   5) 仓库满判定=功能判定：右键后行囊件数下降=成功；没降=满 → 换下一分页重试
   6) 退出 (646,408) 收面板
@@ -38,9 +39,18 @@ _WH_BTN_DX, _WH_BTN_W, _WH_BTN_H = 25, 22, 23
 _NPC_FALLBACK = (298, 305)             # 落点[355,33]时仓库管理员固定屏幕位（实测）
 
 _STORE_STACK_MIN = 99                  # 可叠物品攒满 99 才存（用户定案）
-_STORE_NO_STACK_MIN = ("魔兽要诀",)    # ★2026-09-12 用户更正：魔兽要诀不可叠加
+# ★2026-09-15 用户定案：元宵不等 99，背包有多少存多少。
+#   实测（pp_probe 22:24，队长 p12928）：元宵 类型=功能、
+#   带 参数=防资/攻资等区分属性，同名不叠加各占一格，
+#   实测数量仅 9/3/2/4/3 ① 99 门槛永远等不到 → 豁免 99。
+#   匹配用“元宵”子串（覆盖芝麻/豆沙桂花等变体）。
+_STORE_NO_STACK_MIN = ("魔兽要诀", "上古锻造图策", "元宵")  # ★2026-09-12 用户更正：魔兽要诀不可叠加
+                                       # ★2026-09-14 上古锻造图策≥145 保留存仓库
                                        # （每本占一格）→ 不限 99，有多少存多少
-_STORE_KEEP_NAMES = ("天眼", "合成旗", "飞行旗")   # 名称子串保护
+                                       # ★2026-09-15 元宵同理：不等 99
+# ★2026-09-15 用户定案：飞行符不存仓库（传送工具，常驻背包）。
+#   实测队长背包 飞行符×151，数量 ≥ 99 会直接命中门槛被存走 → 必须保护。
+_STORE_KEEP_NAMES = ("天眼", "合成旗", "飞行旗", "飞行符")   # 名称子串保护
 _STORE_KEEP_SLOTS = 5                  # 第一排（格子id<=5）保留
 
 # ★2026-09-17 用户定案：「满包先卖后存」的出售白名单/保留名单，取自 ZGUI 单一真源
@@ -65,11 +75,23 @@ def _log(msg):
     _Z.logger.info("[存仓] " + msg)
 
 
-def _click_box(hwnd, gw, box, tag=""):
+def _click_box(hwnd, gw, box, tag="", readback=None):
+    """点一个标定矩形。readback 给出时点后回读 [8].本类开关 是否等于该值，
+    不等会带随机偏移再点一次。
+
+    ★2026-09-15 新增（用户实测"菜单要开却关掉"类乱态防护）：菜单开关是
+      切换式，被背包/队伍名条干扰后点一下可能反向，只发点不校验会把
+      "关"当"开"。返回值仍为 (x, y) 不变，调用方无需改。
+    """
     x0, y0, x1, y1 = box
     x = random.randint(x0 + 3, max(x0 + 4, x1 - 3))
     y = random.randint(y0 + 1, max(y0 + 2, y1 - 1))
     _Z.post_click(hwnd, x, y, gateway=gw)
+    if readback is not None:
+        time.sleep(0.7)
+        if _quick_menu_on(gw) != readback:
+            _Z.post_click(hwnd, x + random.randint(-10, 10),
+                          y + random.randint(-4, 4), gateway=gw)
     return x, y
 
 
@@ -182,15 +204,40 @@ local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界
 __out = tostring(d and d.本类开关)''') == "true"
 
 
+def _quick_menu_on(gw):
+    """快捷菜单/快捷传送界面（界面[8]）是否开着。None=通道失败状态未知。"""
+    r = _Z._lua_call(gw, r"""
+local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
+__out = tostring(d and d.本类开关)""")
+    if r is None or r == "":
+        return None
+    return r == "true"
+
+
 def _go_warehouse(hwnd, gw):
     """快捷菜单 → 快捷传送 → 仓库（免费）。返回 True=已到长安仓库点。
 
     ★2026-09-12 改功能性校验：菜单开关是切换式且像素会被队友名条干扰，
       改为"点开关→点快捷传送→读界面8开关"配对重试（最多 4 轮），不再看图。
+    ★2026-09-15 用户定案（点快捷传送前必须关背包）：背包面板开着会盖住
+      左上角快捷菜单 (149,10)-(173,41)，点开关直接落进背包 → 4 轮全空转。
+      与 run_unlimited_hunt._open_quick_dialog 同款先例。
+      同时给菜单开关加"点后回读"：切换式按钮被干扰后可能反向，
+      点完校验 [8].本类开关，菜单该开时确认真开、该收时确认真收到位。
     """
+    # ★2026-09-15 先关背包（关不掉也继续：关包失败只告警，本轮仍尝试开菜单）
+    try:
+        if not _Z._bag_ensure_close(gw, hwnd):
+            _log("点快捷传送前背包未确认关闭（继续尝试）")
+    except Exception:
+        pass
+    time.sleep(0.3)
+    if _quick_menu_on(gw) is True:
+        _click_box(hwnd, gw, _MENU_TOGGLE, "菜单开关", readback=False)
+        time.sleep(0.8)
     opened = False
     for _ in range(4):
-        _click_box(hwnd, gw, _MENU_TOGGLE, "菜单开关")
+        _click_box(hwnd, gw, _MENU_TOGGLE, "菜单开关", readback=True)
         time.sleep(0.9)
         _click_box(hwnd, gw, _TP_BTN, "快捷传送")
         time.sleep(1.5)
@@ -262,6 +309,11 @@ def _call_warehouse_npc(hwnd, gw, rounds=3):
             _log("第 %d 轮未开面板 → 重新传送仓库洗牌" % rnd)
             if not _go_warehouse(hwnd, gw):
                 continue
+        # ★2026-09-15 重传洗牌轮：_go_warehouse 返回时可能已把菜单点关
+        #   （最后一轮配对点击的收尾态），显式确认菜单已收起，防残留挡点击
+        if _quick_menu_on(gw) is True:
+            _click_box(hwnd, gw, _MENU_TOGGLE, "菜单开关", readback=False)
+            time.sleep(0.6)
         _close_dialogs(hwnd, gw)
         try:
             _Z._bag_ensure_close(gw, hwnd)
@@ -304,6 +356,10 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
         hwnd = find_hwnd_by_pid(pid)
     if not hwnd:
         return False, 0, "找不到窗口"
+    # ★2026-09-13 面板钉位：仓库面板/背包被拖拽会令分页/退出/出售固定坐标
+    #   失准 → Lua 复位（仓库[14]→(200,395)、背包[3]→(0,0)）
+    _Z._panel_pin_defaults(gw)
+    time.sleep(0.4)
     # ★2026-09-12 用户要求"完美实现"：到仓库/开面板失败自动重试（2 次尝试）
     opened = False
     last_err = ""
@@ -345,25 +401,33 @@ def zhuagui_store_all(pid, keep_names=_STORE_KEEP_NAMES, stack_min=_STORE_STACK_
 
     # ★用户定案：不预扫描——直接在当前分页开存；存不进去（该页满）就切下一页
     #   继续；26 页都满才放弃该件。cur 从面板当前分页开始（延续上次进度）。
+    # ★2026-09-16 用户定案（性能）：分页切换下沉到「存失败」分支——
+    #   原实现每存一件都先 _switch_page 一次（每件白多一次点击
+    #   +1.0~1.4s 回读等待），而同一页未满时完全不需要切。
+    #   现改为：当前页已确认就位 → 直接右键存；成功则同页继续存下一件（零切页）；
+    #   仅失败（页满）时才切下一页重试。
     st = _panel(hwnd, gw)
     cur = st.get("page") or 1
+    cur_ready = False          # 当前 cur 页是否已确认就位（避免重复切页）
     stored = 0
     for it in todo:
         for _ in range(26):
-            if not _switch_page(hwnd, gw, cur):
+            if not cur_ready and not _switch_page(hwnd, gw, cur):
                 cur = cur % 26 + 1
                 continue
+            cur_ready = True
             before = _panel(hwnd, gw)["bag"]
             _Z.post_right_click(hwnd, it["x"], it["y"], gateway=gw)
             time.sleep(random.uniform(1.2, 1.6))
             after = _panel(hwnd, gw)["bag"]
-            if after < before:                    # 存成功 → 该页继续放下一件
+            if after < before:                    # 存成功 → 同页继续放下一件
                 stored += 1
                 _log("p%d %s → 分页%d（余 %d 件）" % (pid, it["name"], cur, after))
                 break
             _log("p%d 分页%d 存 %s 未生效（满页）→ 下一页"
                  % (pid, cur, it["name"]))
             cur = cur % 26 + 1
+            cur_ready = False                 # 切页后需重新确认就位
         else:
             _log("p%d %s 26 个分页都满，放弃该件" % (pid, it["name"]))
     _exit_panel(hwnd, gw)
