@@ -4518,6 +4518,16 @@ def zhuagui_ensure_auto_battle(hwnd=None, gateway=DEFAULT_GATEWAY, log=None, **k
     with _AUTO_LOCK:
         inb, st = zhuagui_auto_battle_state(gateway)
         if not inb:
+            # ★2026-09-18 脱战校正（真机实证）：**战斗中 `自动栏.状态` 读不到**（实测 nil，
+            #   加载/命令/执行回合都是 nil），但**脱战时能读到** —— '取消'=自动已开 /
+            #   '自动'=未开（15:35 脱战实测 '取消'）。
+            #   用它校正"本会话只点一次"的闸：脱战读到"未开"→ 清闸，让**下一场重新补点**。
+            #   否则"那一次点击没生效"就永远不再点（pid15680 实证：22:00:53 点了却没开，
+            #   之后整晚不再点）。读到"已开"则保持，绝不重复点（防点关）。
+            if st == "自动":
+                if _AUTO_ONCE.pop(pid, None) is not None:
+                    (log.info if log else logger.info)(
+                        "脱战读到 自动态=未开 → 清闸，下一场重新补点「自动」")
             return "idle"
         # 每场战斗把「自动栏」停靠左下角（原逻辑一字不改）
         _lua_call(gateway, r'''
