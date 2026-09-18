@@ -553,6 +553,10 @@ def build_parser():
     p.add_argument("--list-roles", action="store_true", help="列出已开游戏窗口与角色后退出")
     p.add_argument("--dry-run", action="store_true",
                    help="只取一次内存快照验证探针与网关，不跑轮次")
+    # ★2026-09-18：PP GUI 看门狗补拉 / 补组重拉会带 --skip-team（"跳过组队路径"标记）；
+    #   接受并忽略——否则 argparse 报错退出 → 被判"脚本已死"→ 反复重拉，任务跑不起来。
+    p.add_argument("--skip-team", action="store_true",
+                   help="兼容 PP GUI 跳过组队路径的拉起（本脚本不使用）")
     return p
 
 
