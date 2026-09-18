@@ -56,6 +56,70 @@ GATEWAY_PLANT = r"E:\DS\mhxy-mcp-gateway\tools\pzxy_plant.py"
 RUN_UNLIMITED = os.path.join(ROOT, "run_unlimited_test.py")
 MEMBER_LOOP = os.path.join(HERE, "member_sell_loop.py")
 CONFIG_PATH = os.path.join(ROOT, "test_data", "pp_gui_config.json")
+
+# ★2026-09-13 脚本方案注册表（GUI 选择器）：
+#   选定方案后，【启动脚本】/恢复/看门狗补拉均按方案拉起对应脚本；
+#   组队流程本身不变（始终先自动组队，成功后拉所选脚本）。
+#   约定：leader 脚本放项目根目录，member 脚本放 tools/；
+#   新方案（如打副本）只需加一项，脚本支持
+#   --gateway/--role（队长）或 --pid/--gateway（队员）参数即可。
+#   例： "打副本": {"leader": "dungeon_leader.py", "member": "dungeon_member.py"},
+SCRIPT_PROFILES = {
+    "抓鬼+闯关+顺手打": {
+        "leader": "run_unlimited_test.py",
+        "member": "member_sell_loop.py",
+        # ★2026-09-14 方案内分组：队长脚本专属参数（仅本方案传）
+        "leader_args": ["--timeout", "20", "--wait-dialog", "1.2"],
+    },
+    "全地图刷怪": {
+        "leader": "run_unlimited_hunt.py",
+        "member": "member_sell_loop.py",
+        "leader_args": [],
+    },
+    # ★2026-09-14 独立门派闯关方案：只做门派闯关（队长脚本 run_chuangguan.py
+    #   循环 CHUANGGUAN.run），不掺抓鬼/扫怪；队员沿用 member_sell_loop。
+    "门派闯关": {
+        "leader": "run_chuangguan.py",
+        "member": "member_sell_loop.py",
+        "leader_args": [],
+    },
+    # ★2026-09-16 独立副本方案：快捷传送→快捷副本→红字识别开始XX副本→
+    #   点进入XX副本→自动战斗（战斗中不 CALL）。三副本，单副本一天两次。
+    "打副本": {
+        "leader": "run_fuben.py",
+        "member": "member_sell_loop.py",
+        "leader_args": [],
+    },
+}
+DEFAULT_PROFILE_NAME = "抓鬼+闯关+顺手打"
+
+
+def profile_scripts(profile):
+    """返回 (leader脚本路径, member脚本路径)；未知方案回落默认。"""
+    p = SCRIPT_PROFILES.get(profile) or SCRIPT_PROFILES[DEFAULT_PROFILE_NAME]
+    return (os.path.join(ROOT, p["leader"]), os.path.join(HERE, p["member"]))
+
+
+def profile_task_names(profile):
+    """该方案两个脚本的 basename 集合（去 .py，进程匹配用）。"""
+    p = SCRIPT_PROFILES.get(profile) or SCRIPT_PROFILES[DEFAULT_PROFILE_NAME]
+    return {os.path.splitext(p["leader"])[0], os.path.splitext(p["member"])[0]}
+
+
+def profile_leader_args(profile):
+    """该方案队长脚本额外参数（★2026-09-14 用户定案：按方案分组传参，
+    不再给所有方案硬塞 抓鬼专用 --timeout/--wait-dialog）。"""
+    p = SCRIPT_PROFILES.get(profile) or SCRIPT_PROFILES[DEFAULT_PROFILE_NAME]
+    return list(p.get("leader_args") or [])
+
+
+def profile_all_task_names():
+    """全部方案脚本 basename 并集（清理/打断残留脚本用）。"""
+    out = set()
+    for _p in SCRIPT_PROFILES.values():
+        out.add(os.path.splitext(_p["leader"])[0])
+        out.add(os.path.splitext(_p["member"])[0])
+    return out
 PORTS = [18091, 18092, 18093, 18094, 18095, 18096, 18097, 18098]
 
 user32 = ctypes.windll.user32
@@ -430,6 +494,8 @@ class Instance:
         return "队长" if self.role == "leader" else "队员"
 
 
+
+TEAM_SIZE = 5   # ★2026-09-13 用户定案：组队必须满 5 人才算成功
 class PPApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -438,6 +504,8 @@ class PPApp(tk.Tk):
         self.minsize(760, 520)
 
         self.cfg = self._load_cfg()
+        self.script_profile = (self.cfg.get("script_profile")
+                               or DEFAULT_PROFILE_NAME)
         self.lock = threading.Lock()
         self.instances = []
         self.logq = []
@@ -551,6 +619,13 @@ class PPApp(tk.Tk):
         self.btn_member = ttk.Button(bar, text="启动队员", width=12,
                                      command=lambda: self._launch("member"))
         self.btn_member.pack(side="left", padx=6)
+        ttk.Label(bar, text="脚本方案:").pack(side="left")
+        self.var_profile = tk.StringVar(value=self.script_profile)
+        self.cb_profile = ttk.Combobox(bar, textvariable=self.var_profile,
+                                       values=list(SCRIPT_PROFILES.keys()),
+                                       state="readonly", width=18)
+        self.cb_profile.pack(side="left", padx=(0, 8))
+        self.cb_profile.bind("<<ComboboxSelected>>", self._on_profile_sel)
         ttk.Button(bar, text="启动脚本", width=12,
                    command=self._start_all_tasks).pack(side="left", padx=6)
         # ★2026-09-07 暂停/恢复：暂停=人工接管（停任务脚本+冻结看门狗/掉线闭环）；
@@ -578,6 +653,17 @@ class PPApp(tk.Tk):
 
         self.txt = tk.Text(self, height=9, state="disabled", font=("Consolas", 9))
         self.txt.pack(fill="both", padx=8, pady=6)
+
+    def _on_profile_sel(self, _ev=None):
+        """脚本方案选择：只影响之后【启动脚本】/恢复/补拉拉起的脚本，
+        已运行的脚本按原方案跑到结束，不打断。"""
+        v = self.var_profile.get()
+        if v not in SCRIPT_PROFILES:
+            return
+        self.script_profile = v
+        self.cfg["script_profile"] = v
+        self._save_cfg()
+        self._log("脚本方案 → %s（下次拉起任务时生效）" % v)
 
     def _browse(self):
         p = filedialog.askopenfilename(
@@ -802,6 +888,48 @@ class PPApp(tk.Tk):
         return sat.read_pos_closed(find_hwnd_by_pid(leaders[0].pid),
                                    "file://pzxy_p%d" % leaders[0].pid)
 
+    def _leader_live(self, want_pos=False):
+        """取“真正在线的队长”。返回 pid，或 (pid, 坐标)。
+
+        ★2026-09-15 用户实锤（pp_gui.log 12:45:19～12:49:59，连刷 4 分半）：
+          队长侧每 20s 反复打印“联动信号已发布: 队长 p18368 就位 (2778, 1601)”，
+          队员侧同步每 20s 打印“联动校验未过（队长掉线/重启中）”。
+          两边都在说真话，却互相矛盾。
+        根因：旧判据用 `i.status == S_ONLINE`（字符串标签）断生死，但组队流程
+          一进阶段1 就把队长标成 S_TEAM（“组队中”，第 1014 行），要等流程走
+          到 _finish_tasks:1349 才回写 S_ONLINE。而本次队员进程死掉重启、成员卡在
+          4/5 < 5，approve_loop 永不满足退出条件 → 流程永不收尾 → 标签永不回写
+          → 归队队员被误判队长掉线 → 无法归队 → 成员数永远到不了 5
+          → 自锁死循环，不修不可能自愈。
+        更糟的是：旧写法第①条直接 return，后两条（信号 pid 比对、
+          坐标 ±60 校验）根本没机会执行——队员压根不去读队长坐标，
+          仅凭一个标签就判死刑。信号通道完全逆畅，是校验器自己把门
+          焊死了。
+        修法：不用状态标签断生死，改读队长的客观实时事实——窗口存活 +
+          坐标可读。status 属于“流程推进标记”，不应当“在线真相”。
+        want_pos=True 时同时返回已读到的坐标，供 _leader_link_ok 第③条
+          复用，免同一坐标读两次（省一条 Lua IPC 往返，也避免两处不一致）。
+        """
+        with self.lock:
+            lds = [i for i in self.instances if i.role == "leader"]
+        if not lds:
+            return (None, None) if want_pos else None
+        lds.sort(key=lambda i: i.status != S_ONLINE)
+        for _l in lds:
+            if find_hwnd_by_pid(_l.pid) is None:
+                continue
+            if _l.status in (S_RESTART, S_LAUNCH, S_PLANT, S_WAIT):
+                continue
+            _p = sat.read_pos_closed(find_hwnd_by_pid(_l.pid),
+                                     "file://pzxy_p%d" % _l.pid)
+            if _p is None:
+                continue
+            if _l.status != S_ONLINE:
+                self._log("[联动] 队长 p%d 状态为“%s”但实际在线（窗口+坐标可读）→ 放行联动"
+                          % (_l.pid, _l.status))
+            return (_l.pid, _p) if want_pos else _l.pid
+        return (None, None) if want_pos else None
+
     def _leader_link_ok(self, cand):
         """联动信号三重校验（★2026-09-10 用户重申的铁律）：
 
@@ -809,15 +937,18 @@ class PPApp(tk.Tk):
         ③ 这位队长**此刻**就位在大唐官府 [139,80] ±3 格（实时读坐标，不信
         30min 内的旧信号——队长掉线/没到锚点时队员绝不传送）。
         返回 (True, leader_pid) 或 (False, 原因串)。
+
+        ★2026-09-15：第①条从“查 status 标签”改为 _leader_live()（查窗口/坐标
+        客观事实）——否则队长挂着 S_TEAM 时会被误判“掉线/重启中”，
+        导致后两条校验校不到、信号反复重发也无人接。
+        ★2026-09-15：改用 _leader_live(want_pos=True)，复用它已读到的坐标，
+        避免同一坐标读两次（少一条 Lua IPC 往返，也不会两处不一致）。
         """
-        _lp = next((i.pid for i in self.instances
-                    if i.role == "leader" and i.status == S_ONLINE), None)
+        _lp, lpos = self._leader_live(want_pos=True)
         if _lp is None:
             return False, "队长掉线/重启中"
         if int(cand.get("leader_pid", -1)) != _lp:
             return False, "信号非当前队长 p%d 发布" % _lp
-        lpos = sat.read_pos_closed(find_hwnd_by_pid(_lp),
-                                   "file://pzxy_p%d" % _lp)
         if lpos is None:
             return False, "队长坐标读不到"
         if (abs(sat.CAP_TARGET[0] - lpos[0]) > 60
@@ -841,8 +972,9 @@ class PPApp(tk.Tk):
                 #   信号（_reteam/组队流程发布），收到才去进队伍。队长掉线/
                 #   未就位期间原地干等，绝不自行传送/申请（旧代码 cap 读不到
                 #   还无条件传送队员，已废除）。
-                _lp = next((i.pid for i in self.instances
-                            if i.role == "leader" and i.status == S_ONLINE), None)
+                # ★2026-09-15：同 _leader_link_ok 的修法——判“队长在不在”
+                #   不能靠 status 标签（队长组队期间挂 S_TEAM 会被误判掉线）。
+                _lp = self._leader_live()
                 self._log("p%d 重登待命：等队长联动信号（队长%s未就位/未建队则不动）"
                           % (inst.pid, ("p%d " % _lp) if _lp else ""))
                 deadline = time.time() + 3600.0
@@ -874,7 +1006,7 @@ class PPApp(tk.Tk):
             inst.status, inst.note = S_ONLINE, "重登完成"
             if not self.paused:
                 time.sleep(2.0)
-                self._spawn_task(inst)
+                self._spawn_task(inst, skip_team=True)
 
     def _start_all_tasks(self):
         """【启动脚本】= 组队（传送/走位/申请/批准/天覆阵）→ 按角色拉任务。"""
@@ -917,13 +1049,13 @@ class PPApp(tk.Tk):
                 if st is None:
                     st = ZGUI._team_stats(lw)
                 mem = st[0] if st else -1
-                if mem >= len(insts):
+                if mem >= TEAM_SIZE:
                     self._log("[autoTeam] Lua 队伍读数 %d/%d 已满员 → 跳过组队，直接执行任务"
-                              % (mem, len(insts)))
+                              % (mem, TEAM_SIZE))
                     self._finish_tasks(insts)
                     return
                 self._log("[autoTeam] Lua 队伍读数 %d/%d 未满员 → 走组队流程"
-                          % (mem, len(insts)))
+                          % (mem, TEAM_SIZE))
 
             # ---- 阶段1：队长先行（★2026-09-09 用户定案：队长没到，队员不动）----
             #   废除旧"阶段1 全员传送"——队员传送也是"动"，必须等队长就位+
@@ -962,7 +1094,9 @@ class PPApp(tk.Tk):
                 m.status, m.note = S_TEAM, "申请入队"
                 try:
                     # 队员此刻仍是散人（未入队）可传送；传 leader_pid 供地图对账
-                    sat.member_tp_and_apply(m.pid, cap, tries=2,
+                    # ★2026-09-13 用户定案：每名队员只申请一次（tries=1），
+                    #   申请点击偶发未生效由阶段4 on_stall/看门狗补组兜底再叫。
+                    sat.member_tp_and_apply(m.pid, cap, tries=1,
                                             tp_first=True,
                                             leader_pid=leader.pid)
                 except Exception as e:
@@ -1001,24 +1135,105 @@ class PPApp(tk.Tk):
                     t.join(600)
 
             # ---- 阶段4：批准 + 天覆阵 ----
-            self._log("[autoTeam] 阶段4: 队长批准申请")
-            mem = sat.approve_loop(leader.pid, 1 + len(members),
-                                   timeout_s=600.0)
+            # ★2026-09-13 用户定案："组不到，就要联动再叫队员一次"——
+            #   approve_loop 队列空(缺员)时触发 on_stall：重新发布联动信号
+            #   并并行再叫"不在队"的队员申请（批次快照漏掉的晚登录队员
+            #   由此自动收尾，不再干等 600s 超时）。
+            self._log("[autoTeam] 阶段4: 队长批准申请（缺员自动联动再叫队员）")
+            _reapply_ts = [0.0]
+
+            def _reapply_phase4():
+                now = time.time()
+                if now - _reapply_ts[0] < 30.0:      # 节流：≥30s 才再叫一轮
+                    return
+                _reapply_ts[0] = now
+                try:
+                    sat.publish_link(leader.pid, self.cap_world or cap)
+                except Exception:
+                    pass
+                _ms = []
+                with self.lock:
+                    _regs = list(self.instances)
+                for _m in _regs:
+                    if _m.role == "leader" or _m.pid in self._rejoining:
+                        continue
+                    try:
+                        _st = ZGUI.team_stats_topbar("file://pzxy_p%d" % _m.pid)
+                        _in = _st and _st[0] >= 1 and bool(_st[2])
+                    except Exception:
+                        _in = False
+                    # 不限 S_ONLINE：晚登录状态未同步者也纳入，靠顶栏判在队
+                    if not _in and find_hwnd_by_pid(_m.pid):
+                        _ms.append(_m)
+                if not _ms:
+                    return
+
+                def _a(m):
+                    try:
+                        # 只申请一次（30s 节流再叫已保证重试节奏）
+                        sat.member_tp_and_apply(m.pid, cap, tries=1,
+                                                tp_first=False,
+                                                leader_pid=leader.pid)
+                    except Exception:
+                        pass
+
+                _ts = [threading.Thread(target=_a, args=(m,), daemon=True)
+                       for m in _ms]
+                for _t in _ts:
+                    _t.start()
+                for _t in _ts:
+                    _t.join(240)
+
+            mem = sat.approve_loop(leader.pid, TEAM_SIZE, timeout_s=600.0,
+                                   on_stall=_reapply_phase4)
             self._log("[autoTeam] 批准结束: 成员=%s/目标=%s"
-                      % (mem, 1 + len(members)))
-            if mem and mem >= 1 + len(members):
+                      % (mem, TEAM_SIZE))
+            if mem and mem >= TEAM_SIZE:
                 if sat.do_formation(leader.pid):
                     self._log("[autoTeam] 天覆阵完成 ✓")
                 else:
                     self._log("[autoTeam] 阵法未确认（不阻断任务）")
             else:
-                self._log("[autoTeam] 未满员，跳过阵法")
-                # approve_loop 结束时队伍面板是开着的，关掉再拉任务，
-                # 否则任务点击落在面板上
+                # ★2026-09-15 用户事件：组队都没完成，刷怪脚本已经点快捷传送了。
+                #   根因：本分支原先只打一条“未满员”日志，随后**无条件**落到
+                #   _finish_tasks → 拉起队长 run_unlimited_hunt.py → 立即用香 +
+                #   快捷传送（而此刻队伍根本没组好）。现改为：关掉队伍
+                #   面板后 **直接 return，不放行任务**；交给看门狗 _reteam 补齐后
+                #   走正规路径拉起。
+                #   ★队伍成员不能传送（对话框都不弹），必须散人状态传送后再
+                #   组队；未组好就拉脚本既无效又扰民。
+                self._log("[自动队] 未满员，跳过阵法；"
+                          "不拉任务脚本（等看门狗补组）")
+                # approve_loop 结束时队伍面板是开着的，先关掉
                 lhwnd = find_hwnd_by_pid(leader.pid)
                 if lhwnd:
                     ZGUI.post_click(lhwnd, 570, 583,
                                     gateway="file://pzxy_p%d" % leader.pid)
+                # 置 note 标记“未就绪”；status 的归位统一由本函数末尾 finally 兜底
+                #   （见 finally 中的统一归位逻辑）：只改 note 不改 status 会把全队
+                #   永久卡在 S_TEAM，导致监控/看门狗/_reteam/人工恢复全部不可达
+                with self.lock:
+                    for i in insts:
+                        if i.status == S_TEAM:
+                            i.note = "组队未完成，等看门狗补组"
+                # ★2026-09-15 修法１完善：未满员时**必须把看门狗启动起来**，
+                #   否则没人补组。看门狗的“缺员”分支会调 _reteam 补齐，
+                #   补满后走 _spawn_task 正常拉起（届时队长闸已满足）。
+                #   注意：scripts_started 置 True＝“启动流程已走过”（看门狗需要），
+                #   但 team_done 保持 False（组队尚未成功），队长脚本不拉。
+                self.team_done = False
+                # scripts_started 无条件置 True：看门狗缺员分支需要它为真，
+                #   若看门狗已存在（_watch_started 已 True）也要保证不被拦。
+                self.scripts_started = True
+                leader = next((i for i in insts if i.role == "leader"), None)
+                if leader is not None and not self._watch_started:
+                    self._watch_started = True
+                    threading.Thread(target=self._team_watchdog,
+                                     args=(leader.pid, TEAM_SIZE),
+                                     daemon=True).start()
+                    self._log("[看门狗] 组队未完成，已启动补组看门狗")
+                self._log("[自动队] 组队环节结束（未满员），不启动任务脚本")
+                return
             self._finish_tasks(insts)
         except Exception as e:
             import traceback
@@ -1026,6 +1241,25 @@ class PPApp(tk.Tk):
             self._log(traceback.format_exc())
         finally:
             self.teamflow_running = False
+            # ★2026-09-18 治本（用户定案）：本函数是初始组队的**总入口**，离开时
+            #   不得有任何实例停在 S_TEAM。未满员出口(return)与异常出口(except)
+            #   只改 note 不改 status → 全队永久卡"组队中"：监控跳过 S_TEAM、
+            #   看门狗要求队长 S_ONLINE、_reteam 只挑 S_ONLINE、
+            #   _finish_tasks 未被调用、人工恢复也只认 S_ONLINE
+            #   → 五路全闭、永久悬死（QA 11/11 实证）。这里统一兜回 S_ONLINE，
+            #   让看门狗"缺员"分支能接手补组（_reteam → 满员后走正规路径拉起）。
+            #   满员路径已由 _finish_tasks 归位，此处为幂等 no-op。
+            try:
+                with self.lock:
+                    for i in insts:
+                        if i.status == S_TEAM:
+                            i.status = S_ONLINE
+                            if not i.note or "未完成" in i.note:
+                                i.note = "组队未完成，等看门狗补组"
+                            self._log("p%d 组队流程退出时仍在 S_TEAM → 兜回 S_ONLINE（防悬死）"
+                                      % i.pid)
+            except Exception as e:
+                self._log("[autoTeam] finally 归位异常: %s" % e)
 
     # ---------- 暂停接管 / 恢复挂机（2026-09-07 用户需求） ----------
     def _toggle_pause(self):
@@ -1074,7 +1308,7 @@ class PPApp(tk.Tk):
                 insts = [i for i in self.instances if i.status == S_ONLINE]
             for i in insts:
                 i.note = "运行中"
-                self._spawn_task(i)
+                self._spawn_task(i, skip_team=True)
             self.scripts_started = True
             self._log("[恢复] 完成：任务脚本已拉起，看门狗/掉线闭环恢复"
                       "（缺员时看门狗自动补组）")
@@ -1147,6 +1381,42 @@ class PPApp(tk.Tk):
                 pass
 
     def _finish_tasks(self, insts):
+        # ★2026-09-15 用户事件（修法２）：这里是拉起任务脚本的**唯一出口**，之前
+        #   缺少最后一道校验，导致组队未完成也能把刷怪脚本拉起来
+        #   （随即快捷传送）。此处复用 _leader_wait_reason：未到齐则
+        #   **不拉起任何实例（含队长）**，不置 scripts_started/team_done，
+        #   交给看门狗后续补组后重试。
+        #   注意：单队长配置（无队友）时返回 None，不会误拦。
+        # ★2026-09-15 用户实锤（01:32:47）：天覆阵已完成，闸门却报
+        #   "无在线队长"，随后重试又报"没有已登录实例"。
+        #   根因：阶段1 把队长置为 S_TEAM（"组队中"，第 1014 行），
+        #   组队成功后**无人回写 S_ONLINE**；而本函数末尾的回写在
+        #   闸门**之后**，return 后永不执行（先检查后修复的顺序错误）。
+        #   共同因果：这个中间态还把三条恢复路径全堵住了——
+        #     看门狗（1622 行）、_reteam（1851 行）、监控（1928 行）
+        #     均以 "status == S_ONLINE" 为前提，队长永远不在名单内 → 死锁。
+        #   修法：闸门前先把参与组队的实例状态归位。组队流程都跑
+        #   完了，说明它们必然已登录在线；S_TEAM 只是流程中间态，
+        #   应在出口处落回 S_ONLINE，再让闸门基于真实在线状态判定。
+        #   仅限 insts（刚跑完组队流程的批次），不用扫 self.instances，
+        #   也不误动真正掉线/重登中的实例。
+        _fixed = []
+        with self.lock:
+            for _i in insts:
+                if _i.status == S_TEAM:
+                    _i.status, _i.note = S_ONLINE, "已在线"
+                    _fixed.append(_i.pid)
+        if _fixed:
+            self._log("[任务闸] 组队流程已完成，状态归位 S_TEAM→S_ONLINE：%s"
+                      % ",".join("p%d" % _p for _p in _fixed))
+        _block = self._leader_wait_reason()
+        if _block:
+            self._log("[任务闸] 组队未完成，不启动任务脚本：%s" % _block)
+            with self.lock:
+                for i in insts:
+                    if i.status in (S_TEAM, S_ONLINE):
+                        i.note = "等待组队完成"
+            return
         self.scripts_started = True
         self.team_done = True
         for i in insts:
@@ -1158,7 +1428,7 @@ class PPApp(tk.Tk):
         if leader is not None and not self._watch_started:
             self._watch_started = True
             threading.Thread(target=self._team_watchdog,
-                             args=(leader.pid, len(insts)),
+                             args=(leader.pid, TEAM_SIZE),
                              daemon=True).start()
 
     def _leader_wait_reason(self):
@@ -1181,7 +1451,7 @@ class PPApp(tk.Tk):
                 missing.append("%s p%d（掉线/未登录）" % (m.name or m.role_cn, m.pid))
         st = ZGUI.team_stats_topbar("file://pzxy_p%d" % leader.pid)
         mem = st[0] if st else -1
-        expect = 1 + len(members)
+        expect = TEAM_SIZE
         if mem >= 0 and mem < expect:
             short = expect - mem
             for m in [x for x in members if x.status == S_ONLINE][:short]:
@@ -1208,8 +1478,16 @@ class PPApp(tk.Tk):
             self._hygiene_once()
             time.sleep(_HYGIENE_INTERVAL_S)
 
-    def _spawn_task(self, inst):
-        """按角色拉起任务脚本（已在跑则跳过）。"""
+    def _spawn_task(self, inst, skip_team=False):
+        """按角色拉起任务脚本（已在跑则跳过）。
+
+        skip_team ☆2026-09-17 用户定案：本次拉起属于"**跳过组队**"路径
+          （看门狗补拉 / 【恢复挂机】 / 重登归队；组队阶段没跑过，
+          快捷传送对话框 [8] 未开）→ 给队长脚本追加 --skip-team，
+          允许它在运行中补点快捷传送开关。
+          常规【启动脚本】组队完成后的拉起（_finish_tasks）不传，
+          因为组队阶段已把 [8] 开好，运行中不应再点开关。
+        """
         # ★2026-09-09 用户定案（单点闸）：队长必须等所有队友到齐才能开始
         #   任务——初始组队/重登归队/看门狗补拉/满员恢复全部走这里，未到齐
         #   一律阻止队长任务启动并明确提示缺谁；队员出售脚本不在此限。
@@ -1230,7 +1508,8 @@ class PPApp(tk.Tk):
             if not ok:
                 self._log("p%d 进程扫描两次失败，跳过拉起（结果不可信防双跑）" % inst.pid)
                 return
-        if process_alive_for(cmdlines, inst.pid, inst.role == "leader"):
+        if process_alive_for(cmdlines, inst.pid, inst.role == "leader",
+                             names=profile_task_names(self.script_profile)):
             self._log("p%d 任务脚本已在跑，跳过" % inst.pid)
             return
         gw = "file://pzxy_p%d" % inst.pid
@@ -1240,11 +1519,14 @@ class PPApp(tk.Tk):
         role_name = rm.group(1).strip() if rm else ("p%d" % inst.pid)
         try:
             CREATE_NO_WINDOW = 0x08000000
+            lscript, mscript = profile_scripts(self.script_profile)
             if inst.role == "leader":
-                cmd = [PYEXE, RUN_UNLIMITED, "--gateway", gw, "--role", role_name,
-                       "--timeout", "20", "--wait-dialog", "1.2"]
+                cmd = ([PYEXE, lscript, "--gateway", gw, "--role", role_name]
+                       + profile_leader_args(self.script_profile))
+                if skip_team:
+                    cmd.append("--skip-team")
             else:
-                cmd = [PYEXE, MEMBER_LOOP, "--pid", str(inst.pid), "--gateway", gw]
+                cmd = [PYEXE, mscript, "--pid", str(inst.pid), "--gateway", gw]
             # ★2026-09-09 尸检通道：此前 stderr=DEVNULL，任务脚本崩溃 traceback
             #   直接丢弃（07:28 leader 闯关完成后静默死亡、昨夜 04:38 同款，
             #   死因永远查不到）。stdout/stderr 全落 logs/task_p<pid>_run.log。
@@ -1262,6 +1544,26 @@ class PPApp(tk.Tk):
                       % (inst.pid, inst.role_cn, role_name, gw))
         except Exception as e:
             self._log("p%d 任务脚本启动失败: %s" % (inst.pid, e))
+
+    def _task_script_alive(self, inst):
+        """队长/队员任务脚本当前是否确实在跑（看门狗补拉前用）。
+
+        ★2026-09-17 用户定案：看门狗"满员恢复"调 _spawn_task 前先问一句——
+          脚本一直在跑（队伍数据抖动）→ 传 skip_team=False，运行中不点
+          快捷传送开关；脚本确实没在跑（崩溃/被杀/掉线重登）→ 传
+          skip_team=True，允许补拉后补点开关。
+        扫描失败一律返回 False（宁可按"没在跑"处理，让 _spawn_task 内部
+          再做二次扫描与防双跑，不在本函数里替它下结论）。
+        """
+        try:
+            ok, cmdlines = running_squad_cmdlines_ex()
+            if not ok:
+                return False
+            return bool(process_alive_for(
+                cmdlines, inst.pid, inst.role == "leader",
+                names=profile_task_names(self.script_profile)))
+        except Exception:
+            return False
 
     # ---------- 队伍完整性看门狗（队长侧） ----------
     # ---------- 背包满 → 全队存仓（2026-09-12 用户定案 4a） ----------
@@ -1315,13 +1617,23 @@ class PPApp(tk.Tk):
                 except Exception:
                     pass
             time.sleep(2.0)
-            # 2) 队长解散队伍（全员退队）
+            # 2) 队长解散队伍（全员退队）——★2026-09-13 用户定案：直接队长解散。
+            #    组队下队员无法与仓库管理员互动，解散必须成功才存仓；
+            #    解散失败（顶栏仍有人）→ 中止本轮存仓，等下一轮再触发。
             leader = next((i for i in insts if i.role == "leader"), None)
             if leader is not None:
                 try:
                     sat.disband_team(leader.pid)
                 except Exception as e:
                     self._log("[存仓] 解散异常: %s" % e)
+            try:
+                sts = ZGUI.team_stats_topbar("file://pzxy_p%d" % leader.pid)
+            except Exception:
+                sts = None
+            if not (sts and sts[0] == 0):
+                self._log("[存仓] 队伍未解散（顶栏%s人），组队下无法存仓 → 跳过本轮"
+                          % (sts[0] if sts else "?"))
+                return
             # 3) 逐人存仓（★用户 2026-09-12：可以并行——各角色独立客户端、
             #    仓库也是角色各自独立的；并行把 5 人从 ~15min 压到 ~3-4min。
             #    Lua 调用有全局限速锁自动串行化，每次毫秒级不影响。）
@@ -1358,15 +1670,15 @@ class PPApp(tk.Tk):
             self._store_running = False
 
     def _team_watchdog(self, leader_pid, expect_members):
-        """每 15s 判定队伍人数：满员不动；缺员 → 打断抓鬼 → 补组队 →
+        """每 5s 判定队伍人数：满员不动；缺员 → 打断抓鬼 → 补组队 →
         满员自动恢复抓鬼。队员掉线由 GUI 重启重登后走 _rejoin_flow 归队，
         这里只负责队长侧的判定/打断/批准/恢复。"""
-        self._log("[看门狗] 启动（目标 %d 人，每 15s 判定）" % expect_members)
+        self._log("[看门狗] 启动（目标 %d 人，每 5s 判定）" % expect_members)
         stale_scan_n = 0
         hb_n = 0
         bskip_n = 0
         self._kill_stale_tasks()   # 启动先清一遍历史僵尸
-        while not self._team_watch_stop.wait(15):
+        while not self._team_watch_stop.wait(5):   # ★2026-09-13 15s→5s(更快联动登录队员)
             try:
                 if self.paused:
                     continue   # ★暂停接管：看门狗只挂起不动作（恢复后自动续）
@@ -1396,8 +1708,14 @@ class PPApp(tk.Tk):
                     for it in _online:
                         try:
                             _ok, _cls = running_squad_cmdlines_ex()
+                            # ★2026-09-14 修复：存活巡检必须按当前方案传 names，
+                            #   否则 process_alive_for 回落默认抓鬼脚本名
+                            #   (run_unlimited_test)，"全地图刷怪"队长脚本
+                            #   (run_unlimited_hunt) 恒匹配不上 → 误判已死 →
+                            #   每轮补拉（补拉又"已在跑跳过"），噪音+资源浪费。
                             _alive = _ok and process_alive_for(
-                                _cls, it.pid, it.role == "leader")
+                                _cls, it.pid, it.role == "leader",
+                                names=profile_task_names(self.script_profile))
                         except Exception as e:
                             self._log("p%d 任务脚本巡检异常: %s" % (it.pid, e))
                             continue
@@ -1413,7 +1731,7 @@ class PPApp(tk.Tk):
                         self._task_dead_n.pop(it.pid, None)
                         self._log("p%d 任务脚本已死（连续2轮未命中）→ 自动补拉"
                                   % it.pid)
-                        self._spawn_task(it)
+                        self._spawn_task(it, skip_team=True)
                 if not self.scripts_started or self.teamflow_running:
                     continue
                 # ★2026-09-07：队长重登后 PID 会变（02:21 实证 p9472→24712）。
@@ -1463,7 +1781,11 @@ class PPApp(tk.Tk):
                             online = [i for i in self.instances
                                       if i.status == S_ONLINE]
                         for i in online:
-                            self._spawn_task(i)
+                            # ★2026-09-17 用户定案：仅当脚本确实没在跑才
+                            #   带 skip_team（允许补点快捷传送开关）；在跑
+                            #   则普通拉起（运行中不点开关）。
+                            self._spawn_task(
+                                i, skip_team=not self._task_script_alive(i))
                     continue
                 # 缺员
                 # ★2026-09-12 存仓流程进行中：队员是"故意"退队的（存仓需要
@@ -1496,10 +1818,12 @@ class PPApp(tk.Tk):
 
     def _kill_task_for(self, pid, leader=True):
         """按网关通道打断该实例的任务脚本进程（打断抓鬼用）。"""
+        _names = profile_all_task_names()
         ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
               "Where-Object { $_.CommandLine -match "
-              "'run_unlimited_test|member_sell_loop' } | "
-              "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }")
+              "'%s' } | "
+              "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"
+              % "|".join(sorted(_names)))
         try:
             r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
                                capture_output=True, encoding="gbk",
@@ -1508,13 +1832,13 @@ class PPApp(tk.Tk):
             self._log("打断任务脚本查询失败: %s" % e)
             return
         token = "pzxy_p%d" % pid
-        key = "run_unlimited_test" if leader else "member_sell_loop"
+        _names = profile_all_task_names()
         for line in (r.stdout or "").splitlines():
             line = line.strip()
             if "|" not in line:
                 continue
             cp, cl = line.split("|", 1)
-            if key in cl and token in cl:
+            if any(nm in cl for nm in _names) and token in cl:
                 try:
                     subprocess.run(["taskkill", "/F", "/PID", cp.strip()],
                                    capture_output=True, timeout=15)
@@ -1530,10 +1854,12 @@ class PPApp(tk.Tk):
         不会自己退出，整夜累积（00:59 实证一次清出 9 个）。僵尸脚本虽不直接
         点击现役客户端，但持续空转重试死通道耗 CPU，且干扰进程防重扫描。
         """
+        _names = profile_all_task_names()
         ps = ("Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
               "Where-Object { $_.CommandLine -match "
-              "'run_unlimited_test|member_sell_loop' } | "
-              "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }")
+              "'%s' } | "
+              "ForEach-Object { \"$($_.ProcessId)|$($_.CommandLine)\" }"
+              % "|".join(sorted(_names)))
         try:
             r = subprocess.run(["powershell", "-NoProfile", "-c", ps],
                                capture_output=True, encoding="gbk",
@@ -1621,7 +1947,34 @@ class PPApp(tk.Tk):
                     t.start()
                 for t in ts:
                     t.join(600)
-            got = sat.approve_loop(leader_pid, expect_members, timeout_s=420.0)
+            def _reapply():
+                """队列空回调(2026-09-13)：自动再叫在线队员并行申请一轮，
+                避免'队伍一直差人却干等空队列'。依赖外层 cap/leader_pid。"""
+                try:
+                    with self.lock:
+                        _ms = [i for i in self.instances
+                               if i.role != "leader" and i.status == S_ONLINE
+                               and i.pid not in self._rejoining]
+                    if not _ms:
+                        return
+
+                    def _a(m):
+                        try:
+                            sat.member_tp_and_apply(m.pid, cap, tries=3,
+                                                    tp_first=False,
+                                                    leader_pid=leader_pid)
+                        except Exception:
+                            pass
+
+                    _ts = [threading.Thread(target=_a, args=(m,), daemon=True)
+                           for m in _ms]
+                    for _t in _ts:
+                        _t.start()
+                    for _t in _ts:
+                        _t.join(300)
+                except Exception:
+                    pass
+            got = sat.approve_loop(leader_pid, expect_members, timeout_s=420.0, on_stall=_reapply)
             self._log("[看门狗] 补组批准结束: %s/%s" % (got, expect_members))
             if got and got >= expect_members:
                 sat.do_formation(leader_pid)
@@ -1630,7 +1983,9 @@ class PPApp(tk.Tk):
                     online = [i for i in self.instances
                               if i.status == S_ONLINE]
                 for i in online:
-                    self._spawn_task(i)
+                    # ★2026-09-17 用户定案：仅脚本确实没在跑才带 skip_team
+                    #   （允许补点快捷传送开关），在跑则普通拉起。
+                    self._spawn_task(i, skip_team=not self._task_script_alive(i))
                 self._log("[看门狗] 满员，抓鬼已恢复 ✓")
             else:
                 # 未满员：关掉批准面板再等下一轮，不给任务留遮挡
