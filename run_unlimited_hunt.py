@@ -300,10 +300,12 @@ def _travel_fly(gw, hwnd, mapname):
 
 
 def sw8(gw):
-    """界面数据[8] 本类开关（快捷传送对话框）。"""
-    return _lua(gw, r"""
-local v = tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
-__out = tostring(v and v.本类开关)""") == "true"
+    """界面数据[8] 本类开关（快捷传送对话框）。
+
+    ★2026-09-18 统一到 `ZGUI.quick_dialog_on`（原来脚本里自抄了一份同样的 Lua；
+      读不到 → False，与原语义一致）。
+    """
+    return ZGUI.quick_dialog_on(gw) is True
 
 
 def _open_quick_dialog(gw, hwnd):

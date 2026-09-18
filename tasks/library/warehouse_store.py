@@ -198,20 +198,19 @@ __out = table.concat(out, ' ;; ')
 
 
 def _dialog_open(gw):
-    """NPC 对话框是否打开（界面[8].本类开关）——功能性校验，不用像素。"""
-    return _Z._lua_call(gw, r'''
-local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
-__out = tostring(d and d.本类开关)''') == "true"
+    """NPC 对话框是否打开（界面[8].本类开关）——功能性校验，不用像素。
+
+    ★2026-09-18 统一到 `ZGUI.quick_dialog_on`（原来每个模块各抄一份同样的 Lua）。
+    """
+    return _Z.quick_dialog_on(gw) is True
 
 
 def _quick_menu_on(gw):
-    """快捷菜单/快捷传送界面（界面[8]）是否开着。None=通道失败状态未知。"""
-    r = _Z._lua_call(gw, r"""
-local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
-__out = tostring(d and d.本类开关)""")
-    if r is None or r == "":
-        return None
-    return r == "true"
+    """快捷菜单/快捷传送界面（界面[8]）是否开着。None=通道失败状态未知。
+
+    ★2026-09-18 统一到 `ZGUI.quick_dialog_on`（语义完全一致：读不到返回 None）。
+    """
+    return _Z.quick_dialog_on(gw)
 
 
 def _go_warehouse(hwnd, gw):
@@ -266,34 +265,10 @@ def _close_dialogs(hwnd, gw, tries=3):
 
     ★2026-09-12 用户实测：对话框开着时角色不能移动（世界点击被忽略）——
       传送落地后必须先把快捷传送对话框关掉，否则点 NPC 全部无效。
-    优先点对话框自带的 关闭按钮（Lua 包围盒），再兜底 ESC。
+    ★2026-09-18 统一到 `ZGUI.close_quick_dialog`（点自带关闭按钮 → ESC 兜底，
+      逻辑与本函数原来那份完全一致，只是提成了公共件）。
     """
-    for _ in range(max(1, tries)):
-        pos = _Z._lua_call(gw, r'''
-local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
-local b = d and d.关闭 and d.关闭.包围盒
-if not (d and d.本类开关 == true) or not b then __out = '' return end
-__out = string.format('%d,%d', b.x + 8, b.y + 8)''') or ""
-        if "," in pos:
-            try:
-                x, y = [int(float(s)) for s in pos.split(",")]
-            except ValueError:
-                break
-            _Z.post_click(hwnd, x, y, gateway=gw)
-            time.sleep(0.8)
-            continue
-        break
-    if _Z._lua_call(gw, r'''
-local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
-__out = tostring(d and d.本类开关)''') == "true":
-        import ctypes as _c
-        u = _c.windll.user32
-        u.PostMessageW(hwnd, 0x0100, 0x1B, 0)
-        u.PostMessageW(hwnd, 0x0101, 0x1B, 0xC0000001)
-        time.sleep(0.6)
-    return _Z._lua_call(gw, r'''
-local d = tp and tp.主界面 and tp.主界面.界面数据 and tp.主界面.界面数据[8]
-__out = tostring(d and d.本类开关)''') != "true"
+    return _Z.close_quick_dialog(hwnd, gw, tries=tries)
 
 
 def _call_warehouse_npc(hwnd, gw, rounds=3):
